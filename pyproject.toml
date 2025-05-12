@@ -28,6 +28,7 @@ dependencies = [
     "pandas>=0.24",
     "pypsa",
     "xarray",
+    "openpyxl",
     "pysmspp@git+https://github.com/SPSUnipi/pySMSpp",
 ]
 
