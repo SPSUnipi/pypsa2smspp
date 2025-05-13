@@ -95,3 +95,5 @@ def process_network(network_name="microgrid_microgrid_ALL_4N"):
 
 def test_network():
     process_network()
+    
+

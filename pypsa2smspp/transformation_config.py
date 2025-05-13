@@ -108,46 +108,46 @@ class TransformationConfig:
             }
 
         self.HydroUnitBlock_parameters = {
-            "StartArc": lambda p_nom: np.full(len(p_nom)*3, 0),
-            "EndArc": lambda p_nom: np.full(len(p_nom)*3, 1),
+            "StartArc": lambda p_nom: np.full(len(p_nom)*2, 0),
+            "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "MaxVolumetric": lambda p_nom_opt, max_hours: (p_nom_opt * max_hours),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow: inflow.values.transpose(),
-            "MaxFlow": lambda p_nom_opt, p_max_pu, inflow: (np.array([100* (p_nom_opt*p_max_pu), 100*np.full_like(p_max_pu, inflow.max()), (0.*p_max_pu)])).squeeze().transpose(),
-            "MinFlow": lambda inflow: np.array([0., 0., -100*inflow.values.max()]),
-            "MaxPower": lambda p_nom_opt, p_max_pu: (np.array([(p_nom_opt*p_max_pu), (0.*p_max_pu), (0. *p_max_pu)])).squeeze().transpose(),
-            "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(p_nom_opt*p_min_pu), (0.*p_min_pu), (0. *p_min_pu)])).squeeze().transpose(),
+            "MaxFlow": lambda inflow: (np.array([100*inflow.values.max(), 0.])).squeeze().transpose(),
+            "MinFlow": lambda inflow: np.array([0., -100*inflow.values.max()]),
+            "MaxPower": lambda p_nom_opt, p_max_pu: (np.array([(p_nom_opt*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
+            "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(p_nom_opt*p_min_pu), (0.*p_min_pu)])).squeeze().transpose(),
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
-            "NumberPieces": lambda p_nom: np.full(len(p_nom)*3, 1),
-            "ConstantTerm": lambda p_nom: np.full(len(p_nom)*3, 0),
-            "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([1/efficiency_dispatch.values.max(), 0., efficiency_store.values.max()]),
+            "NumberPieces": lambda p_nom: np.full(len(p_nom)*2, 1),
+            "ConstantTerm": lambda p_nom: np.full(len(p_nom)*2, 0),
+            "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values.max(), 1/efficiency_store.values.max()]),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
-            "DownhillFlow": lambda p_nom: np.full(len(p_nom)*3, 0.),
-            "UphillFlow": lambda p_nom: np.full(len(p_nom)*3, 0.),
+            "DownhillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
+            "UphillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
             #"InertiaPower": 1.0,
             # "InitialFlowRate": lambda inflow: inflow.values[0],
-            "InitialVolumetric": lambda state_of_charge_initial: state_of_charge_initial
+            "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge else state_of_charge_initial
         }
 
         self.IntermittentUnitBlock_inverse = {
-            "p_nom": lambda p_nom_opt: p_nom_opt,
+            "p_nom": lambda p_nom: p_nom,
             "p": lambda active_power: active_power
             }
         
         self.ThermalUnitBlock_inverse = {
-            "p_nom": lambda p_nom_opt: p_nom_opt,
+            "p_nom": lambda p_nom: p_nom,
             "p": lambda active_power: active_power
             }
         
         self.HydroUnitBlock_inverse = {
-            "p_nom": lambda p_nom_opt: p_nom_opt,
+            "p_nom": lambda p_nom: p_nom,
             "p": lambda active_power: active_power
             }
         
         self.BatteryUnitBlock_inverse = {
-            "p_nom": lambda p_nom_opt: p_nom_opt,
+            "p_nom": lambda p_nom: p_nom,
             "state_of_charge": lambda storage_level: storage_level
             }
         

@@ -15,12 +15,17 @@ import xarray as xr
 import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
+from pypsa.optimization.optimize import assign_solution
 
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 FP_PARAMS = os.path.join(DIR, "data", "smspp_parameters.xlsx")
+
+class FakeVariable:
+    def __init__(self, solution):
+        self.solution = solution
 
 class Transformation:
     """
@@ -246,8 +251,8 @@ class Transformation:
     def hydro_dimensions(self):
         dimensions = {}
         dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 3 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 3
+        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
+        dimensions["TotalNumberPieces"] = 2
         self.dimensions["NumberElectricalGenerators"] += 2*dimensions["NumberReservoirs"] 
         
         return dimensions
@@ -392,8 +397,8 @@ class Transformation:
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
         dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 3 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 3
+        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
+        dimensions["TotalNumberPieces"] = 2
         dimensions["NumberLines"] = self.dimensions_lines['Lines']
         dimensions["NumberLinks"] = self.dimensions_lines['Links']
     
@@ -518,6 +523,10 @@ class Transformation:
         '''
         all_dataarrays = self.iterate_blocks(n)
         self.ds = xr.Dataset(all_dataarrays)
+        
+        n = self.prepare_solution(n)
+        
+        assign_solution(n)
         
         
         
@@ -737,6 +746,41 @@ class Transformation:
             The normalized key.
         '''
         return key.lower().replace(" ", "_")
+    
+    def prepare_solution(self, n):
+        """
+        Prepares a fake PyPSA model on the network `n`, wrapping the solution dataset `self.ds`
+        so that it can be used with `assign_solution` without modification.
+    
+        Parameters
+        ----------
+        n : pypsa.Network
+            The PyPSA network object to update.
+    
+        Returns
+        -------
+        n : pypsa.Network
+            The network updated with a fake model and fake solution.
+        """
+        # Create dictionary of fake variables
+        m_variables = {}
+        for var_name, dataarray in self.ds.items():
+            m_variables[var_name] = FakeVariable(solution=dataarray)
+    
+        # Create the fake model
+        n.model = type("FakeModel", (), {})()
+        n.model.variables = m_variables
+    
+        # Create fake parameters (snapshots)
+        n.model.parameters = type("FakeParameters", (), {})()
+        n.model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+    
+        # Create fake objective
+        n.model.objective = type("FakeObjective", (), {})()
+        n.model.objective.value = 10000  # arbitrary value
+    
+        return n
+
 
     ## Create SMSNetwork
     def convert_to_ucblock(self):
