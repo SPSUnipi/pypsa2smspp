@@ -508,6 +508,41 @@ class Transformation:
                         self.unitblocks[current_block_key][key_base] = values_array
     
     
+    def parse_solution_to_unitblocks(self, file_path):
+        num_units = self.dimensions['NumberUnits']
+    
+        solution_data = {}
+    
+        # Save UCBlock
+        solution_data["UCBlock"] = xr.open_dataset(file_path, group="/Solution_0", engine="netcdf4")
+    
+        # Verify unitblock existence
+        # TODO avoid this if we want to have inverse transformation without direct
+        if not hasattr(self, "unitblocks"):
+            raise ValueError("self.unitblocks must be initialized before parsing the solution file.")
+    
+        # Block loops
+        for i in range(num_units):
+            group_path = f"/Solution_0/UnitBlock_{i}"
+            ds = xr.open_dataset(file_path, group=group_path, engine="netcdf4")
+            solution_data[f"UnitBlock_{i}"] = ds
+    
+            # Trova la chiave in self.unitblocks che termina con _i
+            matching_key = next(
+                (key for key in self.unitblocks if key.endswith(f"_{i}")),
+                None
+            )
+    
+            if matching_key is None:
+                raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{i}")
+    
+            # Salva tutte le variabili
+            for var_name in ds.data_vars:
+                self.unitblocks[matching_key][var_name] = ds[var_name].values
+    
+        return solution_data
+
+    
     
     def inverse_transformation(self, n):
         '''
@@ -747,6 +782,7 @@ class Transformation:
         '''
         return key.lower().replace(" ", "_")
     
+    
     def prepare_solution(self, n):
         """
         Prepares a fake PyPSA model on the network `n`, wrapping the solution dataset `self.ds`
@@ -780,6 +816,11 @@ class Transformation:
         n.model.objective.value = 10000  # arbitrary value
     
         return n
+
+
+#########################################################################################
+######################## Conversion with PySMSpp ########################################
+#########################################################################################
 
 
     ## Create SMSNetwork
