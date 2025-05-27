@@ -149,6 +149,74 @@ def parse_txt_file(file_path):
     return data
 
 
+def compare_static_components(comp1, comp2, comp_name):
+    differences = []
+    common_indices = comp1.index.intersection(comp2.index)
+    all_indices = comp1.index.union(comp2.index)
+    
+    for idx in all_indices:
+        if idx not in common_indices:
+            differences.append((comp_name, idx, "Missing in one network", None, None))
+            continue
+        
+        row1 = comp1.loc[idx]
+        row2 = comp2.loc[idx]
+        for col in comp1.columns.union(comp2.columns):
+            val1 = row1[col] if col in row1 else np.nan
+            val2 = row2[col] if col in row2 else np.nan
+
+            if pd.isna(val1) and pd.isna(val2):
+                continue  # Both NaN, consider equal
+            try:
+                if isinstance(val1, (int, float, np.number)) and isinstance(val2, (int, float, np.number)):
+                    if not np.isclose(val1, val2, equal_nan=True):
+                        differences.append((comp_name, idx, col, val1, val2))
+                else:
+                    if val1 != val2:
+                        differences.append((comp_name, idx, col, val1, val2))
+            except Exception:
+                if val1 != val2:
+                    differences.append((comp_name, idx, col, val1, val2))
+    return differences
+
+
+def compare_dynamic_components(comp1_t, comp2_t, comp_name):
+    differences = []
+    for attr in comp1_t.keys() | comp2_t.keys():
+        if attr not in comp1_t or attr not in comp2_t:
+            differences.append((f"{comp_name}_t", attr, "Missing attribute", None, None))
+            continue
+        df1 = comp1_t[attr]
+        df2 = comp2_t[attr]
+        all_columns = df1.columns.union(df2.columns)
+        for col in all_columns:
+            if col not in df1 or col not in df2:
+                differences.append((f"{comp_name}_t", attr, col, "Missing", "Missing"))
+                continue
+            vals1 = df1[col]
+            vals2 = df2[col]
+            if not vals1.equals(vals2):
+                differences.append((f"{comp_name}_t", attr, col, vals1.values[:5], vals2.values[:5]))
+    return differences
+
+def compare_networks(net1, net2, components_to_check=["loads", "generators", "lines", "storage_units"]):
+    all_differences = []
+    for comp in components_to_check:
+        comp_df1 = getattr(net1, comp)
+        comp_df2 = getattr(net2, comp)
+        static_diff = compare_static_components(comp_df1, comp_df2, comp)
+        all_differences.extend(static_diff)
+        
+        comp_t_df1 = getattr(net1, f"{comp}_t")
+        comp_t_df2 = getattr(net2, f"{comp}_t")
+        dynamic_diff = compare_dynamic_components(comp_t_df1, comp_t_df2, comp)
+        all_differences.extend(dynamic_diff)
+    
+    df_diff = pd.DataFrame(all_differences, columns=["Component", "Element", "Attribute", "Network1", "Network2"])
+    return df_diff
+
+
+
 
 #%% Network definition with PyPSA
 

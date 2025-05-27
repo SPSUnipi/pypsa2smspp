@@ -32,7 +32,8 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost_intermittent,
     clean_storage_units,
     clean_stores,
-    parse_txt_file
+    parse_txt_file,
+    compare_networks
     )
 
 #%% Network definition with PyPSA
@@ -72,7 +73,9 @@ operational_cost = statistics['Operational Expenditure'].sum()
 error = (operational_cost - result.objective_value) / operational_cost * 100
 print(f"Error PyPSA-SMS++ of {error}%")
 
-solution = transformation.parse_solution_to_unitblocks(solution_file)
-# transformation.parse_txt_to_unitblocks(output_file)
-# transformation.inverse_transformation(nd.n)
+# solution = transformation.parse_solution_to_unitblocks(solution_file)
+transformation.parse_txt_to_unitblocks(output_file)
+transformation.inverse_transformation(nd.n)
+
+differences = compare_networks(network, nd.n)
 

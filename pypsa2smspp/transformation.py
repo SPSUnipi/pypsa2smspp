@@ -15,7 +15,7 @@ import xarray as xr
 import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
-from pypsa.optimization.optimize import assign_solution
+from pypsa.optimization.optimize import (assign_solution, assign_duals, post_processing)
 
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
@@ -457,7 +457,7 @@ class Transformation:
             
             
 ###########################################################################################################################
-############ INVERSE TRANSFORMATION INTO XARRAY DATASET ###################################################################
+############ PARSE OUPUT SMS++ FILE ###################################################################
 ###########################################################################################################################
 
 
@@ -510,24 +510,23 @@ class Transformation:
     
     def parse_solution_to_unitblocks(self, file_path):
         num_units = self.dimensions['NumberUnits']
-    
         solution_data = {}
     
-        # Save UCBlock
+        # Load the top-level UCBlock (Solution_0 group)
         solution_data["UCBlock"] = xr.open_dataset(file_path, group="/Solution_0", engine="netcdf4")
     
-        # Verify unitblock existence
-        # TODO avoid this if we want to have inverse transformation without direct
+        # Ensure self.unitblocks exists before assignment
+        # TODO: remove this constraint if reverse transformation is needed without prior initialization
         if not hasattr(self, "unitblocks"):
             raise ValueError("self.unitblocks must be initialized before parsing the solution file.")
     
-        # Block loops
+        # Iterate over all unit blocks
         for i in range(num_units):
             group_path = f"/Solution_0/UnitBlock_{i}"
             ds = xr.open_dataset(file_path, group=group_path, engine="netcdf4")
             solution_data[f"UnitBlock_{i}"] = ds
     
-            # Trova la chiave in self.unitblocks che termina con _i
+            # Match the corresponding key in self.unitblocks (e.g., endswith _0, _1, _2, ...)
             matching_key = next(
                 (key for key in self.unitblocks if key.endswith(f"_{i}")),
                 None
@@ -536,13 +535,16 @@ class Transformation:
             if matching_key is None:
                 raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{i}")
     
-            # Salva tutte le variabili
+            # Store all variables from the dataset into the corresponding unitblock
             for var_name in ds.data_vars:
                 self.unitblocks[matching_key][var_name] = ds[var_name].values
     
         return solution_data
 
-    
+###########################################################################################################################
+############ INVERSE TRANSFORMATION INTO XARRAY DATASET ###################################################################
+###########################################################################################
+   
     
     def inverse_transformation(self, n):
         '''
@@ -562,6 +564,10 @@ class Transformation:
         n = self.prepare_solution(n)
         
         assign_solution(n)
+        # assign_duals(n) # Still doesn't work
+        
+        n._multi_invest = False
+        post_processing(n) # Forse non serve nemmeno
         
         
         
@@ -810,6 +816,11 @@ class Transformation:
         # Create fake parameters (snapshots)
         n.model.parameters = type("FakeParameters", (), {})()
         n.model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+        
+        # TODO associare duals in modo sensato non appena appaiono
+        n.model.constraints = type("FakeConstraints", (), {})()
+        n.model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+        
     
         # Create fake objective
         n.model.objective = type("FakeObjective", (), {})()
