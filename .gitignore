@@ -163,3 +163,4 @@ cython_debug/
 test/*/microgrid*
 *.lp
 test/output/*
+test/networks/base*

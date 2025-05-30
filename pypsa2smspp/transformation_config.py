@@ -88,7 +88,7 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda e_initial, max_hours: e_initial / max_hours,
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
-            "Cost": lambda marginal_cost: marginal_cost / 2
+            "Cost": lambda marginal_cost: marginal_cost
             }
 
         self.Lines_parameters = {
@@ -116,39 +116,44 @@ class TransformationConfig:
             "MaxFlow": lambda inflow: (np.array([100*inflow.values.max(), 0.])).squeeze().transpose(),
             "MinFlow": lambda inflow: np.array([0., -100*inflow.values.max()]),
             "MaxPower": lambda p_nom_opt, p_max_pu: (np.array([(p_nom_opt*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
-            "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(p_nom_opt*p_min_pu), (0.*p_min_pu)])).squeeze().transpose(),
+            "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(0.*p_min_pu), (p_nom_opt*p_min_pu)])).squeeze().transpose(),
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*2, 1),
             "ConstantTerm": lambda p_nom: np.full(len(p_nom)*2, 0),
             "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values.max(), 1/efficiency_store.values.max()]),
+            # "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values, 1/efficiency_store.values]).squeeze().transpose(),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "DownhillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
             "UphillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
             #"InertiaPower": 1.0,
             # "InitialFlowRate": lambda inflow: inflow.values[0],
-            "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge else state_of_charge_initial
+            "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
 
         self.IntermittentUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
-            "p": lambda active_power: active_power
+            "p": lambda activepower: activepower
             }
         
         self.ThermalUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
-            "p": lambda active_power: active_power
+            "p": lambda activepower: activepower
             }
         
         self.HydroUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
-            "p": lambda active_power: active_power
+            "p_dispatch": lambda activepower: activepower[0],
+            "p_store": lambda activepower: -activepower[1],
+            # "p": lambda activepower: activepower
             }
         
         self.BatteryUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
-            "state_of_charge": lambda storage_level: storage_level
+            "p_dispatch": lambda activepower: np.maximum(activepower, 0),
+            "p_store": lambda activepower: np.maximum(-activepower, 0),
+            # "state_of_charge": lambda storage_level: storage_level
             }
         
         self.component_mapping = {

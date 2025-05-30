@@ -215,7 +215,7 @@ class Transformation:
                 args = []
                 
                 for param in param_names:
-                    if self.smspp_parameters[attr_name.split("_")[0]]['Size'][key] not in [1, '[L]', '[Li]', '[NA]', '[NP]']:
+                    if self.smspp_parameters[attr_name.split("_")[0]]['Size'][key] not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]']:
                         weight = True if param in ['capital_cost', 'marginal_cost', 'marginal_cost_quadratic', 'start_up_cost', 'stand_by_cost'] else False
                         arg = self.get_paramer_as_dense(n, components_type, param, weight)[[component]]
                     elif param in components_df.index or param in components_df.columns:
@@ -253,7 +253,7 @@ class Transformation:
         dimensions["NumberReservoirs"] = 1
         dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
         dimensions["TotalNumberPieces"] = 2
-        self.dimensions["NumberElectricalGenerators"] += 2*dimensions["NumberReservoirs"] 
+        self.dimensions["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
         
         return dimensions
             
@@ -328,8 +328,8 @@ class Transformation:
             elif components_type == 'storage_units':
                 self.get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
-                    if carrier == 'hydro':
-                        generator_node.extend([bus] * 3)  # Repeat three times
+                    if carrier in ['hydro', 'PHS']:
+                        generator_node.extend([bus] * 2)  # Repeat two times
                     else:
                         generator_node.append(bus)  # Normal case
             else:
@@ -342,7 +342,7 @@ class Transformation:
             for component in components_df.index:
                 if any(carrier in components_df.loc[component].carrier for carrier in renewable_carriers):
                     attr_name = "IntermittentUnitBlock_parameters"
-                elif components_df.loc[component].carrier == 'hydro':
+                elif components_df.loc[component].carrier in ['hydro', 'PHS']:
                     attr_name = 'HydroUnitBlock_parameters'
                 elif "storage_units" in components_type:
                     attr_name = "BatteryUnitBlock_parameters"
@@ -538,6 +538,11 @@ class Transformation:
             # Store all variables from the dataset into the corresponding unitblock
             for var_name in ds.data_vars:
                 self.unitblocks[matching_key][var_name] = ds[var_name].values
+                
+            ds.close()
+            
+        solution_data["UCBlock"].close()
+                
     
         return solution_data
 
@@ -644,6 +649,8 @@ class Transformation:
         for key, func in unitblock_parameters.items():
             if callable(func):
                 value = self.evaluate_function(func, normalized_keys, unit_block, df)
+                if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
+                    value = value.sum(axis=0)
                 value, dims, coords, var_name = self.dataarray_components(n, value, component, unit_block, key)
 
                 converted_dict[var_name] = xr.DataArray(value, dims=dims, coords=coords, name=var_name)
@@ -874,15 +881,16 @@ class Transformation:
         kwargs = {**kwargs, **generator_node}
 
         # Lines
-        line_variables = {}
-        for name, variable in self.networkblock['Lines']['variables'].items():
-            line_variables[name] = Variable(
-                name,
-                variable['type'],
-                variable['size'],
-                variable['value'])
+        if kwargs['NumberLines'] > 0:
+            line_variables = {}
+            for name, variable in self.networkblock['Lines']['variables'].items():
+                line_variables[name] = Variable(
+                    name,
+                    variable['type'],
+                    variable['size'],
+                    variable['value'])
 
-        kwargs = {**kwargs, **line_variables}
+            kwargs = {**kwargs, **line_variables}
 
         # Add UC block
         sn.add(
@@ -902,6 +910,10 @@ class Transformation:
                     variable['type'],
                     variable['size'],
                     variable['value'])
+                
+            if 'dimensions' in unit_block.keys():
+                for dimension_name, dimension in unit_block['dimensions'].items():
+                    kwargs[dimension_name] = dimension
 
             unit_block_toadd = Block().from_kwargs(
                 block_type=unit_block['block'],

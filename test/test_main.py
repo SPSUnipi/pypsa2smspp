@@ -29,7 +29,8 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     clean_p_min_pu,
     one_bus_network,
-    parse_txt_file
+    parse_txt_file,
+    compare_networks
 )
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,10 +41,10 @@ def process_network(network_name="microgrid_microgrid_ALL_4N"):
     fp = os.path.join(DIR, "networks", f"{network_name}.nc")
     network = pypsa.Network(fp)
 
-    network = clean_marginal_cost(network)
+    # network = clean_marginal_cost(network)
     network = clean_global_constraints(network)
     network = clean_e_sum(network)
-    network = clean_ciclicity_storage(network)
+    # network = clean_ciclicity_storage(network)
 
     # network = one_bus_network(network)
     # network = clean_efficiency_link(network)
@@ -69,7 +70,8 @@ def process_network(network_name="microgrid_microgrid_ALL_4N"):
 
     temporary_smspp_file = os.path.join(DIR, "output", f"{network_name}.nc")  # path to temporary SMS++ file
     output_file = os.path.join(DIR, "output", f"{network_name}.txt")  # path to the output file (optional)
-
+    solution_file = "output/solution_{network_name}.nc"
+    
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     result = transformation.optimize(configfile, temporary_smspp_file, output_file)
 

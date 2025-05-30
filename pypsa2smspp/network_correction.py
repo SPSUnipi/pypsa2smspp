@@ -21,6 +21,7 @@ def clean_marginal_cost(n):
 def clean_global_constraints(n):
     n.global_constraints = pd.DataFrame(columns=n.global_constraints.columns)
     n.global_constraints_t = dict()
+    n.links.p_nom_extendable = False
     return n
     
 def clean_e_sum(n):

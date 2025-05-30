@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Oct 29 14:14:38 2024
+Created on Wed May 28 16:25:30 2025
 
 @author: aless
 """
@@ -21,6 +21,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
+import pypsa
 # from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 
 from pypsa2smspp.network_correction import (
@@ -37,13 +38,16 @@ from pypsa2smspp.network_correction import (
     )
 
 #%% Network definition with PyPSA
-config = TestConfig()
-nd = NetworkDefinition(config)
+n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
 
-network = nd.n.copy()
+n_smspp = clean_global_constraints(n_smspp)
+n_smspp = clean_e_sum(n_smspp)
+n_smspp = clean_storage_units(n_smspp)
+
+network = n_smspp.copy()
 network.optimize(solver_name='gurobi')
 
-# network.export_to_netcdf("network_pypsa.nc")
+# network.export_to_netcdf("network_errore.nc")
 
 # network.model.to_file(fn = "f.lp")
 #%% Transformation class
@@ -53,14 +57,11 @@ print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_ucblock()
 
+
 configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
 temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
 output_file = "output/temp_log_file.txt"  # path to the output file (optional)
 solution_file = "output/temp_solution_file.nc"
-
-# Check if the file exists
-if os.path.exists(solution_file):
-    os.remove(solution_file)
 
 result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
@@ -77,10 +78,9 @@ operational_cost = statistics['Operational Expenditure'].sum()
 error = (operational_cost - result.objective_value) / operational_cost * 100
 print(f"Error PyPSA-SMS++ of {error}%")
 
-solution = transformation.parse_solution_to_unitblocks(solution_file)
-# transformation.parse_txt_to_unitblocks(output_file)
-transformation.inverse_transformation(nd.n)
+# solution = transformation.parse_solution_to_unitblocks(solution_file)
+transformation.parse_txt_to_unitblocks(output_file)
+transformation.inverse_transformation(n_smspp)
 
-differences = compare_networks(network, nd.n)
-statistics_smspp = nd.n.statistics()
-
+differences = compare_networks(network, n_smspp)
+statistics_smspp = n_smspp.statistics()
