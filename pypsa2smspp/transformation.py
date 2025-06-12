@@ -72,6 +72,8 @@ class Transformation:
         self.networkblock = dict()
         self.investmentblock = dict()
         
+        self.dimensions = dict()
+        
         self.config = config
         
         self.conversion_dict = {
@@ -158,35 +160,71 @@ class Transformation:
         self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}
         
     def add_dimensions(self, n):
-        components = {
-            "NumberUnits": ["generators", "storage_units", "stores"],
-            "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
-            "NumberNodes": ["buses"],
-            "NumberLines": ["lines", "links"],
-        }
+        # UCBlock
         
-        # Calcola le dimensioni sommando le lunghezze
-        self.dimensions = {
-            "TimeHorizon": len(n.snapshots),
-            **{
-                name: sum(len(getattr(n, comp)) for comp in comps)
-                for name, comps in components.items()
-            },
+        def ucblock_dimensions(n):
+            components = {
+                "NumberUnits": ["generators", "storage_units", "stores"],
+                "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
+                "NumberNodes": ["buses"],
+                "NumberLines": ["lines", "links"],
+            }
+        
+            dimensions = {
+                "TimeHorizon": len(n.snapshots),
+                **{
+                    name: sum(len(getattr(n, comp)) for comp in comps)
+                    for name, comps in components.items()
+                }
+            }
+            return dimensions
+        
+        # NetworkBlock
+        def networkblock_dimensions(n):
+            network_components = {
+                "Lines": ['lines'],
+                "Links": ['links'],
+                "combined": ['lines', 'links']
+            }
+            dimensions = {
+                **{
+                    name: sum(len(getattr(n, comp)) for comp in comps)
+                    for name, comps in network_components.items()
+                }
+            }
             
+            return dimensions
+    
+        # InvestmentBlock
+        def investmentblock_dimensions(n):
+            investment_components = ['generators', 'stores', 'lines', 'links']
+            num_assets = 0
+            for comp in investment_components:
+                df = getattr(n, comp)
+                comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"  # es. "generators" -> "Generator"
+                attr = self.nominal_attrs.get(comp_type)
+                if attr and f"{attr}_extendable" in df.columns:
+                    num_assets += df[f"{attr}_extendable"].sum()
+        
+            dimensions = {
+                "NumberAssets": int(num_assets)
             }
+            return dimensions
+        
+        # HydroUnitBlock
+        def hydro_dimensions():
+            dimensions = dict()
+            dimensions["NumberReservoirs"] = 1
+            dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
+            dimensions["TotalNumberPieces"] = 2
+            
+            return dimensions
         
         
-        components = {
-            "Lines": ['lines'],
-            "Links": ['links'],
-            "combined": ['lines', 'links']
-            }
-        self.dimensions_lines = {
-            **{
-                name: sum(len(getattr(n, comp)) for comp in comps)
-                for name, comps in components.items()
-            }
-            }
+        self.dimensions['UCBlock'] = ucblock_dimensions(n)
+        self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n)
+        self.dimensions['HydroUnitBlock'] = hydro_dimensions()
         
         
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
@@ -254,18 +292,12 @@ class Transformation:
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "variables": converted_dict}   
         
         if attr_name == 'HydroUnitBlock_parameters':
-            dimensions = self.hydro_dimensions()
+            dimensions = self.dimensions['HydroUnitBlock']
+            self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
+            
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"]['dimensions'] = dimensions
             
-    
-    def hydro_dimensions(self):
-        dimensions = {}
-        dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 2
-        self.dimensions["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
-        
-        return dimensions
+
             
     
     def remove_zero_p_nom_opt_components(self, n):
@@ -446,15 +478,15 @@ class Transformation:
         row = self.smspp_parameters[attr_name.split("_")[0]].loc[key]
         variable_type = row['Type']
         
-        dimensions = self.dimensions.copy()
+        dimensions = self.dimensions['UCBlock'].copy()
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
         dimensions["NumberReservoirs"] = 1
         dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
         dimensions["TotalNumberPieces"] = 2
-        dimensions["NumberLines"] = self.dimensions_lines['Lines']
-        dimensions["NumberLinks"] = self.dimensions_lines['Links']
+        dimensions["NumberLines"] = self.dimensions['NetworkBlock']['Lines']
+        dimensions["NumberLinks"] = self.dimensions['NetworkBlock']['Links']
     
         # Determina la dimensione della variabile
         if args is None:
@@ -563,7 +595,7 @@ class Transformation:
     
     
     def parse_solution_to_unitblocks(self, file_path):
-        num_units = self.dimensions['NumberUnits']
+        num_units = self.dimensions['UCBlock']['NumberUnits']
         solution_data = {}
     
         # Load the top-level UCBlock (Solution_0 group)
@@ -909,7 +941,7 @@ class Transformation:
         sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
 
         # Dimensions of the problem
-        kwargs = self.dimensions
+        kwargs = self.dimensions['UCBlock']
 
         # Load
         demand_name = self.demand['name']
