@@ -70,6 +70,7 @@ class Transformation:
         # Attribute for unit blocks
         self.unitblocks = dict()
         self.networkblock = dict()
+        self.investmentblock = dict()
         
         self.config = config
         
@@ -85,6 +86,15 @@ class Transformation:
             "NP": "TotalNumberPieces",
             "1": 1
             }
+        
+        self.nominal_attrs = {
+            "Generator": "p_nom",
+            "Line": "s_nom",
+            "Transformer": "s_nom",
+            "Link": "p_nom",
+            "Store": "e_nom",
+            "StorageUnit": "p_nom",
+        }
         
         n.stores["max_hours"] = config.max_hours_stores
         
@@ -261,18 +271,10 @@ class Transformation:
     def remove_zero_p_nom_opt_components(self, n):
         # Lista dei componenti che hanno l'attributo p_nom_opt
         components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
-        nominal_attrs = {
-            "Generator": "p_nom",
-            "Line": "s_nom",
-            "Transformer": "s_nom",
-            "Link": "p_nom",
-            "Store": "e_nom",
-            "StorageUnit": "p_nom",
-        }
         
         for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
             components_df = components.df
-            components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
+            components_df = components_df[components_df[f"{self.nominal_attrs[components.name]}_opt"] > 0]
             setattr(n, components.list_name, components_df)
 
     
@@ -294,14 +296,6 @@ class Transformation:
         
         """
         renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
-        nominal_attrs = {
-            "Generator": "p_nom",
-            "Line": "s_nom",
-            "Transformer": "s_nom",
-            "Link": "p_nom",
-            "Store": "e_nom",
-            "StorageUnit": "p_nom",
-        }
         
         generator_node = []
         index = 0
@@ -337,7 +331,12 @@ class Transformation:
                 generator_node.extend(components_df['bus_idx'].values)
 
 
-                # Understand which type of block we expect
+            if components_type not in ['lines', 'links', 'storage_units']:
+                self.add_InvestmentBlock(n, components_df, components.name)
+                
+                
+                
+            # Understand which type of block we expect
 
             for component in components_df.index:
                 if any(carrier in components_df.loc[component].carrier for carrier in renewable_carriers):
@@ -352,9 +351,64 @@ class Transformation:
                     attr_name = "ThermalUnitBlock_parameters"
                 
                 self.add_UnitBlock(attr_name, components_df.loc[[component]], components_t, components.name, n, component, index)
+                
                 index += 1
         self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
+     
         
+    def add_InvestmentBlock(self, n, components_df, components_type):
+        components_df = Transformation.filter_extendable_components(components_df, components_type, self.nominal_attrs)
+        
+        converted_dict = {}
+        attr_name = 'InvestmentBlock_parameters'
+        unitblock_parameters = getattr(self.config, attr_name)
+    
+    
+        for key, func in unitblock_parameters.items():
+            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            args = []
+            
+            if callable(func):
+                for param in param_names:
+                    arg = components_df.get(param)
+                    args.append(arg)
+
+                value = func(*args)
+                variable_type, variable_size = self.add_size_type(attr_name, key, value)
+                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
+        
+    @staticmethod
+    def filter_extendable_components(components_df, components_type, nominal_attrs):
+        """
+        Filters the components DataFrame to keep only extendable units.
+    
+        Parameters
+        ----------
+        components_df : pd.DataFrame
+            The static DataFrame of the component.
+        components_type : str
+            The capitalized component type (e.g., "Generator", "Store").
+        nominal_attrs : dict
+            Dictionary mapping component types to their nominal attribute.
+    
+        Returns
+        -------
+        pd.DataFrame
+            Filtered DataFrame with only extendable components.
+        """
+        attr = nominal_attrs.get(components_type)
+        if not attr:
+            return components_df  # no filtering possible if type not recognized
+    
+        extendable_attr = f"{attr}_extendable"
+    
+        if extendable_attr in components_df.columns:
+            return components_df[components_df[extendable_attr] == True]
+        else:
+            return components_df  # nothing to filter if column not found
+        
+    
+    
     def get_bus_idx(self, n, components_df, bus_series, column_name, dtype="uint32"):
         """
         Returns the numeric index of the bus in the network n for each element of the bus_series.
@@ -454,7 +508,7 @@ class Transformation:
             for key, value in self.networkblock['Lines']['variables'].items():
                 value['size'] = tuple('NumberLines' if x == 'NumberLinks' else x for x in value['size'])
             
-            
+    
             
 ###########################################################################################################################
 ############ PARSE OUPUT SMS++ FILE ###################################################################
