@@ -86,6 +86,7 @@ class Transformation:
             "NA": "NumberArcs",
             "NR": "NumberReservoirs",
             "NP": "TotalNumberPieces",
+            "Nass": "NumberAssets",
             "1": 1
             }
         
@@ -153,6 +154,14 @@ class Transformation:
             field_val = field_val.mul(weighting, axis=0)
         return field_val 
     
+    @staticmethod
+    def is_extendable(component, component_type, nominal_attrs):
+        attr = nominal_attrs.get(component_type)
+        extendable_attr = f"{attr}_extendable"
+        
+        return component[extendable_attr].values
+             
+        
     
     def add_demand(self, n):
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
@@ -330,6 +339,8 @@ class Transformation:
         renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
         
         generator_node = []
+        index_extendable = []
+        asset_type = []
         index = 0
         for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
             # Static attributes of the class of components
@@ -367,7 +378,6 @@ class Transformation:
                 self.add_InvestmentBlock(n, components_df, components.name)
                 
                 
-                
             # Understand which type of block we expect
 
             for component in components_df.index:
@@ -384,30 +394,64 @@ class Transformation:
                 
                 self.add_UnitBlock(attr_name, components_df.loc[[component]], components_t, components.name, n, component, index)
                 
-                index += 1
+                if Transformation.is_extendable(components_df.loc[[component]], components.name, self.nominal_attrs):
+                    index_extendable.append(index)
+                    
+                    if components_type not in ['lines', 'links']:
+                        asset_type.append(0)
+                    else:
+                        asset_type.append(1)
+                
+                index += 1    
+                
         self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
-     
+        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'int', 'size': 'NumberAssets'}
+        self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumberAssets'}
+
+        
         
     def add_InvestmentBlock(self, n, components_df, components_type):
         components_df = Transformation.filter_extendable_components(components_df, components_type, self.nominal_attrs)
+        
+        if 'Fake_dimension' not in self.dimensions:
+            self.dimensions['Fake_dimension'] = {}
+        self.dimensions['Fake_dimension']['NumberAssets_partial'] = len(components_df)
         
         converted_dict = {}
         attr_name = 'InvestmentBlock_parameters'
         unitblock_parameters = getattr(self.config, attr_name)
     
-    
         for key, func in unitblock_parameters.items():
             param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
             args = []
-            
+    
             if callable(func):
                 for param in param_names:
                     arg = components_df.get(param)
                     args.append(arg)
-
+    
                 value = func(*args)
                 variable_type, variable_size = self.add_size_type(attr_name, key, value)
-                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
+    
+                if hasattr(self, 'investmentblock') and key in self.investmentblock:
+                    # Concateno i value (array, lista, ecc.)
+                    previous_value = self.investmentblock[key]["value"]
+                    if isinstance(previous_value, list):
+                        new_value = previous_value + list(value)
+                    else:
+                        new_value = np.concatenate([previous_value, value])
+                    self.investmentblock[key]["value"] = new_value
+                    # non tocco "type" e "size"
+                else:
+                    converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
+    
+        if not hasattr(self, 'investmentblock'):
+            self.investmentblock = converted_dict
+        else:
+            # aggiungo solo le nuove chiavi calcolate
+            for key in converted_dict:
+                self.investmentblock[key] = converted_dict[key]
+
         
     @staticmethod
     def filter_extendable_components(components_df, components_type, nominal_attrs):
@@ -478,15 +522,16 @@ class Transformation:
         row = self.smspp_parameters[attr_name.split("_")[0]].loc[key]
         variable_type = row['Type']
         
-        dimensions = self.dimensions['UCBlock'].copy()
+        dimensions = {
+            key: value
+            for subdict in self.dimensions.values()
+            for key, value in subdict.items()
+        }
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
-        dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 2
-        dimensions["NumberLines"] = self.dimensions['NetworkBlock']['Lines']
-        dimensions["NumberLinks"] = self.dimensions['NetworkBlock']['Links']
+        dimensions['NumberAssets'] = dimensions['NumberAssets_partial']
+
     
         # Determina la dimensione della variabile
         if args is None:
