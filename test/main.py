@@ -40,6 +40,9 @@ from pypsa2smspp.network_correction import (
 config = TestConfig()
 nd = NetworkDefinition(config)
 
+# nd.n.storage_units_t.inflow["hydro"] = 0
+# nd.n.storage_units_t.inflow.at[0,'hydro'] = 1
+
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
 

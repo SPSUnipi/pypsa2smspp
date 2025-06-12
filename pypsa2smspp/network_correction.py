@@ -86,6 +86,28 @@ def one_bus_network(n):
     
     return n
     
+def reduced_snapshot(n):
+    n.snapshots = n.snapshots[:24]
+    # Ritaglia tutte le timeseries dinamiche
+    for attr in dir(n):
+        if attr.endswith('_t'):
+            df_dict = getattr(n, attr)
+            for key in df_dict:
+                df_dict[key] = df_dict[key].loc[n.snapshots]
+                
+    # Trova gli indici dei generatori con carrier da rimuovere
+    renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
+    gens_to_drop = n.generators[n.generators.carrier.isin(renewable_carriers)].index
+    print(gens_to_drop)
+    
+    # Rimuovi da generators
+    n.generators.drop(index=gens_to_drop, inplace=True)
+    
+    # Rimuovi da tutte le timeseries relative ai generatori
+    for key in n.generators_t:
+        n.generators_t[key].drop(columns=gens_to_drop, inplace=True, errors="ignore")
+    return n
+
 
 
 def parse_txt_file(file_path):

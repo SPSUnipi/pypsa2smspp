@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class TransformationConfig:
     """
     Class for defining the configuration parameter of the PyPSA2SMSpp transformation.
@@ -108,21 +109,22 @@ class TransformationConfig:
             }
 
         self.HydroUnitBlock_parameters = {
-            "StartArc": lambda p_nom: np.full(len(p_nom)*2, 0),
-            "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
+            # "StartArc": lambda p_nom: np.full(len(p_nom)*2, 0),
+            # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
+            "StartArc": lambda p_nom: np.array([0, 1]),
+            "EndArc": lambda p_nom: np.array([1, 0]),
             "MaxVolumetric": lambda p_nom_opt, max_hours: (p_nom_opt * max_hours),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow: inflow.values.transpose(),
-            "MaxFlow": lambda inflow: (np.array([100*inflow.values.max(), 0.])).squeeze().transpose(),
-            "MinFlow": lambda inflow: np.array([0., -100*inflow.values.max()]),
+            "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
+            "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
             "MaxPower": lambda p_nom_opt, p_max_pu: (np.array([(p_nom_opt*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
             "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(0.*p_min_pu), (p_nom_opt*p_min_pu)])).squeeze().transpose(),
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*2, 1),
             "ConstantTerm": lambda p_nom: np.full(len(p_nom)*2, 0),
-            "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values.max(), 1/efficiency_store.values.max()]),
-            # "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values, 1/efficiency_store.values]).squeeze().transpose(),
+            "LinearTerm": lambda efficiency_dispatch, efficiency_store: np.array([efficiency_dispatch.values.max(), 1 / efficiency_store.values.max() if efficiency_store.values.max() != 0 else 0]),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "DownhillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),

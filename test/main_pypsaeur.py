@@ -7,6 +7,9 @@ Created on Wed May 28 16:25:30 2025
 
 import sys
 import os
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 # Aggiunge il percorso relativo per la cartella `config`
 sys.path.append(os.path.abspath("../scripts"))
@@ -33,23 +36,26 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost_intermittent,
     clean_storage_units,
     clean_stores,
+    reduced_snapshot,
     parse_txt_file,
     compare_networks
     )
 
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
+n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
-n_smspp = clean_storage_units(n_smspp)
+# n_smspp = clean_ciclicity_storage(n_smspp)
+# n_smspp = clean_storage_units(n_smspp)
+n_smspp = reduced_snapshot(n_smspp)
 
 network = n_smspp.copy()
 network.optimize(solver_name='gurobi')
 
 # network.export_to_netcdf("network_errore.nc")
 
-# network.model.to_file(fn = "f.lp")
+network.model.to_file(fn = "pypsa.lp")
 #%% Transformation class
 then = datetime.now()
 transformation = Transformation(network)
@@ -62,6 +68,10 @@ configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default con
 temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
 output_file = "output/temp_log_file.txt"  # path to the output file (optional)
 solution_file = "output/temp_solution_file.nc"
+
+# Check if the file exists
+if os.path.exists(solution_file):
+    os.remove(solution_file)
 
 result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
@@ -78,8 +88,8 @@ operational_cost = statistics['Operational Expenditure'].sum()
 error = (operational_cost - result.objective_value) / operational_cost * 100
 print(f"Error PyPSA-SMS++ of {error}%")
 
-# solution = transformation.parse_solution_to_unitblocks(solution_file)
-transformation.parse_txt_to_unitblocks(output_file)
+solution = transformation.parse_solution_to_unitblocks(solution_file)
+# transformation.parse_txt_to_unitblocks(output_file)
 transformation.inverse_transformation(n_smspp)
 
 differences = compare_networks(network, n_smspp)

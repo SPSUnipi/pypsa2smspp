@@ -1,0 +1,33 @@
+name: pypsa-clean
+channels:
+  - conda-forge
+  - gurobi
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas>=0.24
+  - pypsa
+  - xarray
+  - matplotlib
+  - ipython
+  - ipykernel
+  - scikit-learn
+  - spyder
+  - gurobi
+  - pip
+  - pip:
+      - git+https://github.com/SPSUnipi/pySMSpp
+      - pytest
+      - highspy
+      - coverage
+      - pre-commit
+      - ncompare
+      - mypy
+      - numpydoc
+      - sphinx
+      - sphinx-book-theme
+      - sphinx-rtd-theme
+      - pydata-sphinx-theme
+      - sphinx-reredirects
+      - nbsphinx
+      - nbsphinx-link
