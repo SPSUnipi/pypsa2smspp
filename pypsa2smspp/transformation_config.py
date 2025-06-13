@@ -138,7 +138,7 @@ class TransformationConfig:
             "Cost": lambda capital_cost: capital_cost,
             "LowerBound": lambda p_nom_min: p_nom_min,
             "UpperBound": lambda p_nom_max: p_nom_max,
-            "InstalledCapacity": lambda p_nom: p_nom,
+            "InstalledQuantity": lambda p_nom: p_nom,
             }
 
         self.IntermittentUnitBlock_inverse = {

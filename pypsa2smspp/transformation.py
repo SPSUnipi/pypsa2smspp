@@ -86,7 +86,7 @@ class Transformation:
             "NA": "NumberArcs",
             "NR": "NumberReservoirs",
             "NP": "TotalNumberPieces",
-            "Nass": "NumberAssets",
+            "Nass": "NumAssets",
             "1": 1
             }
         
@@ -216,7 +216,7 @@ class Transformation:
                     num_assets += df[f"{attr}_extendable"].sum()
         
             dimensions = {
-                "NumberAssets": int(num_assets)
+                "NumAssets": int(num_assets)
             }
             return dimensions
         
@@ -405,8 +405,8 @@ class Transformation:
                 index += 1    
                 
         self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
-        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'int', 'size': 'NumberAssets'}
-        self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumberAssets'}
+        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'int', 'size': 'NumAssets'}
+        self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
 
         
         
@@ -415,7 +415,7 @@ class Transformation:
         
         if 'Fake_dimension' not in self.dimensions:
             self.dimensions['Fake_dimension'] = {}
-        self.dimensions['Fake_dimension']['NumberAssets_partial'] = len(components_df)
+        self.dimensions['Fake_dimension']['NumAssets_partial'] = len(components_df)
         
         converted_dict = {}
         attr_name = 'InvestmentBlock_parameters'
@@ -530,7 +530,7 @@ class Transformation:
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
-        dimensions['NumberAssets'] = dimensions['NumberAssets_partial']
+        dimensions['NumAssets'] = dimensions['NumAssets_partial']
 
     
         # Determina la dimensione della variabile
@@ -970,10 +970,57 @@ class Transformation:
 #########################################################################################
 ######################## Conversion with PySMSpp ########################################
 #########################################################################################
-
-
+    
     ## Create SMSNetwork
-    def convert_to_ucblock(self):
+    def convert_to_blocks(self):
+        # pySMSpp
+        sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
+        master = sn
+        
+        index_id = 0
+        
+        if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
+            sn = self.convert_to_investmentblock(master, index_id)
+            index_id += 1
+            
+            master = sn.blocks['Block_0']
+        
+        self.convert_to_ucblock(master, index_id)
+        
+        self.sms_network = sn
+        
+    
+    def convert_to_investmentblock(self, master, index_id):
+        """
+        Converts the unit blocks into a InvestmentBlock format.
+        
+        Returns:
+        ----------
+        investmentblock : SMSNetwork
+            SMSNetwork object containing the network in SMS++ InvestmentBlock format.
+        """
+        
+        # Dimensions of the problem
+        kwargs = self.dimensions['InvestmentBlock']
+        
+        for name, variable in self.investmentblock.items():
+                kwargs[name] = Variable(
+                    name,
+                    variable['type'],
+                    variable['size'],
+                    variable['value'])
+        
+        master.add(
+            "InvestmentBlock",  # block type
+            f"Block_{index_id}",  # block name
+            id=f"{index_id}",  # block id
+            **kwargs
+        )
+        
+        return master
+        
+  
+    def convert_to_ucblock(self, master, index_id):
         """
         Converts the unit blocks into a UCBlock format.
         
@@ -982,9 +1029,7 @@ class Transformation:
         ucblock : SMSNetwork
             SMSNetwork object containing the network in SMS++ UCBlock format.
         """
-        # pySMSpp
-        sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
-
+        
         # Dimensions of the problem
         kwargs = self.dimensions['UCBlock']
 
@@ -1024,15 +1069,14 @@ class Transformation:
             kwargs = {**kwargs, **line_variables}
 
         # Add UC block
-        sn.add(
+        master.add(
             "UCBlock",  # block type
-            "Block_0",  # block name
-            id="0",  # block id
+            f"Block_{index_id}",  # block name
+            id=f"{index_id}",  # block id
             **kwargs
         )
 
         # Add unit blocks
-
         for name, unit_block in self.unitblocks.items():
             kwargs = {}
             for variable_name, variable in unit_block['variables'].items():
@@ -1052,11 +1096,11 @@ class Transformation:
             )
 
             # Why should I have name UnitBlock_0?
-            sn.blocks["Block_0"].add_block(unit_block['enumerate'], block=unit_block_toadd)
-        
-        self.sms_network = sn
+            master.blocks[f"Block_{index_id}"].add_block(unit_block['enumerate'], block=unit_block_toadd)
 
-        return sn
+        return master
+    
+    
     
     def optimize(self, configfile, *args, **kwargs):
         """
