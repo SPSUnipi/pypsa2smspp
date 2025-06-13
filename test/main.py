@@ -7,6 +7,8 @@ Created on Tue Oct 29 14:14:38 2024
 
 import sys
 import os
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Aggiunge il percorso relativo per la cartella `config`
 sys.path.append(os.path.abspath("../scripts"))
@@ -54,7 +56,7 @@ then = datetime.now()
 transformation = Transformation(network)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
-tran = transformation.convert_to_ucblock()
+tran = transformation.convert_to_blocks()
 
 configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
 temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
@@ -67,23 +69,30 @@ if os.path.exists(solution_file):
 
 result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
-
-# Esegui la funzione sul file di testo
-data_dict = parse_txt_file(output_file)
-
-
-print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
-print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
-
 statistics = network.statistics()
 operational_cost = statistics['Operational Expenditure'].sum()
 error = (operational_cost - result.objective_value) / operational_cost * 100
 print(f"Error PyPSA-SMS++ of {error}%")
 
-solution = transformation.parse_solution_to_unitblocks(solution_file)
-# transformation.parse_txt_to_unitblocks(output_file)
-transformation.inverse_transformation(nd.n)
 
-differences = compare_networks(network, nd.n)
-statistics_smspp = nd.n.statistics()
+
+
+###############################################################################################
+##################### Inverse transformation (UCBlock only for now) ###########################
+###############################################################################################
+
+
+# Esegui la funzione sul file di testo
+# data_dict = parse_txt_file(output_file)
+
+# print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
+# print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
+
+
+# solution = transformation.parse_solution_to_unitblocks(solution_file)
+# # transformation.parse_txt_to_unitblocks(output_file)
+# transformation.inverse_transformation(nd.n)
+
+# differences = compare_networks(network, nd.n)
+# statistics_smspp = nd.n.statistics()
 

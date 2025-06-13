@@ -14,10 +14,14 @@ sys.path.append(os.path.abspath("../scripts"))
 # Aggiunge il percorso relativo per la cartella `scripts`
 sys.path.append(os.path.abspath("."))
 
+from configs.test_config import TestConfig
+from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
-from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
+import pysmspp
 import pypsa
+# from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
+
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
     clean_global_constraints,
@@ -27,68 +31,70 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost_intermittent,
     clean_storage_units,
     clean_stores,
-    clean_p_min_pu,
-    one_bus_network,
+    reduced_snapshot,
     parse_txt_file,
     compare_networks
-)
-
+    )
 DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def process_network(network_name="microgrid_microgrid_ALL_4N"):
     #%% Network definition with PyPSA
     fp = os.path.join(DIR, "networks", f"{network_name}.nc")
-    network = pypsa.Network(fp)
+    n_smspp = pypsa.Network(fp)
 
-    # network = clean_marginal_cost(network)
-    network = clean_global_constraints(network)
-    network = clean_e_sum(network)
-    # network = clean_ciclicity_storage(network)
-
-    # network = one_bus_network(network)
-    # network = clean_efficiency_link(network)
-
-
-    # network = clean_p_min_pu(network)
-    # network = clean_marginal_cost_intermittent(network)
-    # network = clean_storage_units(network)
-    # network = clean_stores(network)
-
-
-    network.optimize(solver_name='highs')
-    # network.export_to_netcdf()
-
-
+    n_smspp = clean_global_constraints(n_smspp)
+    n_smspp = clean_e_sum(n_smspp)
+    # n_smspp = clean_ciclicity_storage(n_smspp)
+    # n_smspp = clean_storage_units(n_smspp)
+    
+    network = n_smspp.copy()
+    network.optimize(solver_name='gurobi')
+    
+    network.generators.p_nom_extendable = False
+    network.storage_units.p_nom_extendable = False
+    network.lines.s_nom_extendable = False
+    
+    # network.export_to_netcdf("network_errore.nc")
+    
+    # network.model.to_file(fn = "pypsa.lp")
     #%% Transformation class
     then = datetime.now()
     transformation = Transformation(network)
     print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
-
-    transformation.convert_to_ucblock()
-    configfile = SMSConfig(template="uc_solverconfig")
-
-    temporary_smspp_file = os.path.join(DIR, "output", f"{network_name}.nc")  # path to temporary SMS++ file
-    output_file = os.path.join(DIR, "output", f"{network_name}.txt")  # path to the output file (optional)
-    solution_file = "output/solution_{network_name}.nc"
     
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    result = transformation.optimize(configfile, temporary_smspp_file, output_file)
-
+    tran = transformation.convert_to_blocks()
+    
+    configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
+    temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
+    output_file = "output/temp_log_file.txt"  # path to the output file (optional)
+    solution_file = "output/temp_solution_file.nc"
+    
+    # Check if the file exists
+    if os.path.exists(solution_file):
+        os.remove(solution_file)
+    
+    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+    
+    
     # Esegui la funzione sul file di testo
     data_dict = parse_txt_file(output_file)
-
+    
+    
     print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
-
+    
     statistics = network.statistics()
     operational_cost = statistics['Operational Expenditure'].sum()
     error = (operational_cost - result.objective_value) / operational_cost * 100
     print(f"Error PyPSA-SMS++ of {error}%")
-
-    unitblocks = transformation.unitblocks
-    transformation.parse_txt_to_unitblocks(output_file)
-    transformation.inverse_transformation(network)
+    
+    solution = transformation.parse_solution_to_unitblocks(solution_file)
+    # transformation.parse_txt_to_unitblocks(output_file)
+    transformation.inverse_transformation(n_smspp)
+    
+    differences = compare_networks(network, n_smspp)
+    statistics_smspp = n_smspp.statistics()
 
     assert "success" in result.status.lower()
     assert "error" not in result.log.lower()
@@ -98,4 +104,3 @@ def process_network(network_name="microgrid_microgrid_ALL_4N"):
 def test_network():
     process_network()
     
-

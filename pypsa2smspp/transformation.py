@@ -70,6 +70,9 @@ class Transformation:
         # Attribute for unit blocks
         self.unitblocks = dict()
         self.networkblock = dict()
+        self.investmentblock = dict()
+        
+        self.dimensions = dict()
         
         self.config = config
         
@@ -83,8 +86,18 @@ class Transformation:
             "NA": "NumberArcs",
             "NR": "NumberReservoirs",
             "NP": "TotalNumberPieces",
+            "Nass": "NumAssets",
             "1": 1
             }
+        
+        self.nominal_attrs = {
+            "Generator": "p_nom",
+            "Line": "s_nom",
+            "Transformer": "s_nom",
+            "Link": "p_nom",
+            "Store": "e_nom",
+            "StorageUnit": "p_nom",
+        }
         
         n.stores["max_hours"] = config.max_hours_stores
         
@@ -141,6 +154,14 @@ class Transformation:
             field_val = field_val.mul(weighting, axis=0)
         return field_val 
     
+    @staticmethod
+    def is_extendable(component, component_type, nominal_attrs):
+        attr = nominal_attrs.get(component_type)
+        extendable_attr = f"{attr}_extendable"
+        
+        return component[extendable_attr].values
+             
+        
     
     def add_demand(self, n):
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
@@ -148,35 +169,71 @@ class Transformation:
         self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}
         
     def add_dimensions(self, n):
-        components = {
-            "NumberUnits": ["generators", "storage_units", "stores"],
-            "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
-            "NumberNodes": ["buses"],
-            "NumberLines": ["lines", "links"],
-        }
+        # UCBlock
         
-        # Calcola le dimensioni sommando le lunghezze
-        self.dimensions = {
-            "TimeHorizon": len(n.snapshots),
-            **{
-                name: sum(len(getattr(n, comp)) for comp in comps)
-                for name, comps in components.items()
-            },
+        def ucblock_dimensions(n):
+            components = {
+                "NumberUnits": ["generators", "storage_units", "stores"],
+                "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
+                "NumberNodes": ["buses"],
+                "NumberLines": ["lines", "links"],
+            }
+        
+            dimensions = {
+                "TimeHorizon": len(n.snapshots),
+                **{
+                    name: sum(len(getattr(n, comp)) for comp in comps)
+                    for name, comps in components.items()
+                }
+            }
+            return dimensions
+        
+        # NetworkBlock
+        def networkblock_dimensions(n):
+            network_components = {
+                "Lines": ['lines'],
+                "Links": ['links'],
+                "combined": ['lines', 'links']
+            }
+            dimensions = {
+                **{
+                    name: sum(len(getattr(n, comp)) for comp in comps)
+                    for name, comps in network_components.items()
+                }
+            }
             
+            return dimensions
+    
+        # InvestmentBlock
+        def investmentblock_dimensions(n):
+            investment_components = ['generators', 'stores', 'lines', 'links']
+            num_assets = 0
+            for comp in investment_components:
+                df = getattr(n, comp)
+                comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"  # es. "generators" -> "Generator"
+                attr = self.nominal_attrs.get(comp_type)
+                if attr and f"{attr}_extendable" in df.columns:
+                    num_assets += df[f"{attr}_extendable"].sum()
+        
+            dimensions = {
+                "NumAssets": int(num_assets)
             }
+            return dimensions
+        
+        # HydroUnitBlock
+        def hydro_dimensions():
+            dimensions = dict()
+            dimensions["NumberReservoirs"] = 1
+            dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
+            dimensions["TotalNumberPieces"] = 2
+            
+            return dimensions
         
         
-        components = {
-            "Lines": ['lines'],
-            "Links": ['links'],
-            "combined": ['lines', 'links']
-            }
-        self.dimensions_lines = {
-            **{
-                name: sum(len(getattr(n, comp)) for comp in comps)
-                for name, comps in components.items()
-            }
-            }
+        self.dimensions['UCBlock'] = ucblock_dimensions(n)
+        self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n)
+        self.dimensions['HydroUnitBlock'] = hydro_dimensions()
         
         
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
@@ -244,35 +301,21 @@ class Transformation:
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "variables": converted_dict}   
         
         if attr_name == 'HydroUnitBlock_parameters':
-            dimensions = self.hydro_dimensions()
+            dimensions = self.dimensions['HydroUnitBlock']
+            self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
+            
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"]['dimensions'] = dimensions
             
-    
-    def hydro_dimensions(self):
-        dimensions = {}
-        dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 2
-        self.dimensions["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
-        
-        return dimensions
+
             
     
     def remove_zero_p_nom_opt_components(self, n):
         # Lista dei componenti che hanno l'attributo p_nom_opt
         components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
-        nominal_attrs = {
-            "Generator": "p_nom",
-            "Line": "s_nom",
-            "Transformer": "s_nom",
-            "Link": "p_nom",
-            "Store": "e_nom",
-            "StorageUnit": "p_nom",
-        }
         
         for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
             components_df = components.df
-            components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
+            components_df = components_df[components_df[f"{self.nominal_attrs[components.name]}_opt"] > 0]
             setattr(n, components.list_name, components_df)
 
     
@@ -294,16 +337,10 @@ class Transformation:
         
         """
         renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
-        nominal_attrs = {
-            "Generator": "p_nom",
-            "Line": "s_nom",
-            "Transformer": "s_nom",
-            "Link": "p_nom",
-            "Store": "e_nom",
-            "StorageUnit": "p_nom",
-        }
         
         generator_node = []
+        index_extendable = []
+        asset_type = []
         index = 0
         for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
             # Static attributes of the class of components
@@ -337,7 +374,11 @@ class Transformation:
                 generator_node.extend(components_df['bus_idx'].values)
 
 
-                # Understand which type of block we expect
+            if components_type not in ['lines', 'links', 'storage_units']:
+                self.add_InvestmentBlock(n, components_df, components.name)
+                
+                
+            # Understand which type of block we expect
 
             for component in components_df.index:
                 if any(carrier in components_df.loc[component].carrier for carrier in renewable_carriers):
@@ -352,9 +393,98 @@ class Transformation:
                     attr_name = "ThermalUnitBlock_parameters"
                 
                 self.add_UnitBlock(attr_name, components_df.loc[[component]], components_t, components.name, n, component, index)
-                index += 1
+                
+                if Transformation.is_extendable(components_df.loc[[component]], components.name, self.nominal_attrs):
+                    index_extendable.append(index)
+                    
+                    if components_type not in ['lines', 'links']:
+                        asset_type.append(0)
+                    else:
+                        asset_type.append(1)
+                
+                index += 1    
+                
         self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
+        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'int', 'size': 'NumAssets'}
+        self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
+
         
+        
+    def add_InvestmentBlock(self, n, components_df, components_type):
+        components_df = Transformation.filter_extendable_components(components_df, components_type, self.nominal_attrs)
+        
+        if 'Fake_dimension' not in self.dimensions:
+            self.dimensions['Fake_dimension'] = {}
+        self.dimensions['Fake_dimension']['NumAssets_partial'] = len(components_df)
+        
+        converted_dict = {}
+        attr_name = 'InvestmentBlock_parameters'
+        unitblock_parameters = getattr(self.config, attr_name)
+    
+        for key, func in unitblock_parameters.items():
+            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            args = []
+    
+            if callable(func):
+                for param in param_names:
+                    arg = components_df.get(param)
+                    args.append(arg)
+    
+                value = func(*args)
+                variable_type, variable_size = self.add_size_type(attr_name, key, value)
+    
+                if hasattr(self, 'investmentblock') and key in self.investmentblock:
+                    # Concateno i value (array, lista, ecc.)
+                    previous_value = self.investmentblock[key]["value"]
+                    if isinstance(previous_value, list):
+                        new_value = previous_value + list(value)
+                    else:
+                        new_value = np.concatenate([previous_value, value])
+                    self.investmentblock[key]["value"] = new_value
+                    # non tocco "type" e "size"
+                else:
+                    converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
+    
+        if not hasattr(self, 'investmentblock'):
+            self.investmentblock = converted_dict
+        else:
+            # aggiungo solo le nuove chiavi calcolate
+            for key in converted_dict:
+                self.investmentblock[key] = converted_dict[key]
+
+        
+    @staticmethod
+    def filter_extendable_components(components_df, components_type, nominal_attrs):
+        """
+        Filters the components DataFrame to keep only extendable units.
+    
+        Parameters
+        ----------
+        components_df : pd.DataFrame
+            The static DataFrame of the component.
+        components_type : str
+            The capitalized component type (e.g., "Generator", "Store").
+        nominal_attrs : dict
+            Dictionary mapping component types to their nominal attribute.
+    
+        Returns
+        -------
+        pd.DataFrame
+            Filtered DataFrame with only extendable components.
+        """
+        attr = nominal_attrs.get(components_type)
+        if not attr:
+            return components_df  # no filtering possible if type not recognized
+    
+        extendable_attr = f"{attr}_extendable"
+    
+        if extendable_attr in components_df.columns:
+            return components_df[components_df[extendable_attr] == True]
+        else:
+            return components_df  # nothing to filter if column not found
+        
+    
+    
     def get_bus_idx(self, n, components_df, bus_series, column_name, dtype="uint32"):
         """
         Returns the numeric index of the bus in the network n for each element of the bus_series.
@@ -392,15 +522,18 @@ class Transformation:
         row = self.smspp_parameters[attr_name.split("_")[0]].loc[key]
         variable_type = row['Type']
         
-        dimensions = self.dimensions.copy()
+        dimensions = {
+            key: value
+            for subdict in self.dimensions.values()
+            for key, value in subdict.items()
+        }
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
-        dimensions["NumberReservoirs"] = 1
-        dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-        dimensions["TotalNumberPieces"] = 2
-        dimensions["NumberLines"] = self.dimensions_lines['Lines']
-        dimensions["NumberLinks"] = self.dimensions_lines['Links']
+        if 'NumAssets_partial' in dimensions:
+            dimensions['NumAssets'] = dimensions['NumAssets_partial']
+
+
     
         # Determina la dimensione della variabile
         if args is None:
@@ -454,7 +587,7 @@ class Transformation:
             for key, value in self.networkblock['Lines']['variables'].items():
                 value['size'] = tuple('NumberLines' if x == 'NumberLinks' else x for x in value['size'])
             
-            
+    
             
 ###########################################################################################################################
 ############ PARSE OUPUT SMS++ FILE ###################################################################
@@ -509,7 +642,7 @@ class Transformation:
     
     
     def parse_solution_to_unitblocks(self, file_path):
-        num_units = self.dimensions['NumberUnits']
+        num_units = self.dimensions['UCBlock']['NumberUnits']
         solution_data = {}
     
         # Load the top-level UCBlock (Solution_0 group)
@@ -839,10 +972,64 @@ class Transformation:
 #########################################################################################
 ######################## Conversion with PySMSpp ########################################
 #########################################################################################
-
-
+    
     ## Create SMSNetwork
-    def convert_to_ucblock(self):
+    def convert_to_blocks(self):
+        # pySMSpp
+        sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
+        master = sn
+        
+        index_id = 0
+        
+        if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
+            name_id = 'InvestmentBlock'
+            sn = self.convert_to_investmentblock(master, index_id, name_id)
+            
+            master = sn.blocks[name_id]
+            name_id = 'InnerBlock'
+            index_id += 1
+            
+        else:
+            name_id = 'Block_0'
+        
+        self.convert_to_ucblock(master, index_id, name_id)
+        
+        self.sms_network = sn
+        
+        return sn
+        
+    
+    def convert_to_investmentblock(self, master, index_id, name_id):
+        """
+        Converts the unit blocks into a InvestmentBlock format.
+        
+        Returns:
+        ----------
+        investmentblock : SMSNetwork
+            SMSNetwork object containing the network in SMS++ InvestmentBlock format.
+        """
+        
+        # Dimensions of the problem
+        kwargs = self.dimensions['InvestmentBlock']
+        
+        for name, variable in self.investmentblock.items():
+                kwargs[name] = Variable(
+                    name,
+                    variable['type'],
+                    variable['size'],
+                    variable['value'])
+        
+        master.add(
+            "InvestmentBlock",  # block type
+            f"{name_id}",  # block name
+            id=f"{index_id}",  # block id
+            **kwargs
+        )
+        
+        return master
+        
+  
+    def convert_to_ucblock(self, master, index_id, name_id):
         """
         Converts the unit blocks into a UCBlock format.
         
@@ -851,11 +1038,9 @@ class Transformation:
         ucblock : SMSNetwork
             SMSNetwork object containing the network in SMS++ UCBlock format.
         """
-        # pySMSpp
-        sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
-
+        
         # Dimensions of the problem
-        kwargs = self.dimensions
+        kwargs = self.dimensions['UCBlock']
 
         # Load
         demand_name = self.demand['name']
@@ -893,15 +1078,14 @@ class Transformation:
             kwargs = {**kwargs, **line_variables}
 
         # Add UC block
-        sn.add(
+        master.add(
             "UCBlock",  # block type
-            "Block_0",  # block name
-            id="0",  # block id
+            f"{name_id}",  # block name
+            id=f"{index_id}",  # block id
             **kwargs
         )
 
         # Add unit blocks
-
         for name, unit_block in self.unitblocks.items():
             kwargs = {}
             for variable_name, variable in unit_block['variables'].items():
@@ -921,11 +1105,11 @@ class Transformation:
             )
 
             # Why should I have name UnitBlock_0?
-            sn.blocks["Block_0"].add_block(unit_block['enumerate'], block=unit_block_toadd)
-        
-        self.sms_network = sn
+            master.blocks[f"{name_id}"].add_block(unit_block['enumerate'], block=unit_block_toadd)
 
-        return sn
+        return master
+    
+    
     
     def optimize(self, configfile, *args, **kwargs):
         """

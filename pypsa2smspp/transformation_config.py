@@ -133,6 +133,13 @@ class TransformationConfig:
             # "InitialFlowRate": lambda inflow: inflow.values[0],
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
+        
+        self.InvestmentBlock_parameters = {
+            "Cost": lambda capital_cost: capital_cost,
+            "LowerBound": lambda p_nom_min: p_nom_min,
+            "UpperBound": lambda p_nom_max: p_nom_max,
+            "InstalledQuantity": lambda p_nom: p_nom,
+            }
 
         self.IntermittentUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
