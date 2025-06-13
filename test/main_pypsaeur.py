@@ -42,27 +42,29 @@ from pypsa2smspp.network_correction import (
     )
 
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
+n_smspp = pypsa.Network("networks/microgrid_ALLbutStore_1N_cycling_optimized.nc")
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 # n_smspp = clean_ciclicity_storage(n_smspp)
 # n_smspp = clean_storage_units(n_smspp)
-n_smspp = reduced_snapshot(n_smspp)
+# n_smspp = reduced_snapshot(n_smspp)
 
 network = n_smspp.copy()
 network.optimize(solver_name='gurobi')
 
+network.generators.p_nom_extendable = False
+n_smspp.generators.p_nom_extendable = False
+
 # network.export_to_netcdf("network_errore.nc")
 
-network.model.to_file(fn = "pypsa.lp")
+# network.model.to_file(fn = "pypsa.lp")
 #%% Transformation class
 then = datetime.now()
 transformation = Transformation(network)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
-tran = transformation.convert_to_ucblock()
-
+tran = transformation.convert_to_blocks()
 
 configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
 temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file

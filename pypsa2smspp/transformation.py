@@ -530,7 +530,9 @@ class Transformation:
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
-        dimensions['NumAssets'] = dimensions['NumAssets_partial']
+        if 'NumAssets_partial' in dimensions:
+            dimensions['NumAssets'] = dimensions['NumAssets_partial']
+
 
     
         # Determina la dimensione della variabile
@@ -980,17 +982,24 @@ class Transformation:
         index_id = 0
         
         if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
-            sn = self.convert_to_investmentblock(master, index_id)
+            name_id = 'InvestmentBlock'
+            sn = self.convert_to_investmentblock(master, index_id, name_id)
+            
+            master = sn.blocks[name_id]
+            name_id = 'InnerBlock'
             index_id += 1
             
-            master = sn.blocks['Block_0']
+        else:
+            name_id = 'Block_0'
         
-        self.convert_to_ucblock(master, index_id)
+        self.convert_to_ucblock(master, index_id, name_id)
         
         self.sms_network = sn
         
+        return sn
+        
     
-    def convert_to_investmentblock(self, master, index_id):
+    def convert_to_investmentblock(self, master, index_id, name_id):
         """
         Converts the unit blocks into a InvestmentBlock format.
         
@@ -1012,7 +1021,7 @@ class Transformation:
         
         master.add(
             "InvestmentBlock",  # block type
-            f"Block_{index_id}",  # block name
+            f"{name_id}",  # block name
             id=f"{index_id}",  # block id
             **kwargs
         )
@@ -1020,7 +1029,7 @@ class Transformation:
         return master
         
   
-    def convert_to_ucblock(self, master, index_id):
+    def convert_to_ucblock(self, master, index_id, name_id):
         """
         Converts the unit blocks into a UCBlock format.
         
@@ -1071,7 +1080,7 @@ class Transformation:
         # Add UC block
         master.add(
             "UCBlock",  # block type
-            f"Block_{index_id}",  # block name
+            f"{name_id}",  # block name
             id=f"{index_id}",  # block id
             **kwargs
         )
@@ -1096,7 +1105,7 @@ class Transformation:
             )
 
             # Why should I have name UnitBlock_0?
-            master.blocks[f"Block_{index_id}"].add_block(unit_block['enumerate'], block=unit_block_toadd)
+            master.blocks[f"{name_id}"].add_block(unit_block['enumerate'], block=unit_block_toadd)
 
         return master
     

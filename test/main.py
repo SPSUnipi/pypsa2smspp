@@ -67,12 +67,12 @@ solution_file = "output/temp_solution_file.nc"
 if os.path.exists(solution_file):
     os.remove(solution_file)
 
-# result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
-# statistics = network.statistics()
-# operational_cost = statistics['Operational Expenditure'].sum()
-# error = (operational_cost - result.objective_value) / operational_cost * 100
-# print(f"Error PyPSA-SMS++ of {error}%")
+statistics = network.statistics()
+operational_cost = statistics['Operational Expenditure'].sum()
+error = (operational_cost - result.objective_value) / operational_cost * 100
+print(f"Error PyPSA-SMS++ of {error}%")
 
 
 
