@@ -58,21 +58,21 @@ print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
 
-configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
-temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
-output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-solution_file = "output/temp_solution_file.nc"
+# configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
+# temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
+# output_file = "output/temp_log_file.txt"  # path to the output file (optional)
+# solution_file = "output/temp_solution_file.nc"
 
-# Check if the file exists
-if os.path.exists(solution_file):
-    os.remove(solution_file)
+# # Check if the file exists
+# if os.path.exists(solution_file):
+#     os.remove(solution_file)
 
-result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+# result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
-statistics = network.statistics()
-operational_cost = statistics['Operational Expenditure'].sum()
-error = (operational_cost - result.objective_value) / operational_cost * 100
-print(f"Error PyPSA-SMS++ of {error}%")
+# statistics = network.statistics()
+# operational_cost = statistics['Operational Expenditure'].sum()
+# error = (operational_cost - result.objective_value) / operational_cost * 100
+# print(f"Error PyPSA-SMS++ of {error}%")
 
 
 

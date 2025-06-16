@@ -983,6 +983,9 @@ class Transformation:
         
         if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
             name_id = 'InvestmentBlock'
+            
+            self.add_slackunitblock()
+            
             sn = self.convert_to_investmentblock(master, index_id, name_id)
             
             master = sn.blocks[name_id]
@@ -997,6 +1000,30 @@ class Transformation:
         self.sms_network = sn
         
         return sn
+        
+    
+    def add_slackunitblock(self):
+        index = len(self.unitblocks) 
+        
+        self.unitblocks[f"SlackUnitBlock_{index}"] = dict()
+        
+        slack = self.unitblocks[f"SlackUnitBlock_{index}"]
+        
+        slack['block'] = 'SlackUnitBlock'
+        slack['enumerate'] = f"UnitBlock_{index}"
+        slack['name'] = 'slack_variable'
+        slack['variables'] = dict()
+        
+        slack['variables']['MaxPower'] = dict()
+        slack['variables']['ActivePowerCost'] = dict()
+        
+        slack['variables']['MaxPower']['value'] = self.demand['value'].max().max()
+        slack['variables']['MaxPower']['type'] = 'float'
+        slack['variables']['MaxPower']['size'] = ()
+        
+        slack['variables']['ActivePowerCost']['value'] = 1e5 # €/MWh)
+        slack['variables']['ActivePowerCost']['type'] = 'float'
+        slack['variables']['ActivePowerCost']['size'] = ()
         
     
     def convert_to_investmentblock(self, master, index_id, name_id):
