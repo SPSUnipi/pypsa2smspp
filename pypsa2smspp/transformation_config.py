@@ -155,14 +155,14 @@ class TransformationConfig:
             "p_nom": lambda p_nom: p_nom,
             "p_dispatch": lambda activepower: activepower[0],
             "p_store": lambda activepower: -activepower[1],
-            # "p": lambda activepower: activepower
+            "state_of_charge": lambda volumetriclevel: volumetriclevel
             }
         
         self.BatteryUnitBlock_inverse = {
             "p_nom": lambda p_nom: p_nom,
             "p_dispatch": lambda activepower: np.maximum(activepower, 0),
             "p_store": lambda activepower: np.maximum(-activepower, 0),
-            # "state_of_charge": lambda storage_level: storage_level
+            "state_of_charge": lambda storagelevel: storagelevel
             }
         
         self.component_mapping = {
