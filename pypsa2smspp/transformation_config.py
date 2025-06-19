@@ -135,10 +135,10 @@ class TransformationConfig:
         }
         
         self.InvestmentBlock_parameters = {
-            "Cost": lambda capital_cost: capital_cost,
-            "LowerBound": lambda p_nom_min: p_nom_min,
-            "UpperBound": lambda p_nom_max: p_nom_max,
-            "InstalledQuantity": lambda p_nom: p_nom,
+            "Cost": lambda capital_cost: capital_cost.values,
+            "LowerBound": lambda p_nom_min: p_nom_min.replace(0, 1e-6).values,
+            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, 10000).values,
+            "InstalledQuantity": lambda p_nom: p_nom.replace(0, 1e-6).values,
             }
 
         self.IntermittentUnitBlock_inverse = {

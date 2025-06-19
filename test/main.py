@@ -58,6 +58,7 @@ print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
 
+### UCBlock configuration ###
 # configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
 # temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
 # output_file = "output/temp_log_file.txt"  # path to the output file (optional)
@@ -69,11 +70,25 @@ tran = transformation.convert_to_blocks()
 
 # result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
 
-# statistics = network.statistics()
+### InvestmentBlock configuration ###
+
+configfile = pysmspp.SMSConfig(template="InvestmentBlock/BSPar.txt")
+temporary_smspp_file = "output/temp_network_investment.nc"
+output_file = "output/temp_log_file_investment.txt"  # path to the output file (optional)
+# BSC_NAME = "BSPar.txt"          # Name of the file describing the BlockSolverConfig
+
+result = tran.optimize(configfile, temporary_smspp_file, output_file, inner_block_name='InvestmentBlock')
+
+
+statistics = network.statistics()
 # operational_cost = statistics['Operational Expenditure'].sum()
 # error = (operational_cost - result.objective_value) / operational_cost * 100
-# print(f"Error PyPSA-SMS++ of {error}%")
 
+objective_pypsa = network.objective + network.objective_constant
+objective_smspp = result.objective_value
+error = (objective_pypsa - objective_smspp) / objective_pypsa
+
+print(f"Error PyPSA-SMS++ of {error}%")
 
 
 

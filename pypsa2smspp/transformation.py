@@ -405,7 +405,7 @@ class Transformation:
                 index += 1    
                 
         self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
-        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'int', 'size': 'NumAssets'}
+        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'uint', 'size': 'NumAssets'}
         self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
 
         
@@ -1005,25 +1005,34 @@ class Transformation:
     def add_slackunitblock(self):
         index = len(self.unitblocks) 
         
-        self.unitblocks[f"SlackUnitBlock_{index}"] = dict()
+        for bus in range(len(self.demand['value'])):
+            self.unitblocks[f"SlackUnitBlock_{index}"] = dict()
+            
+            slack = self.unitblocks[f"SlackUnitBlock_{index}"]
+            
+            slack['block'] = 'SlackUnitBlock'
+            slack['enumerate'] = f"UnitBlock_{index}"
+            slack['name'] = f"slack_variable_bus{bus}"
+            slack['variables'] = dict()
+            
+            slack['variables']['MaxPower'] = dict()
+            slack['variables']['ActivePowerCost'] = dict()
+            
+            slack['variables']['MaxPower']['value'] = self.demand['value'].sum().max() + 10
+            slack['variables']['MaxPower']['type'] = 'float'
+            slack['variables']['MaxPower']['size'] = ()
+            
+            slack['variables']['ActivePowerCost']['value'] = 1e5 # €/MWh)
+            slack['variables']['ActivePowerCost']['type'] = 'float'
+            slack['variables']['ActivePowerCost']['size'] = ()
+            
+            self.dimensions['UCBlock']['NumberUnits'] += 1
+            self.dimensions['UCBlock']['NumberElectricalGenerators'] += 1
+            
+            self.generator_node['value'].append(bus)
+            index += 1
         
-        slack = self.unitblocks[f"SlackUnitBlock_{index}"]
         
-        slack['block'] = 'SlackUnitBlock'
-        slack['enumerate'] = f"UnitBlock_{index}"
-        slack['name'] = 'slack_variable'
-        slack['variables'] = dict()
-        
-        slack['variables']['MaxPower'] = dict()
-        slack['variables']['ActivePowerCost'] = dict()
-        
-        slack['variables']['MaxPower']['value'] = self.demand['value'].max().max()
-        slack['variables']['MaxPower']['type'] = 'float'
-        slack['variables']['MaxPower']['size'] = ()
-        
-        slack['variables']['ActivePowerCost']['value'] = 1e5 # €/MWh)
-        slack['variables']['ActivePowerCost']['type'] = 'float'
-        slack['variables']['ActivePowerCost']['size'] = ()
         
     
     def convert_to_investmentblock(self, master, index_id, name_id):
