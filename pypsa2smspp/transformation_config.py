@@ -29,8 +29,8 @@ class TransformationConfig:
         self.IntermittentUnitBlock_parameters = {
             "Gamma": 0.0,
             "Kappa": 1.0,
-            "MaxPower": lambda p_nom_opt, p_max_pu: p_nom_opt * p_max_pu,
-            "MinPower": lambda p_nom_opt, p_min_pu: p_nom_opt * p_min_pu,
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
+            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
             "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
         }
@@ -42,8 +42,8 @@ class TransformationConfig:
             "MinDownTime": lambda min_down_time: min_down_time, 
             #"DeltaRampUp": lambda ramp_limit_up: ramp_limit_up if not np.isnan(ramp_limit_up) else 0,
             #"DeltaRampDown": lambda ramp_limit_down: ramp_limit_down if not np.isnan(ramp_limit_down) else 0,
-            "MinPower": lambda p_nom_opt, p_min_pu: p_nom_opt * p_min_pu,
-            "MaxPower": lambda p_nom_opt, p_max_pu: p_nom_opt * p_max_pu,
+            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
             "PrimaryRho": 0.0,
             "SecondaryRho": 0.0,
             "Availability": 1,
@@ -58,15 +58,15 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_parameters = {
             "Kappa": 1.0,
-            "MaxPower": lambda p_nom_opt, p_max_pu: p_nom_opt * p_max_pu,
-            "MinPower": lambda p_nom_opt, p_min_pu: p_nom_opt * p_min_pu,
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
+            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch: 1 / efficiency_dispatch,
             "StoringBatteryRho": lambda efficiency_store: efficiency_store,
             "Demand": 0.0,
             "MinStorage": 0.0,
-            "MaxStorage": lambda p_nom_opt, p_max_pu, max_hours: p_nom_opt * p_max_pu * max_hours,
+            "MaxStorage": lambda p_nom, p_max_pu, max_hours: p_nom * p_max_pu * max_hours,
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda p: p[0][0],
@@ -76,8 +76,8 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_store_parameters = {
             "Kappa": 1.0,
-            "MaxPower": lambda e_nom_opt, e_max_pu, max_hours: e_nom_opt * e_max_pu / max_hours,
-            "MinPower": lambda e_nom_opt, e_max_pu, max_hours: - e_nom_opt * e_max_pu / max_hours,
+            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, 1),
+            "MinPower": lambda e_nom, e_max_pu, max_hours: - e_nom * e_max_pu / max_hours,
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda e_max_pu: np.ones_like(e_max_pu),
@@ -95,16 +95,16 @@ class TransformationConfig:
         self.Lines_parameters = {
             "StartLine": lambda start_line_idx: start_line_idx.values,
             "EndLine": lambda end_line_idx: end_line_idx.values,
-            "MinPowerFlow": lambda s_nom_opt: -s_nom_opt.values,
-            "MaxPowerFlow": lambda s_nom_opt: s_nom_opt.values,
-            "LineSusceptance": lambda s_nom_opt: np.zeros_like(s_nom_opt)
+            "MinPowerFlow": lambda s_nom: -s_nom.values,
+            "MaxPowerFlow": lambda s_nom, s_nom_extendable: s_nom.where(~s_nom_extendable, 1),
+            "LineSusceptance": lambda s_nom: np.zeros_like(s_nom)
             }
 
         self.Links_parameters = {
             "StartLine": lambda start_line_idx: start_line_idx.values,
             "EndLine": lambda end_line_idx: end_line_idx.values,
-            "MinPowerFlow": lambda p_nom_opt, p_min_pu: p_nom_opt.values * p_min_pu.values,
-            "MaxPowerFlow": lambda p_nom_opt, p_max_pu: p_nom_opt.values * p_max_pu.values,
+            "MinPowerFlow": lambda p_nom, p_min_pu: p_nom.values * p_min_pu.values,
+            "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
             "LineSusceptance": lambda s_nom_opt: np.zeros_like(s_nom_opt)
             }
 
@@ -113,13 +113,13 @@ class TransformationConfig:
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "StartArc": lambda p_nom: np.array([0, 1]),
             "EndArc": lambda p_nom: np.array([1, 0]),
-            "MaxVolumetric": lambda p_nom_opt, max_hours: (p_nom_opt * max_hours),
+            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow: inflow.values.transpose(),
             "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
             "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
-            "MaxPower": lambda p_nom_opt, p_max_pu: (np.array([(p_nom_opt*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
-            "MinPower": lambda p_nom_opt, p_min_pu: (np.array([(0.*p_min_pu), (p_nom_opt*p_min_pu)])).squeeze().transpose(),
+            "MaxPower": lambda p_nom, p_max_pu: (np.array([(p_nom*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
+            "MinPower": lambda p_nom, p_min_pu: (np.array([(0.*p_min_pu), (p_nom*p_min_pu)])).squeeze().transpose(),
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*2, 1),
