@@ -285,7 +285,7 @@ class Transformation:
                 # Apply function to the parameters
                 value = func(*args)
                 value = value[components_df.index].values if isinstance(value, pd.DataFrame) else value
-                value = value.item() if isinstance(value, pd.Series) else value
+                value = value.tolist() if isinstance(value, pd.Series) else value
                 variable_type, variable_size = self.add_size_type(attr_name, key, value)
                 converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
             else:
@@ -641,13 +641,37 @@ class Transformation:
                         self.unitblocks[current_block_key][key_base] = values_array
     
     
-    def parse_solution_to_unitblocks(self, file_path):
+    def parse_solution_to_unitblocks(self, file_path, n):
+        """
+        Parse a NetCDF solution file and populate self.unitblocks with unit-level data.
+        
+        This function reads data from the top-level UCBlock, as well as individual UnitBlock_i groups,
+        and stores the results into the existing self.unitblocks dictionary. If transmission lines
+        are present (NumberLines > 0), it also parses NetworkBlock data and generates synthetic 
+        UnitBlocks for each line.
+        
+        Parameters
+        ----------
+        file_path : str
+            Path to the NetCDF file containing the solution.
+        n : pypsa.Network
+            The PyPSA network object used to retrieve line names.
+        
+        Returns
+        -------
+        solution_data : dict
+            A dictionary containing all parsed xarray datasets (keyed by group names).
+        """
         num_units = self.dimensions['UCBlock']['NumberUnits']
         solution_data = {}
-    
+        
+        if self.dimensions['UCBlock']['NumberLines'] > 0:
+            self.parse_networkblock_lines(file_path)
+            self.generate_line_unitblocks(n)
+            
         # Load the top-level UCBlock (Solution_0 group)
         solution_data["UCBlock"] = xr.open_dataset(file_path, group="/Solution_0", engine="netcdf4")
-    
+        
         # Ensure self.unitblocks exists before assignment
         # TODO: remove this constraint if reverse transformation is needed without prior initialization
         if not hasattr(self, "unitblocks"):
@@ -678,6 +702,102 @@ class Transformation:
                 
     
         return solution_data
+    
+    
+    
+    def parse_networkblock_lines(self, file_path):
+        """
+        Parse NetworkBlock_i groups from a NetCDF file and store line-level time series.
+        
+        This function reads all variables (DualCost, FlowValue, NodeInjection) from each
+        NetworkBlock_i group (where i runs over the time horizon) and stacks them into 
+        2D arrays of shape (time, element). The result is stored in self.networkblock['Lines'].
+        
+        Parameters
+        ----------
+        file_path : str
+            Path to the NetCDF file containing the solution.
+        """
+        
+        num_blocks = self.dimensions['UCBlock']['TimeHorizon']
+        variable_shapes = {"DualCost": None, "FlowValue": None, "NodeInjection": None}
+        stacked = {var: [] for var in variable_shapes}
+    
+        for i in range(num_blocks):
+            group_path = f"/Solution_0/NetworkBlock_{i}"
+            try:
+                ds = xr.open_dataset(file_path, group=group_path, engine="h5netcdf")
+            except Exception as e:
+                raise RuntimeError(f"Error while opening {group_path}: {e}")
+    
+            for var in stacked:
+                if var not in ds:
+                    raise KeyError(f"{var} not found in {group_path}")
+                arr = ds[var].values
+    
+                # Store the expected shape from the first block
+                if variable_shapes[var] is None:
+                    variable_shapes[var] = arr.shape[0]
+                elif variable_shapes[var] != arr.shape[0]:
+                    raise ValueError(f"Inconsistent shape for {var} in block {i}: expected {variable_shapes[var]}, got {arr.shape[0]}")
+    
+                stacked[var].append(arr)
+    
+            ds.close()
+    
+        # Create 2D arrays: (time, element per variable)
+        if "Lines" not in self.networkblock:
+            self.networkblock["Lines"] = {}
+    
+        for var, values in stacked.items():
+            self.networkblock["Lines"][var] = np.vstack(values)
+
+    
+    def generate_line_unitblocks(self, n):
+        """
+        Generate synthetic UnitBlocks corresponding to transmission lines.
+        
+        For each column of FlowValue and DualCost in self.networkblock['Lines'],
+        this function creates a new UnitBlock dictionary entry with a unique identifier.
+        The name of each line is taken from the index of n.lines.
+        
+        Parameters
+        ----------
+        n : pypsa.Network
+            The PyPSA network object containing line names in `n.lines.index`.
+        
+        Raises
+        ------
+        ValueError
+            If FlowValue and DualCost have different shapes or do not match the number of lines.
+        """
+        
+        flow_matrix = self.networkblock['Lines']['FlowValue']  # shape: (time, n_lines)
+        dual_matrix = self.networkblock['Lines']['DualCost']   # shape: (time, n_lines)
+    
+        if flow_matrix.shape != dual_matrix.shape:
+            raise ValueError("Shape mismatch between FlowValue and DualCost")
+    
+        line_names = list(n.lines.index)  # Use index order to assign names
+    
+        if len(line_names) != flow_matrix.shape[1]:
+            raise ValueError("Number of line names does not match number of columns in FlowValue")
+    
+        current_index = len(self.unitblocks)
+        n_lines = flow_matrix.shape[1]
+    
+        for i in range(n_lines):
+            block_index = current_index + i
+            unitblock_name = f"DCNetworkBlock_{block_index}"
+    
+            self.unitblocks[unitblock_name] = {
+                "enumerate": f"UnitBlock_{block_index}",
+                "block": "DCNetworkBlock_lines",
+                "name": line_names[i],
+                "FlowValue": flow_matrix[:, i],
+                "DualCost": dual_matrix[:, i],
+            }
+
 
 ###########################################################################################################################
 ############ INVERSE TRANSFORMATION INTO XARRAY DATASET ###################################################################
@@ -909,6 +1029,8 @@ class Transformation:
                     component = "StorageUnit"
                 else:
                     component = "Store"
+            case "DCNetworkBlock_lines":
+                component = "Line"
         return component
 
     @staticmethod

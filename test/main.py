@@ -84,7 +84,7 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
 
-    solution = transformation.parse_solution_to_unitblocks(solution_file)
+    solution = transformation.parse_solution_to_unitblocks(solution_file, nd.n)
     # transformation.parse_txt_to_unitblocks(output_file)
     transformation.inverse_transformation(nd.n)
 
@@ -97,6 +97,10 @@ else:
     temporary_smspp_file = "output/temp_network_investment.nc"
     output_file = "output/temp_log_file_investment.txt"  # path to the output file (optional)
     solution_file = "output/temp_solution_file_investment.nc"
+    
+    # Check if the file exists
+    if os.path.exists(solution_file):
+        os.remove(solution_file)
     
     result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock')
     

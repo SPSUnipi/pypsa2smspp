@@ -165,12 +165,20 @@ class TransformationConfig:
             "state_of_charge": lambda storagelevel: storagelevel
             }
         
+        self.DCNetworkBlock_lines_inverse = {
+            "p0": lambda flowvalue: flowvalue,
+            "p1": lambda flowvalue: -flowvalue,
+            "mu_lower": lambda dualcost: dualcost,
+            "mu_upper": lambda dualcost: dualcost
+            }
+        
         self.component_mapping = {
             "Generator": "generators",
             "StorageUnit": "storage_units",
             "Store": "stores",
             "Load": "loads",
             "Link": "links",
+            "Line": "lines",
             "Bus": "buses"
         }
 
