@@ -298,7 +298,7 @@ class Transformation:
         if attr_name in ['Lines_parameters', 'Links_parameters']:
             self.networkblock[name] = {"block": 'Lines', "variables": converted_dict}
         else:
-            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "variables": converted_dict}   
+            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "DesignVariable": components_df['p_nom'].values, "variables": converted_dict}
         
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']
@@ -364,7 +364,7 @@ class Transformation:
                 
                 extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
                 for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index + self.dimensions['UCBlock']['NumberNodes']}")
                     index += 1
 
                 asset_type.extend([1] * len(df_investment))
@@ -379,7 +379,7 @@ class Transformation:
                 
                 extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
                 for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index + self.dimensions['UCBlock']['NumberNodes']}")
                     index += 1
 
                 
@@ -666,6 +666,30 @@ class Transformation:
                         self.unitblocks[current_block_key][key_base] = values_array
     
     
+    def assign_design_variables_to_unitblocks(self, solution_0):
+        """
+        If DesignVariables are present, assign them to the corresponding unitblocks
+        based on the order specified in self.investmentblock['Blocks'].
+    
+        Parameters
+        ----------
+        solution_0 : Block
+            The 'Solution_0' block from the SMS++ solution.
+        """
+        if "DesignVariables" not in solution_0.variables:
+            return  # No investment, nothing to do
+    
+        design_vars = solution_0.variables["DesignVariables"].data
+        block_names = self.investmentblock.get("Blocks", [])
+    
+        if len(design_vars) != len(block_names):
+            raise ValueError("Mismatch between number of design variables and investment blocks")
+    
+        for name, value in zip(block_names, design_vars):
+            if name not in self.unitblocks:
+                raise KeyError(f"DesignVariable refers to unknown unitblock '{name}'")
+            self.unitblocks[name]["DesignVariable"] = value
+    
     def parse_solution_to_unitblocks(self, solution, n):
         """
         Parse a loaded SMS++ solution structure and populate self.unitblocks with unit-level data.
@@ -691,23 +715,27 @@ class Transformation:
         solution_data = {}
     
         solution_0 = solution.blocks['Solution_0']
-        solution_data["UCBlock"] = solution_0  # just for reference
+        has_investment = "DesignVariables" in solution_0.variables
+    
+        if has_investment:
+            inner_solution = solution_0.blocks["InnerSolution"]
+            solution_data["UCBlock"] = inner_solution
+        else:
+            inner_solution = solution_0
+            solution_data["UCBlock"] = solution_0
     
         if self.dimensions['UCBlock']['NumberLines'] > 0:
-            self.parse_networkblock_lines(solution_0)
+            self.parse_networkblock_lines(inner_solution)
             self.generate_line_unitblocks(n)
     
-        # Ensure self.unitblocks exists before assignment
         if not hasattr(self, "unitblocks"):
             raise ValueError("self.unitblocks must be initialized before parsing the solution.")
     
-        # Iterate over UnitBlock_i
         for i in range(num_units):
             block_key = f"UnitBlock_{i}"
-            block = solution_0.blocks[block_key]
+            block = inner_solution.blocks[block_key]
             solution_data[block_key] = block
     
-            # Match key in self.unitblocks
             matching_key = next(
                 (key for key in self.unitblocks if key.endswith(f"_{i}")),
                 None
@@ -716,9 +744,13 @@ class Transformation:
             if matching_key is None:
                 raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{i}")
     
-            # Assign all variables
             for var_name, var_obj in block.variables.items():
                 self.unitblocks[matching_key][var_name] = var_obj.data
+
+    
+        # Assign design variables if investment
+        if has_investment:
+            self.assign_design_variables_to_unitblocks(solution_0)
     
         return solution_data
     
@@ -812,6 +844,7 @@ class Transformation:
                 "name": names[i],
                 "FlowValue": flow_matrix[:, i],
                 "DualCost": dual_matrix[:, i],
+                "DesignVariable": self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
             }
         
         
@@ -883,7 +916,7 @@ class Transformation:
         post_processing(n) # Forse non serve nemmeno
         
         
-        
+    
     def iterate_blocks(self, n):
         '''
         Iterates over all unit blocks in the model and constructs their corresponding xarray.Dataset objects.
@@ -1088,6 +1121,8 @@ class Transformation:
                 component = "Line"
             case "DCNetworkBlock_links":
                 component = "Link"
+            case "SlackUnitBlock":
+                component = None
         return component
 
     @staticmethod
@@ -1106,7 +1141,6 @@ class Transformation:
             The normalized key.
         '''
         return key.lower().replace(" ", "_")
-    
     
     def prepare_solution(self, n):
         """

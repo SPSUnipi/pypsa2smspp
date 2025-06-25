@@ -114,8 +114,11 @@ else:
     error = (objective_pypsa - objective_smspp) / objective_pypsa
     
     print(f"Error PyPSA-SMS++ of {error}%")
+    print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
-
-
-
+    solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
+    transformation.inverse_transformation(nd.n)
+    
+    statistics = network.statistics()
+    statistics_smspp = nd.n.statistics()
 

@@ -142,41 +142,44 @@ class TransformationConfig:
             }
 
         self.IntermittentUnitBlock_inverse = {
-            "p_nom": lambda p_nom: p_nom,
-            "p": lambda activepower: activepower
+            "p_nom": lambda designvariable: designvariable,
+            "p": lambda activepower: activepower,
             }
         
         self.ThermalUnitBlock_inverse = {
-            "p_nom": lambda p_nom: p_nom,
-            "p": lambda activepower: activepower
+            "p_nom": lambda designvariable: designvariable,
+            "p": lambda activepower: activepower,
             }
         
         self.HydroUnitBlock_inverse = {
-            "p_nom": lambda p_nom: p_nom,
+            "p_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: activepower[0],
             "p_store": lambda activepower: -activepower[1],
-            "state_of_charge": lambda volumetriclevel: volumetriclevel
+            "state_of_charge": lambda volumetriclevel: volumetriclevel,
             }
         
+        # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
         self.BatteryUnitBlock_inverse = {
-            "p_nom": lambda p_nom: p_nom,
+            "p_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: np.maximum(activepower, 0),
             "p_store": lambda activepower: np.maximum(-activepower, 0),
-            "state_of_charge": lambda storagelevel: storagelevel
+            "state_of_charge": lambda storagelevel: storagelevel,
             }
         
         self.DCNetworkBlock_lines_inverse = {
             "p0": lambda flowvalue: flowvalue,
             "p1": lambda flowvalue: -flowvalue,
             "mu_lower": lambda dualcost: dualcost,
-            "mu_upper": lambda dualcost: dualcost
+            "mu_upper": lambda dualcost: dualcost,
+            "s_nom": lambda designvariable: designvariable,
             }
         
         self.DCNetworkBlock_links_inverse = {
             "p0": lambda flowvalue: flowvalue,
             "p1": lambda flowvalue: -flowvalue,
             "mu_lower": lambda dualcost: dualcost,
-            "mu_upper": lambda dualcost: dualcost
+            "mu_upper": lambda dualcost: dualcost,
+            "p_nom": lambda designvariable: designvariable,
             }
         
         self.component_mapping = {
