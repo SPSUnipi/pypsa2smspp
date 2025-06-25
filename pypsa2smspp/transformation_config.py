@@ -172,6 +172,13 @@ class TransformationConfig:
             "mu_upper": lambda dualcost: dualcost
             }
         
+        self.DCNetworkBlock_links_inverse = {
+            "p0": lambda flowvalue: flowvalue,
+            "p1": lambda flowvalue: -flowvalue,
+            "mu_lower": lambda dualcost: dualcost,
+            "mu_upper": lambda dualcost: dualcost
+            }
+        
         self.component_mapping = {
             "Generator": "generators",
             "StorageUnit": "storage_units",

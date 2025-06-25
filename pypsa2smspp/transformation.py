@@ -8,6 +8,7 @@ Created on Wed Oct 30 08:12:37 2024
 import pandas as pd
 import pypsa
 import numpy as np
+from datetime import datetime 
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 import re
 import numpy as np
@@ -70,7 +71,7 @@ class Transformation:
         # Attribute for unit blocks
         self.unitblocks = dict()
         self.networkblock = dict()
-        self.investmentblock = dict()
+        self.investmentblock = {'Blocks': list()}
         
         self.dimensions = dict()
         
@@ -82,7 +83,7 @@ class Transformation:
             "NE": "NumberElectricalGenerators",
             "N": "NumberNodes",
             "L": "NumberLines",
-            "Li": "NumberLinks",
+            "Li": "Links",
             "NA": "NumberArcs",
             "NR": "NumberReservoirs",
             "NP": "TotalNumberPieces",
@@ -162,7 +163,6 @@ class Transformation:
         return component[extendable_attr].values
              
         
-    
     def add_demand(self, n):
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
         demand = demand.T.reindex(n.buses.index).fillna(0.)
@@ -342,7 +342,9 @@ class Transformation:
         index_extendable = []
         asset_type = []
         index = 0
-        for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
+        lines_involved = None      
+        
+        for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
             # Static attributes of the class of components
             components_df = components.df
             # Dynamic attributes of the class of components
@@ -350,17 +352,42 @@ class Transformation:
             # Class of components
             components_type = components.list_name
             # Get the index for each component (useful especially for lines)
+            
+            if components_type not in ['storage_units']:
+                df_investment = self.add_InvestmentBlock(n, components_df, components.name)
+            
             if components_type == 'lines':
                 self.get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
                 self.get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
                 attr_name = "Lines_parameters"
                 self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
+                
+                extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
+                for idx in components_df[extendable_mask].index:
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
+                    index += 1
+
+                asset_type.extend([1] * len(df_investment))
+                index_extendable.extend(list(range(len(df_investment))))
+                lines_involved = len(df_investment)
                 continue
             elif components_type == 'links':
                 self.get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
                 self.get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
                 attr_name = "Links_parameters"
                 self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
+                
+                extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
+                for idx in components_df[extendable_mask].index:
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
+                    index += 1
+
+                
+                asset_type.extend([1] * len(df_investment))
+                if lines_involved is None:
+                    index_extendable.extend(range(len(df_investment)))
+                else:
+                    index_extendable.extend(range(lines_involved, lines_involved + len(df_investment)))
                 continue
             elif components_type == 'storage_units':
                 self.get_bus_idx(n, components_df, components_df.bus, "bus_idx")
@@ -372,10 +399,6 @@ class Transformation:
             else:
                 self.get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 generator_node.extend(components_df['bus_idx'].values)
-
-
-            if components_type not in ['lines', 'links', 'storage_units']:
-                self.add_InvestmentBlock(n, components_df, components.name)
                 
                 
             # Understand which type of block we expect
@@ -396,6 +419,7 @@ class Transformation:
                 
                 if Transformation.is_extendable(components_df.loc[[component]], components.name, self.nominal_attrs):
                     index_extendable.append(index)
+                    self.investmentblock['Blocks'].append(f"{attr_name.split('_')[0]}_{index}")
                     
                     if components_type not in ['lines', 'links']:
                         asset_type.append(0)
@@ -409,48 +433,48 @@ class Transformation:
         self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
 
         
+    def get_nominal_aliases(self, component_type):
+        base = self.nominal_attrs[component_type]
+        return {
+            base: "p_nom",
+            base + "_min": "p_nom_min",
+            base + "_max": "p_nom_max",
+        }
         
     def add_InvestmentBlock(self, n, components_df, components_type):
         components_df = Transformation.filter_extendable_components(components_df, components_type, self.nominal_attrs)
-        
+    
+        # Rinomina temporanea per compatibilità col dizionario statico
+        aliases = self.get_nominal_aliases(components_type)
+        df_alias = components_df.rename(columns=aliases)
+    
         if 'Fake_dimension' not in self.dimensions:
             self.dimensions['Fake_dimension'] = {}
-        self.dimensions['Fake_dimension']['NumAssets_partial'] = len(components_df)
-        
+        self.dimensions['Fake_dimension']['NumAssets_partial'] = len(df_alias)
+    
         converted_dict = {}
         attr_name = 'InvestmentBlock_parameters'
         unitblock_parameters = getattr(self.config, attr_name)
     
         for key, func in unitblock_parameters.items():
             param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
-            args = []
+            args = [df_alias.get(param) for param in param_names]
+            value = func(*args)
+            variable_type, variable_size = self.add_size_type(attr_name, key, value)
     
-            if callable(func):
-                for param in param_names:
-                    arg = components_df.get(param)
-                    args.append(arg)
-    
-                value = func(*args)
-                variable_type, variable_size = self.add_size_type(attr_name, key, value)
-    
-                if hasattr(self, 'investmentblock') and key in self.investmentblock:
-                    # Concateno i value (array, lista, ecc.)
-                    previous_value = self.investmentblock[key]["value"]
-                    if isinstance(previous_value, list):
-                        new_value = previous_value + list(value)
-                    else:
-                        new_value = np.concatenate([previous_value, value])
-                    self.investmentblock[key]["value"] = new_value
-                    # non tocco "type" e "size"
-                else:
-                    converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
+            if hasattr(self, 'investmentblock') and key in self.investmentblock:
+                previous_value = self.investmentblock[key]["value"]
+                new_value = previous_value + list(value) if isinstance(previous_value, list) else np.concatenate([previous_value, value])
+                self.investmentblock[key]["value"] = new_value
+            else:
+                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
     
         if not hasattr(self, 'investmentblock'):
             self.investmentblock = converted_dict
         else:
-            # aggiungo solo le nuove chiavi calcolate
-            for key in converted_dict:
-                self.investmentblock[key] = converted_dict[key]
+            self.investmentblock.update(converted_dict)
+        
+        return df_alias
 
         
     @staticmethod
@@ -530,6 +554,7 @@ class Transformation:
         
         # Useful only for this case. If variable, a solution must be found
         dimensions[1] = 1
+        dimensions['NumberLines'] = dimensions['Lines']
         if 'NumAssets_partial' in dimensions:
             dimensions['NumAssets'] = dimensions['NumAssets_partial']
 
@@ -571,7 +596,7 @@ class Transformation:
         return variable_type, variable_size
         
     def lines_links(self):
-        if "Lines" in self.networkblock and "Links" in self.networkblock:
+        if self.dimensions['NetworkBlock']['Lines'] > 0 and self.dimensions['NetworkBlock']['Links'] > 0:
             for key, value in self.networkblock['Lines']['variables'].items():
                 # Required to avoid problems for line susceptance
                 if not isinstance(self.networkblock['Lines']['variables'][key]['value'], (int, float, np.integer)):
@@ -581,11 +606,11 @@ class Transformation:
                     ])
             self.networkblock.pop("Links", None)
     
-        elif "Links" in self.networkblock and "Lines" not in self.networkblock:
+        elif self.dimensions['NetworkBlock']['Lines'] == 0 and self.dimensions['NetworkBlock']['Links'] > 0:
             # Se ci sono solo i Links, rinominali in Lines
             self.networkblock["Lines"] = self.networkblock.pop("Links")
             for key, value in self.networkblock['Lines']['variables'].items():
-                value['size'] = tuple('NumberLines' if x == 'NumberLinks' else x for x in value['size'])
+                value['size'] = tuple('NumberLines' if x == 'Links' else x for x in value['size'])
             
     
             
@@ -641,49 +666,48 @@ class Transformation:
                         self.unitblocks[current_block_key][key_base] = values_array
     
     
-    def parse_solution_to_unitblocks(self, file_path, n):
+    def parse_solution_to_unitblocks(self, solution, n):
         """
-        Parse a NetCDF solution file and populate self.unitblocks with unit-level data.
-        
-        This function reads data from the top-level UCBlock, as well as individual UnitBlock_i groups,
-        and stores the results into the existing self.unitblocks dictionary. If transmission lines
-        are present (NumberLines > 0), it also parses NetworkBlock data and generates synthetic 
-        UnitBlocks for each line.
-        
+        Parse a loaded SMS++ solution structure and populate self.unitblocks with unit-level data.
+    
+        This function extracts the contents of UnitBlock_i from solution.blocks['Solution_0'],
+        and stores them into the corresponding entries of self.unitblocks. If transmission lines
+        are present, it also parses the NetworkBlock series and generates synthetic UnitBlocks
+        for each line or link.
+    
         Parameters
         ----------
-        file_path : str
-            Path to the NetCDF file containing the solution.
+        solution : SMSNetwork
+            An in-memory SMS++ solution object (already parsed from file).
         n : pypsa.Network
-            The PyPSA network object used to retrieve line names.
-        
+            The PyPSA network object used to retrieve line and link names.
+    
         Returns
         -------
         solution_data : dict
-            A dictionary containing all parsed xarray datasets (keyed by group names).
+            A dictionary of blocks parsed from the SMSNetwork object (mainly for inspection).
         """
         num_units = self.dimensions['UCBlock']['NumberUnits']
         solution_data = {}
-        
+    
+        solution_0 = solution.blocks['Solution_0']
+        solution_data["UCBlock"] = solution_0  # just for reference
+    
         if self.dimensions['UCBlock']['NumberLines'] > 0:
-            self.parse_networkblock_lines(file_path)
+            self.parse_networkblock_lines(solution_0)
             self.generate_line_unitblocks(n)
-            
-        # Load the top-level UCBlock (Solution_0 group)
-        solution_data["UCBlock"] = xr.open_dataset(file_path, group="/Solution_0", engine="netcdf4")
-        
+    
         # Ensure self.unitblocks exists before assignment
-        # TODO: remove this constraint if reverse transformation is needed without prior initialization
         if not hasattr(self, "unitblocks"):
-            raise ValueError("self.unitblocks must be initialized before parsing the solution file.")
+            raise ValueError("self.unitblocks must be initialized before parsing the solution.")
     
-        # Iterate over all unit blocks
+        # Iterate over UnitBlock_i
         for i in range(num_units):
-            group_path = f"/Solution_0/UnitBlock_{i}"
-            ds = xr.open_dataset(file_path, group=group_path, engine="netcdf4")
-            solution_data[f"UnitBlock_{i}"] = ds
+            block_key = f"UnitBlock_{i}"
+            block = solution_0.blocks[block_key]
+            solution_data[block_key] = block
     
-            # Match the corresponding key in self.unitblocks (e.g., endswith _0, _1, _2, ...)
+            # Match key in self.unitblocks
             matching_key = next(
                 (key for key in self.unitblocks if key.endswith(f"_{i}")),
                 None
@@ -692,50 +716,44 @@ class Transformation:
             if matching_key is None:
                 raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{i}")
     
-            # Store all variables from the dataset into the corresponding unitblock
-            for var_name in ds.data_vars:
-                self.unitblocks[matching_key][var_name] = ds[var_name].values
-                
-            ds.close()
-            
-        solution_data["UCBlock"].close()
-                
+            # Assign all variables
+            for var_name, var_obj in block.variables.items():
+                self.unitblocks[matching_key][var_name] = var_obj.data
     
         return solution_data
     
     
     
-    def parse_networkblock_lines(self, file_path):
+    def parse_networkblock_lines(self, solution_0):
         """
-        Parse NetworkBlock_i groups from a NetCDF file and store line-level time series.
-        
-        This function reads all variables (DualCost, FlowValue, NodeInjection) from each
-        NetworkBlock_i group (where i runs over the time horizon) and stacks them into 
-        2D arrays of shape (time, element). The result is stored in self.networkblock['Lines'].
-        
+        Parse NetworkBlock_i blocks from an in-memory SMS++ solution and store line-level time series.
+    
+        This function reads the variables (DualCost, FlowValue, NodeInjection) from each
+        NetworkBlock_i inside solution_0 and stacks them into 2D arrays of shape 
+        (time, element). The result is stored in self.networkblock['Lines'].
+    
         Parameters
         ----------
-        file_path : str
-            Path to the NetCDF file containing the solution.
+        solution_0 : Block
+            The 'Solution_0' block from the loaded SMSNetwork object.
         """
-        
+    
         num_blocks = self.dimensions['UCBlock']['TimeHorizon']
         variable_shapes = {"DualCost": None, "FlowValue": None, "NodeInjection": None}
         stacked = {var: [] for var in variable_shapes}
     
         for i in range(num_blocks):
-            group_path = f"/Solution_0/NetworkBlock_{i}"
-            try:
-                ds = xr.open_dataset(file_path, group=group_path, engine="h5netcdf")
-            except Exception as e:
-                raise RuntimeError(f"Error while opening {group_path}: {e}")
+            block_key = f"NetworkBlock_{i}"
+            block = solution_0.blocks.get(block_key)
+    
+            if block is None:
+                raise KeyError(f"{block_key} not found in Solution_0")
     
             for var in stacked:
-                if var not in ds:
-                    raise KeyError(f"{var} not found in {group_path}")
-                arr = ds[var].values
+                if var not in block.variables:
+                    raise KeyError(f"{var} not found in {block_key}")
+                arr = block.variables[var].data
     
-                # Store the expected shape from the first block
                 if variable_shapes[var] is None:
                     variable_shapes[var] = arr.shape[0]
                 elif variable_shapes[var] != arr.shape[0]:
@@ -743,60 +761,97 @@ class Transformation:
     
                 stacked[var].append(arr)
     
-            ds.close()
-    
-        # Create 2D arrays: (time, element per variable)
         if "Lines" not in self.networkblock:
             self.networkblock["Lines"] = {}
     
         for var, values in stacked.items():
-            self.networkblock["Lines"][var] = np.vstack(values)
+            self.networkblock["Lines"][var] = np.stack(values, axis=0)
+
 
     
     def generate_line_unitblocks(self, n):
         """
-        Generate synthetic UnitBlocks corresponding to transmission lines.
-        
-        For each column of FlowValue and DualCost in self.networkblock['Lines'],
-        this function creates a new UnitBlock dictionary entry with a unique identifier.
-        The name of each line is taken from the index of n.lines.
-        
+        Generate synthetic UnitBlocks for lines and links based on combined FlowValue data.
+    
+        This function splits the FlowValue and DualCost arrays into individual unitblocks.
+        Each block is labeled as 'DCNetworkBlock_lines' or 'DCNetworkBlock_links' based on type.
+    
         Parameters
         ----------
         n : pypsa.Network
-            The PyPSA network object containing line names in `n.lines.index`.
-        
+            PyPSA network object containing line and link names.
+    
         Raises
         ------
         ValueError
-            If FlowValue and DualCost have different shapes or do not match the number of lines.
+            If array dimensions are inconsistent.
         """
-        
-        flow_matrix = self.networkblock['Lines']['FlowValue']  # shape: (time, n_lines)
-        dual_matrix = self.networkblock['Lines']['DualCost']   # shape: (time, n_lines)
+        flow_matrix = self.networkblock['Lines']['FlowValue']
+        dual_matrix = self.networkblock['Lines']['DualCost']
     
         if flow_matrix.shape != dual_matrix.shape:
             raise ValueError("Shape mismatch between FlowValue and DualCost")
     
-        line_names = list(n.lines.index)  # Use index order to assign names
+        names, types = self.prepare_dc_unitblock_info(n)
     
-        if len(line_names) != flow_matrix.shape[1]:
-            raise ValueError("Number of line names does not match number of columns in FlowValue")
+        if len(names) != flow_matrix.shape[1]:
+            raise ValueError("Mismatch between total network components and columns in FlowValue")
     
         current_index = len(self.unitblocks)
-        n_lines = flow_matrix.shape[1]
+        n_elements = flow_matrix.shape[1]
     
-        for i in range(n_lines):
+        for i in range(n_elements):
             block_index = current_index + i
             unitblock_name = f"DCNetworkBlock_{block_index}"
+            block_type = types[i]
+            block_label = "DCNetworkBlock_links" if block_type == "link" else "DCNetworkBlock_lines"
     
             self.unitblocks[unitblock_name] = {
                 "enumerate": f"UnitBlock_{block_index}",
-                "block": "DCNetworkBlock_lines",
-                "name": line_names[i],
+                "block": block_label,
+                "name": names[i],
                 "FlowValue": flow_matrix[:, i],
                 "DualCost": dual_matrix[:, i],
             }
+        
+        
+    def prepare_dc_unitblock_info(self, n):
+        """
+        Prepare names and types for DCNetworkBlock unitblocks.
+    
+        This function extracts line and link names from the PyPSA network
+        and returns them in the same order as stored in the combined NetCDF
+        solution. It also returns a list of 'line' or 'link' types accordingly.
+    
+        Parameters
+        ----------
+        n : pypsa.Network
+            PyPSA network object.
+    
+        Returns
+        -------
+        names : list of str
+            Ordered names for each DC network component.
+        types : list of str
+            List of 'line' or 'link' corresponding to each element.
+        """
+        num_lines = self.dimensions['NetworkBlock']['Lines']
+        num_links = self.dimensions['NetworkBlock']['Links']
+    
+        line_names = list(n.lines.index)
+        link_names = list(n.links.index)
+    
+        if len(line_names) != num_lines:
+            raise ValueError("Mismatch between dimensions and n.lines")
+    
+        if len(link_names) != num_links:
+            raise ValueError("Mismatch between dimensions and n.links")
+    
+        names = line_names + link_names
+        types = ['line'] * num_lines + ['link'] * num_links
+    
+        return names, types
+
 
 
 ###########################################################################################################################
@@ -1031,6 +1086,8 @@ class Transformation:
                     component = "Store"
             case "DCNetworkBlock_lines":
                 component = "Line"
+            case "DCNetworkBlock_links":
+                component = "Link"
         return component
 
     @staticmethod
@@ -1171,6 +1228,7 @@ class Transformation:
         kwargs = self.dimensions['InvestmentBlock']
         
         for name, variable in self.investmentblock.items():
+            if name != 'Blocks':
                 kwargs[name] = Variable(
                     name,
                     variable['type'],

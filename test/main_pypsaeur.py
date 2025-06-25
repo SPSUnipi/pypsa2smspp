@@ -42,7 +42,7 @@ from pypsa2smspp.network_correction import (
     )
 
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/microgrid_ALLbutStore_1N_cycling_optimized.nc")
+n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
@@ -62,37 +62,68 @@ n_smspp.generators.p_nom_extendable = False
 #%% Transformation class
 then = datetime.now()
 transformation = Transformation(network)
-print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
+print(f"Il tempo per la trasformazione diretta è di {datetime.now() - then} secondi")
+then = datetime.now()
 
 tran = transformation.convert_to_blocks()
-
-configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
-temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
-output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-solution_file = "output/temp_solution_file.nc"
-
-# Check if the file exists
-if os.path.exists(solution_file):
-    os.remove(solution_file)
-
-result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+print(f"Il tempo per la conversione con pysmspp è di {datetime.now() - then} secondi")
 
 
-# Esegui la funzione sul file di testo
-data_dict = parse_txt_file(output_file)
+if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
+    ### UCBlock configuration ###
+    configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
+    temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
+    output_file = "output/temp_log_file.txt"  # path to the output file (optional)
+    solution_file = "output/temp_solution_file.nc"
+    
+    # Check if the file exists
+    if os.path.exists(solution_file):
+        os.remove(solution_file)
+    
+    then = datetime.now()
+    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+    print(f"Il tempo di tran.optimize è di {datetime.now() - then} secondi")
+    
+    statistics = network.statistics()
+    operational_cost = statistics['Operational Expenditure'].sum()
+    error = (operational_cost - result.objective_value) / operational_cost * 100
+    
+    print(f"Error PyPSA-SMS++ of {error}%")
+    
+    # Esegui la funzione sul file di testo
+    data_dict = parse_txt_file(output_file)
 
+    print(f"Il solver ci ha messo {data_dict['elapsed_time']}s (preso da file di testo)")
+    
 
-print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
-print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
+    then = datetime.now()
+    solution = transformation.parse_solution_to_unitblocks(result.solution, n_smspp)
+    print(f"Il tempo di conversione inversa in unitblocks è di {datetime.now() - then} secondi")
+    
+    then = datetime.now()
+    # transformation.parse_txt_to_unitblocks(output_file)
+    transformation.inverse_transformation(n_smspp)
+    print(f"Il tempo per la trasformazione inversa è di {datetime.now() - then} secondi")
 
-statistics = network.statistics()
-operational_cost = statistics['Operational Expenditure'].sum()
-error = (operational_cost - result.objective_value) / operational_cost * 100
-print(f"Error PyPSA-SMS++ of {error}%")
+    # differences = compare_networks(network, n_smspp)
+    statistics_smspp = n_smspp.statistics()
 
-solution = transformation.parse_solution_to_unitblocks(solution_file)
-# transformation.parse_txt_to_unitblocks(output_file)
-transformation.inverse_transformation(n_smspp)
-
-differences = compare_networks(network, n_smspp)
-statistics_smspp = n_smspp.statistics()
+else:
+    ### InvestmentBlock configuration ###
+    configfile = pysmspp.SMSConfig(template="InvestmentBlock/BSPar.txt")
+    temporary_smspp_file = "output/temp_network_investment.nc"
+    output_file = "output/temp_log_file_investment.txt"  # path to the output file (optional)
+    solution_file = "output/temp_solution_file_investment.nc"
+    
+    # Check if the file exists
+    if os.path.exists(solution_file):
+        os.remove(solution_file)
+    
+    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock')
+    
+    
+    objective_pypsa = network.objective + network.objective_constant
+    objective_smspp = result.objective_value
+    error = (objective_pypsa - objective_smspp) / objective_pypsa
+    
+    print(f"Error PyPSA-SMS++ of {error}%")

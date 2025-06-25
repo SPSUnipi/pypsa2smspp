@@ -23,7 +23,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
-# from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
+from pysmspp import SMSNetwork
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -37,6 +37,9 @@ from pypsa2smspp.network_correction import (
     parse_txt_file,
     compare_networks
     )
+
+def get_datafile(fname):
+    return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -84,12 +87,13 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
 
-    solution = transformation.parse_solution_to_unitblocks(solution_file, nd.n)
+    solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
     # transformation.parse_txt_to_unitblocks(output_file)
     transformation.inverse_transformation(nd.n)
 
     differences = compare_networks(network, nd.n)
     statistics_smspp = nd.n.statistics()
+    
 
 else:
     ### InvestmentBlock configuration ###
