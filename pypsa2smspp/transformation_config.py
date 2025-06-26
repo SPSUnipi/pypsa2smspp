@@ -29,8 +29,8 @@ class TransformationConfig:
         self.IntermittentUnitBlock_parameters = {
             "Gamma": 0.0,
             "Kappa": 1.0,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
-            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
         }
@@ -42,8 +42,8 @@ class TransformationConfig:
             "MinDownTime": lambda min_down_time: min_down_time, 
             #"DeltaRampUp": lambda ramp_limit_up: ramp_limit_up if not np.isnan(ramp_limit_up) else 0,
             #"DeltaRampDown": lambda ramp_limit_down: ramp_limit_down if not np.isnan(ramp_limit_down) else 0,
-            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "PrimaryRho": 0.0,
             "SecondaryRho": 0.0,
             "Availability": 1,
@@ -58,8 +58,8 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_parameters = {
             "Kappa": 1.0,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
-            "MinPower": lambda p_nom, p_min_pu: p_nom * p_min_pu,
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch: 1 / efficiency_dispatch,
@@ -76,8 +76,8 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_store_parameters = {
             "Kappa": 1.0,
-            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, 1),
-            "MinPower": lambda e_nom, e_max_pu, max_hours: - e_nom * e_max_pu / max_hours,
+            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            "MinPower": lambda e_nom, e_min_pu, max_hours, e_nom_extendable: (e_nom * e_min_pu / max_hours).where(~e_nom_extendable, e_min_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda e_max_pu: np.ones_like(e_max_pu),
@@ -95,16 +95,16 @@ class TransformationConfig:
         self.Lines_parameters = {
             "StartLine": lambda start_line_idx: start_line_idx.values,
             "EndLine": lambda end_line_idx: end_line_idx.values,
-            "MinPowerFlow": lambda s_nom: -s_nom.values,
-            "MaxPowerFlow": lambda s_nom, s_nom_extendable: s_nom.where(~s_nom_extendable, 1),
+            "MinPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: - (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
+            "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "LineSusceptance": lambda s_nom: np.zeros_like(s_nom)
             }
 
         self.Links_parameters = {
             "StartLine": lambda start_line_idx: start_line_idx.values,
             "EndLine": lambda end_line_idx: end_line_idx.values,
-            "MinPowerFlow": lambda p_nom, p_min_pu: p_nom.values * p_min_pu.values,
-            "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, 1),
+            "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "LineSusceptance": lambda s_nom_opt: np.zeros_like(s_nom_opt)
             }
 

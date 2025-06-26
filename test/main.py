@@ -23,7 +23,6 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
-from pysmspp import SMSNetwork
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,

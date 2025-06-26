@@ -18,6 +18,28 @@ from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 from pypsa.optimization.optimize import (assign_solution, assign_duals, post_processing)
 
+from .constants import conversion_dict, nominal_attrs, renewable_carriers
+from .utils import (
+    get_param_as_dense,
+    is_extendable,
+    filter_extendable_components,
+    get_bus_idx,
+    get_nominal_aliases,
+)
+from .inverse import (
+    component_definition,
+    block_to_dataarrays,
+    normalize_key,
+    evaluate_function,
+    dataarray_components,
+)
+from .io_parser import (
+    parse_txt_to_unitblocks,
+    assign_design_variables_to_unitblocks,
+    prepare_solution,
+)
+
+
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
 
@@ -77,28 +99,6 @@ class Transformation:
         
         self.config = config
         
-        self.conversion_dict = {
-            "T": "TimeHorizon",
-            "NU": "NumberUnits",
-            "NE": "NumberElectricalGenerators",
-            "N": "NumberNodes",
-            "L": "NumberLines",
-            "Li": "Links",
-            "NA": "NumberArcs",
-            "NR": "NumberReservoirs",
-            "NP": "TotalNumberPieces",
-            "Nass": "NumAssets",
-            "1": 1
-            }
-        
-        self.nominal_attrs = {
-            "Generator": "p_nom",
-            "Line": "s_nom",
-            "Transformer": "s_nom",
-            "Link": "p_nom",
-            "Store": "e_nom",
-            "StorageUnit": "p_nom",
-        }
         
         n.stores["max_hours"] = config.max_hours_stores
         
@@ -114,54 +114,7 @@ class Transformation:
         self.sms_network = None
         self.result = None
 
-    def get_paramer_as_dense(self, n, component, field, weights=True):
-        """
-        Get the parameters of a component as a dense DataFrame
-    
-        Parameters
-        ----------
-        n : pypsa.Network
-            The PyPSA network
-        component : str
-            The component to get the parameters from
-        field : str
-            The field to get the parameters from
-    
-        Returns
-        -------
-        pd.DataFrame
-            The parameters of the component as a dense DataFrame
-        """
-        sns = n.snapshots
-        
-        # Related to different investment periods
-        if not n.investment_period_weightings.empty:  # TODO: check with different version
-            periods = sns.unique("period")
-            period_weighting = n.investment_period_weightings.objective[periods]
-        weighting = n.snapshot_weightings.objective
-        if not n.investment_period_weightings.empty:
-            weighting = weighting.mul(period_weighting, level=0).loc[sns]
-        else:
-            weighting = weighting.loc[sns]
-         
-        # If static, it will be expanded
-        if field in n.static(component).columns:
-            field_val = get_as_dense(n, component, field, sns)
-        else:
-            field_val = n.dynamic(component)[field]
-        
-        # If economic, it will be weighted
-        if weights:
-            field_val = field_val.mul(weighting, axis=0)
-        return field_val 
-    
-    @staticmethod
-    def is_extendable(component, component_type, nominal_attrs):
-        attr = nominal_attrs.get(component_type)
-        extendable_attr = f"{attr}_extendable"
-        
-        return component[extendable_attr].values
-             
+
         
     def add_demand(self, n):
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
@@ -211,7 +164,7 @@ class Transformation:
             for comp in investment_components:
                 df = getattr(n, comp)
                 comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"  # es. "generators" -> "Generator"
-                attr = self.nominal_attrs.get(comp_type)
+                attr = nominal_attrs.get(comp_type)
                 if attr and f"{attr}_extendable" in df.columns:
                     num_assets += df[f"{attr}_extendable"].sum()
         
@@ -274,7 +227,7 @@ class Transformation:
                 for param in param_names:
                     if self.smspp_parameters[attr_name.split("_")[0]]['Size'][key] not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]']:
                         weight = True if param in ['capital_cost', 'marginal_cost', 'marginal_cost_quadratic', 'start_up_cost', 'stand_by_cost'] else False
-                        arg = self.get_paramer_as_dense(n, components_type, param, weight)[[component]]
+                        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
                     elif param in components_df.index or param in components_df.columns:
                         arg = components_df.get(param)
                     elif param in components_t.keys():
@@ -315,7 +268,7 @@ class Transformation:
         
         for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
             components_df = components.df
-            components_df = components_df[components_df[f"{self.nominal_attrs[components.name]}_opt"] > 0]
+            components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
             setattr(n, components.list_name, components_df)
 
     
@@ -336,7 +289,6 @@ class Transformation:
         The components to the `unitblocks` dictionary, with distinct attributes for intermittent and thermal units.
         
         """
-        renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
         
         generator_node = []
         index_extendable = []
@@ -357,12 +309,12 @@ class Transformation:
                 df_investment = self.add_InvestmentBlock(n, components_df, components.name)
             
             if components_type == 'lines':
-                self.get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
-                self.get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
+                get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
+                get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
                 attr_name = "Lines_parameters"
                 self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
                 
-                extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
+                extendable_mask = is_extendable(components_df, components.name, nominal_attrs)
                 for idx in components_df[extendable_mask].index:
                     self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
                     index += 1
@@ -372,12 +324,12 @@ class Transformation:
                 lines_involved = len(df_investment)
                 continue
             elif components_type == 'links':
-                self.get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
-                self.get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
+                get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
+                get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
                 attr_name = "Links_parameters"
                 self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
                 
-                extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
+                extendable_mask = is_extendable(components_df, components.name, nominal_attrs)
                 for idx in components_df[extendable_mask].index:
                     self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
                     index += 1
@@ -390,14 +342,14 @@ class Transformation:
                     index_extendable.extend(range(lines_involved, lines_involved + len(df_investment)))
                 continue
             elif components_type == 'storage_units':
-                self.get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
                     if carrier in ['hydro', 'PHS']:
                         generator_node.extend([bus] * 2)  # Repeat two times
                     else:
                         generator_node.append(bus)  # Normal case
             else:
-                self.get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 generator_node.extend(components_df['bus_idx'].values)
                 
                 
@@ -419,7 +371,7 @@ class Transformation:
                 
                 self.add_UnitBlock(attr_name, components_df.loc[[component]], components_t, components.name, n, component, index)
                 
-                if Transformation.is_extendable(components_df.loc[[component]], components.name, self.nominal_attrs):
+                if is_extendable(components_df.loc[[component]], components.name, nominal_attrs):
                     index_extendable.append(index)
                     self.investmentblock['Blocks'].append(f"{attr_name.split('_')[0]}_{index}")
                     
@@ -435,19 +387,11 @@ class Transformation:
         self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
 
         
-    def get_nominal_aliases(self, component_type):
-        base = self.nominal_attrs[component_type]
-        return {
-            base: "p_nom",
-            base + "_min": "p_nom_min",
-            base + "_max": "p_nom_max",
-        }
-        
     def add_InvestmentBlock(self, n, components_df, components_type):
-        components_df = Transformation.filter_extendable_components(components_df, components_type, self.nominal_attrs)
+        components_df = filter_extendable_components(components_df, components_type, nominal_attrs)
     
         # Rinomina temporanea per compatibilità col dizionario statico
-        aliases = self.get_nominal_aliases(components_type)
+        aliases = get_nominal_aliases(components_type, nominal_attrs)
         df_alias = components_df.rename(columns=aliases)
     
         if 'Fake_dimension' not in self.dimensions:
@@ -479,53 +423,6 @@ class Transformation:
         return df_alias
 
         
-    @staticmethod
-    def filter_extendable_components(components_df, components_type, nominal_attrs):
-        """
-        Filters the components DataFrame to keep only extendable units.
-    
-        Parameters
-        ----------
-        components_df : pd.DataFrame
-            The static DataFrame of the component.
-        components_type : str
-            The capitalized component type (e.g., "Generator", "Store").
-        nominal_attrs : dict
-            Dictionary mapping component types to their nominal attribute.
-    
-        Returns
-        -------
-        pd.DataFrame
-            Filtered DataFrame with only extendable components.
-        """
-        attr = nominal_attrs.get(components_type)
-        if not attr:
-            return components_df  # no filtering possible if type not recognized
-    
-        extendable_attr = f"{attr}_extendable"
-    
-        if extendable_attr in components_df.columns:
-            return components_df[components_df[extendable_attr] == True]
-        else:
-            return components_df  # nothing to filter if column not found
-        
-    
-    
-    def get_bus_idx(self, n, components_df, bus_series, column_name, dtype="uint32"):
-        """
-        Returns the numeric index of the bus in the network n for each element of the bus_series.
-        ----------
-        n : PyPSA Network
-        bus_series : series of buses. For example, n.lines.bus0 o n.generators.bus
-        ----------
-        Example: one single bus with two generators (wind and diesel 1)
-                    n.generators.bus.map(n.buses.index.get_loc).astype("uint32")
-                    Generator
-                    wind        0
-                    diesel 1    0
-                    Name: bus, dtype: uint32
-        """
-        components_df[column_name] = bus_series.map(n.buses.index.get_loc).astype(dtype).values
 
     def read_excel_components(self, fp=FP_PARAMS):
         """
@@ -587,13 +484,13 @@ class Transformation:
                     else:
                         # Scomponi espressioni tipo "T,L"
                         size_components = size.split(",")
-                        expected_shape = tuple(dimensions[self.conversion_dict[s]] for s in size_components if s in self.conversion_dict)
+                        expected_shape = tuple(dimensions[conversion_dict[s]] for s in size_components if s in conversion_dict)
     
                         if shape == expected_shape:
                             if "1" in size_components or len(size_components) == 1:
-                                variable_size = (self.conversion_dict[size_components[0]],)  # Vettore
+                                variable_size = (conversion_dict[size_components[0]],)  # Vettore
                             else:
-                                variable_size = (self.conversion_dict[size_components[0]], self.conversion_dict[size_components[1]])  # Matrice
+                                variable_size = (conversion_dict[size_components[0]], conversion_dict[size_components[1]])  # Matrice
                             break
         return variable_type, variable_size
         
@@ -619,78 +516,8 @@ class Transformation:
 ###########################################################################################################################
 ############ PARSE OUPUT SMS++ FILE ###################################################################
 ###########################################################################################################################
-
-
-    def parse_txt_to_unitblocks(self, file_path):
-        current_block = None
-        current_block_key = None
-    
-        with open(file_path, "r") as file:
-            for line in file:
-                match_time = re.search(r"Elapsed time:\s*([\deE\+\.-]+)\s*s", line)
-                if match_time:
-                    # puoi salvare elapsed_time separatamente se serve
-                    continue
-    
-                # Match blocchi, es. BatteryUnitBlock 2
-                block_match = re.search(r"(ThermalUnitBlock|BatteryUnitBlock|IntermittentUnitBlock|HydroUnitBlock)\s*(\d+)", line)
-                if block_match:
-                    block_type, number = block_match.groups()
-                    number = int(number)
-                    current_block = block_type
-                    current_block_key = f"{block_type}_{number}"
-    
-                    self.unitblocks[current_block_key]["block"] = block_type
-                    self.unitblocks[current_block_key]["enumerate"] = number
-                    
-                    continue
-    
-                # Match variabili: con o senza indice [0], [1], ...
-                match = re.match(r"([\w\s]+?)(?:\s*\[(\d+)\])?\s+=\s+\[([^\]]*)\]", line)
-                if match and current_block_key:
-                    key_base, sub_index, values = match.groups()
-                    key_base = key_base.strip()
-                    values_array = np.array([float(x) for x in values.split()])
-    
-                    if sub_index is not None:
-                        sub_index = int(sub_index)
-                        # Se esiste già ed è un array, converti in dict
-                        if key_base in self.unitblocks[current_block_key] and not isinstance(self.unitblocks[current_block_key][key_base], dict):
-                            prev_value = self.unitblocks[current_block_key][key_base]
-                            self.unitblocks[current_block_key][key_base] = {0: prev_value}
-    
-                        if key_base not in self.unitblocks[current_block_key]:
-                            self.unitblocks[current_block_key][key_base] = {}
-    
-                        self.unitblocks[current_block_key][key_base][sub_index] = values_array
-                    else:
-                        # Caso semplice: array diretto
-                        self.unitblocks[current_block_key][key_base] = values_array
     
     
-    def assign_design_variables_to_unitblocks(self, solution_0):
-        """
-        If DesignVariables are present, assign them to the corresponding unitblocks
-        based on the order specified in self.investmentblock['Blocks'].
-    
-        Parameters
-        ----------
-        solution_0 : Block
-            The 'Solution_0' block from the SMS++ solution.
-        """
-        if "DesignVariables" not in solution_0.variables:
-            return  # No investment, nothing to do
-    
-        design_vars = solution_0.variables["DesignVariables"].data
-        block_names = self.investmentblock.get("Blocks", [])
-    
-        if len(design_vars) != len(block_names):
-            raise ValueError("Mismatch between number of design variables and investment blocks")
-    
-        for name, value in zip(block_names, design_vars):
-            if name not in self.unitblocks:
-                raise KeyError(f"DesignVariable refers to unknown unitblock '{name}'")
-            self.unitblocks[name]["DesignVariable"] = value
     
     def parse_solution_to_unitblocks(self, solution, n):
         """
@@ -752,8 +579,9 @@ class Transformation:
     
         # Assign design variables if investment
         if has_investment:
-            self.assign_design_variables_to_unitblocks(solution_0)
-    
+            design_vars = solution_0.variables["DesignVariables"].data
+            block_names = self.investmentblock.get("Blocks", [])
+            assign_design_variables_to_unitblocks(self.unitblocks, block_names, design_vars)
         return solution_data
     
     
@@ -909,7 +737,7 @@ class Transformation:
         all_dataarrays = self.iterate_blocks(n)
         self.ds = xr.Dataset(all_dataarrays)
         
-        n = self.prepare_solution(n)
+        prepare_solution(n, self.ds)
         
         assign_solution(n)
         # assign_duals(n) # Still doesn't work
@@ -940,8 +768,8 @@ class Transformation:
         datasets = []
     
         for name, unit_block in self.unitblocks.items():
-            component = Transformation.component_definition(n, unit_block)
-            dataarrays = self.block_to_dataarrays(n, name, unit_block, component)
+            component = component_definition(n, unit_block)
+            dataarrays = block_to_dataarrays(n, name, unit_block, component, self.config)
             if dataarrays:  # No emptry dicts
                 ds = xr.Dataset(dataarrays)
                 datasets.append(ds)
@@ -949,239 +777,7 @@ class Transformation:
         # Merge in a single dataset
         return xr.merge(datasets)
 
-          
-    
-    def block_to_dataarrays(self, n, unit_name, unit_block, component):
-        '''
-        Constructs a dictionary of DataArrays for a single unit block.
-        
-        It retrieves the inverse function mappings for the specific block type and evaluates
-        each function based on the available parameters. The resulting values are formatted
-        into xarray.DataArray objects using `dataarray_components`.
-        
-        Parameters
-        ----------
-        n : pypsa.Network
-            The PyPSA network object.
-        unit_name : str
-            The name of the unit block.
-        unit_block : dict
-            The dictionary defining the unit block structure and parameters.
-            Obtained in the first steps of the transformation class
-        component : str
-            The corresponding PyPSA component (e.g., 'Generator', 'StorageUnit').
-        
-        Returns
-        -------
-        dict
-            A dictionary of xarray.DataArrays keyed by variable names.
-        '''
-        
-        attr_name = f"{unit_block['block']}_inverse"
-        converted_dict = {}
-        normalized_keys = {Transformation.normalize_key(k): k for k in unit_block.keys()}
-    
-        if hasattr(self.config, attr_name):
-            unitblock_parameters = getattr(self.config, attr_name)
-        else:
-            print(f"Block {unit_block['block']} not yet implemented")
-            return {}
-    
-        df = getattr(n, self.config.component_mapping[component])
-    
-        for key, func in unitblock_parameters.items():
-            if callable(func):
-                value = self.evaluate_function(func, normalized_keys, unit_block, df)
-                if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
-                    value = value.sum(axis=0)
-                value, dims, coords, var_name = self.dataarray_components(n, value, component, unit_block, key)
 
-                converted_dict[var_name] = xr.DataArray(value, dims=dims, coords=coords, name=var_name)
-    
-        return converted_dict
-
-    
-    def evaluate_function(self, func, normalized_keys, unit_block, df):
-        '''
-        Evaluates an inverse function by collecting its arguments from the unit block or network dataframe.
-        
-        Parameters
-        ----------
-        func : Callable
-            The inverse function to evaluate.
-        normalized_keys : dict
-            A mapping of normalized parameter names to their original keys.
-        unit_block : dict
-            The dictionary defining the block parameters.
-        df : pandas.DataFrame
-            The dataframe from the PyPSA network corresponding to the block component.
-        
-        Returns
-        -------
-        value : Any
-            The result of the inverse function evaluation.
-        '''
-        
-        param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
-        args = []
-
-        for param in param_names:
-            param = Transformation.normalize_key(param)
-            if param in normalized_keys:
-                arg = unit_block[normalized_keys[param]]
-            else:
-                arg = df.loc[unit_block['name']][param]
-            args.append(arg)
-
-        value = func(*args)
-        return value
-            
-            
-    def dataarray_components(self, n, value, component, unit_block, key):
-        '''
-        Determines the dimensions and coordinates of a DataArray based on the shape of the value.
-        
-        This function supports scalar values and 1D time series aligned with the network snapshots.
-        It returns the value (reshaped if necessary), the corresponding dimension names,
-        coordinate mappings, and a standardized variable name.
-        
-        Parameters
-        ----------
-        n : pypsa.Network
-            The PyPSA network instance.
-        value : array-like or scalar
-            The evaluated parameter value.
-        component : str
-            The name of the PyPSA component (e.g., 'Generator').
-        unit_block : dict
-            The dictionary defining the block.
-        key : str
-            The name of the parameter being processed.
-        
-        Returns
-        -------
-        tuple
-            A tuple (value, dims, coords, var_name) used to create an xarray.DataArray.
-        '''
-        if isinstance(value, np.ndarray):
-            if value.ndim == 1 and len(value) == len(n.snapshots):
-                dims = ["snapshot", component]
-                coords = {
-                    "snapshot": n.snapshots,
-                    component: [unit_block["name"]]
-                }
-                value = value[:, np.newaxis]
-            elif value.ndim == 1:
-                dims = [f"{component}-ext"]
-                coords = {f"{component}-ext": [unit_block["name"]]}
-            else:
-                raise ValueError(f"Unsupported shape for variable {key}: {value.shape}")
-        else:
-            value = np.array([value])
-            dims = [f"{component}-ext"]
-            coords = {f"{component}-ext": [unit_block["name"]]}
-
-        var_name = f"{component}-{key}"
-        return value, dims, coords, var_name
-            
-
-    @staticmethod 
-    def component_definition(n, unit_block):
-        '''
-        Maps a unit block type to the corresponding PyPSA component.
-        
-        In some cases, such as the BatteryUnitBlock, this function dynamically chooses between
-        StorageUnit and Store depending on the presence of the unit name in the network.
-        
-        Parameters
-        ----------
-        n : pypsa.Network
-            The PyPSA network.
-        unit_block : dict
-            The dictionary defining the unit block.
-        
-        Returns
-        -------
-        str
-            The name of the PyPSA component (e.g., 'Generator').
-        '''
-        
-        block = unit_block['block']
-        match block:
-            case "IntermittentUnitBlock":
-                component = "Generator"
-            case "ThermalUnitBlock":
-                component = "Generator"
-            case "HydroUnitBlock":
-                component = "StorageUnit"
-            case "BatteryUnitBlock":
-                if unit_block['name'] in n.storage_units.index:
-                    component = "StorageUnit"
-                else:
-                    component = "Store"
-            case "DCNetworkBlock_lines":
-                component = "Line"
-            case "DCNetworkBlock_links":
-                component = "Link"
-            case "SlackUnitBlock":
-                component = "Generator"
-        return component
-
-    @staticmethod
-    def normalize_key(key):
-        '''
-        Normalizes a parameter key by converting it to lowercase and replacing spaces with underscores.
-        
-        Parameters
-        ----------
-        key : str
-            The parameter key to normalize.
-        
-        Returns
-        -------
-        str
-            The normalized key.
-        '''
-        return key.lower().replace(" ", "_")
-    
-    def prepare_solution(self, n):
-        """
-        Prepares a fake PyPSA model on the network `n`, wrapping the solution dataset `self.ds`
-        so that it can be used with `assign_solution` without modification.
-    
-        Parameters
-        ----------
-        n : pypsa.Network
-            The PyPSA network object to update.
-    
-        Returns
-        -------
-        n : pypsa.Network
-            The network updated with a fake model and fake solution.
-        """
-        # Create dictionary of fake variables
-        m_variables = {}
-        for var_name, dataarray in self.ds.items():
-            m_variables[var_name] = FakeVariable(solution=dataarray)
-    
-        # Create the fake model
-        n.model = type("FakeModel", (), {})()
-        n.model.variables = m_variables
-    
-        # Create fake parameters (snapshots)
-        n.model.parameters = type("FakeParameters", (), {})()
-        n.model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
-        
-        # TODO associare duals in modo sensato non appena appaiono
-        n.model.constraints = type("FakeConstraints", (), {})()
-        n.model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
-        
-    
-        # Create fake objective
-        n.model.objective = type("FakeObjective", (), {})()
-        n.model.objective.value = 10000  # arbitrary value
-    
-        return n
 
 
 #########################################################################################
