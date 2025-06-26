@@ -140,6 +140,11 @@ class TransformationConfig:
             "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, 10000).values,
             "InstalledQuantity": lambda p_nom: p_nom.replace(0, 1e-6).values,
             }
+        
+        self.SlackUnitBlock_parameters = {
+            "ActivePowerCost": lambda marginal_cost: marginal_cost,
+            "MaxPower": lambda p_nom: p_nom
+            }
 
         self.IntermittentUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
@@ -180,6 +185,11 @@ class TransformationConfig:
             "mu_lower": lambda dualcost: dualcost,
             "mu_upper": lambda dualcost: dualcost,
             "p_nom": lambda designvariable: designvariable,
+            }
+        
+        self.SlackUnitBlock_inverse = {
+            "p": lambda activepower: activepower,
+            "p_nom": lambda designvariable: designvariable
             }
         
         self.component_mapping = {

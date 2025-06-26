@@ -35,7 +35,8 @@ from pypsa2smspp.network_correction import (
     clean_storage_units,
     clean_stores,
     parse_txt_file,
-    compare_networks
+    compare_networks,
+    add_slack_unit
     )
 
 def get_datafile(fname):
@@ -45,8 +46,9 @@ def get_datafile(fname):
 config = TestConfig()
 nd = NetworkDefinition(config)
 
-# nd.n.storage_units_t.inflow["hydro"] = 0
-# nd.n.storage_units_t.inflow.at[0,'hydro'] = 1
+nd.n = add_slack_unit(nd.n)
+
+
 
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')

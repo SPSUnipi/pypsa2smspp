@@ -108,6 +108,31 @@ def reduced_snapshot(n):
         n.generators_t[key].drop(columns=gens_to_drop, inplace=True, errors="ignore")
     return n
 
+def add_slack_unit(n):
+    """
+    Adds a high-cost slack generator to each bus in the network.
+    
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network to which slack units will be added.
+    """
+    # Compute the maximum demand over all time steps and buses
+    max_total_demand = n.loads_t.p_set.sum(axis=1).max()
+
+    for bus in n.buses.index:
+        n.add("Generator",
+              name=f"slack_unit {bus}",
+              carrier = 'slack',
+              bus=bus,
+              p_nom=max_total_demand,
+              p_max_pu=1,
+              p_min_pu=0,
+              marginal_cost=10000,
+              capital_cost=0,
+              p_nom_extendable = False)
+        
+    return n
 
 
 def parse_txt_file(file_path):

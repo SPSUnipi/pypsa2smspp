@@ -364,7 +364,7 @@ class Transformation:
                 
                 extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
                 for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index + self.dimensions['UCBlock']['NumberNodes']}")
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
                     index += 1
 
                 asset_type.extend([1] * len(df_investment))
@@ -379,7 +379,7 @@ class Transformation:
                 
                 extendable_mask = Transformation.is_extendable(components_df, components.name, self.nominal_attrs)
                 for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index + self.dimensions['UCBlock']['NumberNodes']}")
+                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
                     index += 1
 
                 
@@ -406,6 +406,8 @@ class Transformation:
             for component in components_df.index:
                 if any(carrier in components_df.loc[component].carrier for carrier in renewable_carriers):
                     attr_name = "IntermittentUnitBlock_parameters"
+                elif components_df.loc[component].carrier == 'slack':
+                    attr_name = "SlackUnitBlock_parameters"
                 elif components_df.loc[component].carrier in ['hydro', 'PHS']:
                     attr_name = 'HydroUnitBlock_parameters'
                 elif "storage_units" in components_type:
@@ -1122,7 +1124,7 @@ class Transformation:
             case "DCNetworkBlock_links":
                 component = "Link"
             case "SlackUnitBlock":
-                component = None
+                component = "Generator"
         return component
 
     @staticmethod
@@ -1197,7 +1199,7 @@ class Transformation:
         if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
             name_id = 'InvestmentBlock'
             
-            self.add_slackunitblock()
+            # self.add_slackunitblock()
             
             sn = self.convert_to_investmentblock(master, index_id, name_id)
             
