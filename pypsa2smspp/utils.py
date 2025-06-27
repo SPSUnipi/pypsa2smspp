@@ -20,6 +20,10 @@ import numpy as np
 import pandas as pd
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 
+#%%
+################################################################################################
+########################## Utilities for PyPSA network values ##################################
+################################################################################################
 
 def get_param_as_dense(n, component, field, weights=True):
     """
@@ -60,6 +64,16 @@ def get_param_as_dense(n, component, field, weights=True):
     if weights:
         field_val = field_val.mul(weighting, axis=0)
     return field_val
+
+         
+def remove_zero_p_nom_opt_components(n, nominal_attrs):
+    # Lista dei componenti che hanno l'attributo p_nom_opt
+    components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
+    
+    for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
+        components_df = components.df
+        components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
+        setattr(n, components.list_name, components_df)
 
 
 def is_extendable(component_df, component_type, nominal_attrs):
@@ -115,7 +129,8 @@ def filter_extendable_components(components_df, component_type, nominal_attrs):
 
 def get_bus_idx(n, components_df, bus_series, column_name, dtype="uint32"):
     """
-    Maps a bus label Series to its integer index in n.buses and stores it in a new column.
+    Maps one or multiple bus series to their integer indices in n.buses and
+    stores them as new columns in the components_df.
 
     Parameters
     ----------
@@ -123,18 +138,23 @@ def get_bus_idx(n, components_df, bus_series, column_name, dtype="uint32"):
         The network.
     components_df : pd.DataFrame
         DataFrame of the component to update.
-    bus_series : pd.Series
-        Series of bus names (e.g., generators.bus).
-    column_name : str
-        Name of the new column to create with numeric indices.
+    bus_series : pd.Series or list of pd.Series
+        Series (or list of Series) of bus names (e.g., generators.bus, lines.bus0).
+    column_name : str or list of str
+        Name(s) of the new column(s) to store numeric indices.
     dtype : str, optional
-        Data type of the index column (default: "uint32").
+        Data type of the index column(s) (default: "uint32").
 
     Returns
     -------
     None
     """
-    components_df[column_name] = bus_series.map(n.buses.index.get_loc).astype(dtype).values
+    if isinstance(bus_series, list):
+        for series, col in zip(bus_series, column_name):
+            components_df[col] = series.map(n.buses.index.get_loc).astype(dtype).values
+    else:
+        components_df[column_name] = bus_series.map(n.buses.index.get_loc).astype(dtype).values
+
 
 
 def get_nominal_aliases(component_type, nominal_attrs):
@@ -159,3 +179,184 @@ def get_nominal_aliases(component_type, nominal_attrs):
         base + "_min": "p_nom_min",
         base + "_max": "p_nom_max",
     }
+
+#%%
+#################################################################################################
+############################### Dimensions for SMS++ ############################################
+#################################################################################################
+
+def ucblock_dimensions(n):
+    """
+    Computes the dimensions of the UCBlock from the PyPSA network.
+    """
+    if len(n.snapshots) == 0:
+        raise ValueError("No snapshots defined in the network.")
+
+    components = {
+        "NumberUnits": ["generators", "storage_units", "stores"],
+        "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
+        "NumberNodes": ["buses"],
+        "NumberLines": ["lines", "links"],
+    }
+
+    dimensions = {
+        "TimeHorizon": len(n.snapshots),
+        **{
+            name: sum(len(getattr(n, comp)) for comp in comps)
+            for name, comps in components.items()
+        }
+    }
+    return dimensions
+
+
+def networkblock_dimensions(n):
+    """
+    Computes the dimensions of the NetworkBlock from the PyPSA network.
+    """
+    network_components = {
+        "Lines": ['lines'],
+        "Links": ['links'],
+        "combined": ['lines', 'links']
+    }
+    dimensions = {
+        **{
+            name: sum(len(getattr(n, comp)) for comp in comps)
+            for name, comps in network_components.items()
+        }
+    }
+    return dimensions
+
+
+def investmentblock_dimensions(n, nominal_attrs):
+    """
+    Computes the dimensions of the InvestmentBlock from the PyPSA network.
+    """
+    investment_components = ['generators', 'stores', 'lines', 'links']
+    num_assets = 0
+    for comp in investment_components:
+        df = getattr(n, comp)
+        comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"
+        attr = nominal_attrs.get(comp_type)
+        if attr and f"{attr}_extendable" in df.columns:
+            num_assets += df[f"{attr}_extendable"].sum()
+
+    return {"NumAssets": int(num_assets)}
+
+
+def hydroblock_dimensions():
+    """
+    Computes the static dimensions for a HydroUnitBlock (assuming one reservoir).
+    """
+    dimensions = dict()
+    dimensions["NumberReservoirs"] = 1
+    dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
+    dimensions["TotalNumberPieces"] = 2
+    return dimensions
+
+#%%
+###############################################################################################
+############################### Direct transformation #########################################
+###############################################################################################
+
+def get_attr_name(component_type: str, carrier: str | None = None, renewable_carriers: list[str] = []) -> str:
+    """
+    Maps a PyPSA component type and its carrier to the corresponding
+    UnitBlock attribute name to be used in the Transformation.
+
+    Parameters
+    ----------
+    component_type : str
+        The PyPSA component type (e.g., 'Generator', 'Store', 'StorageUnit', 'Line', 'Link')
+    carrier : str or None
+        The carrier name if available (e.g., 'solar', 'hydro', 'slack')
+
+    Returns
+    -------
+    str
+        The attribute name for the Transformation block parameters.
+    """
+
+    # normalize for case-insensitive match
+    if carrier:
+        carrier = carrier.lower()
+
+    # Generators
+    if component_type == "Generator":
+        if carrier in renewable_carriers:
+            return "IntermittentUnitBlock_parameters"
+        elif carrier == "slack":
+            return "SlackUnitBlock_parameters"
+        else:
+            return "ThermalUnitBlock_parameters"
+
+    # StorageUnit
+    if component_type == "StorageUnit":
+        if carrier in ["hydro", "phs"]:
+            return "HydroUnitBlock_parameters"
+        else:
+            return "BatteryUnitBlock_parameters"
+
+    # Store
+    if component_type == "Store":
+        return "BatteryUnitBlock_store_parameters"
+
+    # Lines
+    if component_type == "Line":
+        return "Lines_parameters"
+
+    # Links
+    if component_type == "Link":
+        return "Links_parameters"
+
+    raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
+
+
+def process_dcnetworkblock(
+    components_df,
+    components_name,
+    investment_meta,
+    unitblock_index,
+    lines_index,
+    df_investment,
+    nominal_attrs,
+):
+    """
+    Updates investment_meta for lines or links after adding the unit block.
+
+    Parameters
+    ----------
+    components_df : pd.DataFrame
+        DataFrame of the components (lines or links).
+    components_name : str
+        Component name, e.g., 'Line' or 'Link'.
+    investment_meta : dict
+        Shared investment metadata dictionary to update.
+    unitblock_index : int
+        Current block index.
+    df_investment : pd.DataFrame
+        The investment dataframe for the component.
+    renewable_carriers : list
+        Renewable carriers list.
+    nominal_attrs : dict
+        Nominal attributes dictionary.
+
+    Returns
+    -------
+    next_index : int
+        Updated block index after processing.
+    """
+
+    extendable_mask = is_extendable(components_df, components_name, nominal_attrs)
+
+    for idx in components_df[extendable_mask].index:
+        investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
+        investment_meta["index_extendable"].append(lines_index)  
+    unitblock_index += 1
+    lines_index += 1
+
+    investment_meta["asset_type"].extend([1] * len(df_investment))
+    
+
+    return unitblock_index, lines_index
+
+

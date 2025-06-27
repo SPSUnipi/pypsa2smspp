@@ -25,6 +25,13 @@ from .utils import (
     filter_extendable_components,
     get_bus_idx,
     get_nominal_aliases,
+    remove_zero_p_nom_opt_components,
+    ucblock_dimensions,
+    networkblock_dimensions,
+    investmentblock_dimensions,
+    hydroblock_dimensions,
+    get_attr_name,
+    process_dcnetworkblock
 )
 from .inverse import (
     component_definition,
@@ -46,9 +53,6 @@ NP_UINT = np.uint32
 DIR = os.path.dirname(os.path.abspath(__file__))
 FP_PARAMS = os.path.join(DIR, "data", "smspp_parameters.xlsx")
 
-class FakeVariable:
-    def __init__(self, solution):
-        self.solution = solution
 
 class Transformation:
     """
@@ -103,7 +107,7 @@ class Transformation:
         n.stores["max_hours"] = config.max_hours_stores
         
         # Initialize with the parser and network
-        self.remove_zero_p_nom_opt_components(n)
+        remove_zero_p_nom_opt_components(n, nominal_attrs)
         self.read_excel_components()
         self.add_dimensions(n)
         self.iterate_components(n)
@@ -120,74 +124,16 @@ class Transformation:
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
         demand = demand.T.reindex(n.buses.index).fillna(0.)
         self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}
-        
+                
     def add_dimensions(self, n):
-        # UCBlock
-        
-        def ucblock_dimensions(n):
-            components = {
-                "NumberUnits": ["generators", "storage_units", "stores"],
-                "NumberElectricalGenerators": ["generators", "storage_units", "stores"],
-                "NumberNodes": ["buses"],
-                "NumberLines": ["lines", "links"],
-            }
-        
-            dimensions = {
-                "TimeHorizon": len(n.snapshots),
-                **{
-                    name: sum(len(getattr(n, comp)) for comp in comps)
-                    for name, comps in components.items()
-                }
-            }
-            return dimensions
-        
-        # NetworkBlock
-        def networkblock_dimensions(n):
-            network_components = {
-                "Lines": ['lines'],
-                "Links": ['links'],
-                "combined": ['lines', 'links']
-            }
-            dimensions = {
-                **{
-                    name: sum(len(getattr(n, comp)) for comp in comps)
-                    for name, comps in network_components.items()
-                }
-            }
-            
-            return dimensions
-    
-        # InvestmentBlock
-        def investmentblock_dimensions(n):
-            investment_components = ['generators', 'stores', 'lines', 'links']
-            num_assets = 0
-            for comp in investment_components:
-                df = getattr(n, comp)
-                comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"  # es. "generators" -> "Generator"
-                attr = nominal_attrs.get(comp_type)
-                if attr and f"{attr}_extendable" in df.columns:
-                    num_assets += df[f"{attr}_extendable"].sum()
-        
-            dimensions = {
-                "NumAssets": int(num_assets)
-            }
-            return dimensions
-        
-        # HydroUnitBlock
-        def hydro_dimensions():
-            dimensions = dict()
-            dimensions["NumberReservoirs"] = 1
-            dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-            dimensions["TotalNumberPieces"] = 2
-            
-            return dimensions
-        
-        
+        """
+        Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
+        """
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n)
-        self.dimensions['HydroUnitBlock'] = hydro_dimensions()
-        
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, nominal_attrs)
+        self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
+    
         
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
         """
@@ -258,133 +204,113 @@ class Transformation:
             self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
             
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"]['dimensions'] = dimensions
-            
-
-            
-    
-    def remove_zero_p_nom_opt_components(self, n):
-        # Lista dei componenti che hanno l'attributo p_nom_opt
-        components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
         
-        for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
-            components_df = components.df
-            components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
-            setattr(n, components.list_name, components_df)
 
     
     def iterate_components(self, n):
         """
         Iterates over the network components and adds them as unit blocks.
-
-        Parameters:
+    
+        Parameters
         ----------
         n : PyPSA Network
             PyPSA network object containing components to iterate over.
-            
-        Methods: add_UnitBlock
-            Method to convert the DataFrame and get a UnitBlock
-        
-        Adds:
-        ---------
-        The components to the `unitblocks` dictionary, with distinct attributes for intermittent and thermal units.
-        
         """
-        
+    
         generator_node = []
-        index_extendable = []
-        asset_type = []
-        index = 0
-        lines_involved = None      
-        
+        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
+        unitblock_index = 0
+        lines_index = 0
+    
         for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
-            # Static attributes of the class of components
+    
             components_df = components.df
-            # Dynamic attributes of the class of components
             components_t = components.dynamic
-            # Class of components
             components_type = components.list_name
-            # Get the index for each component (useful especially for lines)
-            
+    
             if components_type not in ['storage_units']:
                 df_investment = self.add_InvestmentBlock(n, components_df, components.name)
-            
-            if components_type == 'lines':
-                get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
-                get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
-                attr_name = "Lines_parameters"
+    
+            # Lines and Links in unico blocco
+            if components_type in ["lines", "links"]:
+                get_bus_idx(
+                    n,
+                    components_df,
+                    [components_df.bus0, components_df.bus1],
+                    ["start_line_idx", "end_line_idx"]
+                )
+    
+                attr_name = get_attr_name(components.name, None, renewable_carriers)
                 self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
-                
-                extendable_mask = is_extendable(components_df, components.name, nominal_attrs)
-                for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
-                    index += 1
-
-                asset_type.extend([1] * len(df_investment))
-                index_extendable.extend(list(range(len(df_investment))))
-                lines_involved = len(df_investment)
+    
+                unitblock_index, lines_index = process_dcnetworkblock(
+                    components_df,
+                    components.name,
+                    investment_meta,
+                    unitblock_index,
+                    lines_index,
+                    df_investment,
+                    nominal_attrs,
+                )
+    
                 continue
-            elif components_type == 'links':
-                get_bus_idx(n, components_df, components_df.bus0, "start_line_idx")
-                get_bus_idx(n, components_df, components_df.bus1, "end_line_idx")
-                attr_name = "Links_parameters"
-                self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
-                
-                extendable_mask = is_extendable(components_df, components.name, nominal_attrs)
-                for idx in components_df[extendable_mask].index:
-                    self.investmentblock['Blocks'].append(f"DCNetworkBlock_{index}")
-                    index += 1
-
-                
-                asset_type.extend([1] * len(df_investment))
-                if lines_involved is None:
-                    index_extendable.extend(range(len(df_investment)))
-                else:
-                    index_extendable.extend(range(lines_involved, lines_involved + len(df_investment)))
-                continue
+    
+            # StorageUnits
             elif components_type == 'storage_units':
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+    
                 for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
                     if carrier in ['hydro', 'PHS']:
-                        generator_node.extend([bus] * 2)  # Repeat two times
+                        generator_node.extend([bus] * 2)
                     else:
-                        generator_node.append(bus)  # Normal case
+                        generator_node.append(bus)
+    
+            # Generators / Stores
             else:
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 generator_node.extend(components_df['bus_idx'].values)
-                
-                
-            # Understand which type of block we expect
-
+    
+            # iterate each component one by one
             for component in components_df.index:
-                if any(carrier in components_df.loc[component].carrier for carrier in renewable_carriers):
-                    attr_name = "IntermittentUnitBlock_parameters"
-                elif components_df.loc[component].carrier == 'slack':
-                    attr_name = "SlackUnitBlock_parameters"
-                elif components_df.loc[component].carrier in ['hydro', 'PHS']:
-                    attr_name = 'HydroUnitBlock_parameters'
-                elif "storage_units" in components_type:
-                    attr_name = "BatteryUnitBlock_parameters"
-                elif "store" in components_type:
-                    attr_name = "BatteryUnitBlock_store_parameters"
-                else:
-                    attr_name = "ThermalUnitBlock_parameters"
-                
-                self.add_UnitBlock(attr_name, components_df.loc[[component]], components_t, components.name, n, component, index)
-                
+                carrier = components_df.loc[component].carrier if "carrier" in components_df.columns else None
+                attr_name = get_attr_name(components.name, carrier, renewable_carriers)
+    
+                self.add_UnitBlock(
+                    attr_name,
+                    components_df.loc[[component]],
+                    components_t,
+                    components.name,
+                    n,
+                    component,
+                    unitblock_index
+                )
+    
                 if is_extendable(components_df.loc[[component]], components.name, nominal_attrs):
-                    index_extendable.append(index)
-                    self.investmentblock['Blocks'].append(f"{attr_name.split('_')[0]}_{index}")
-                    
-                    if components_type not in ['lines', 'links']:
-                        asset_type.append(0)
-                    else:
-                        asset_type.append(1)
-                
-                index += 1    
-                
-        self.generator_node = {'name': 'GeneratorNode', 'type': 'float', 'size': ("NumberElectricalGenerators",), 'value': generator_node}
-        self.investmentblock['Assets'] = {'value': np.array(index_extendable), 'type': 'uint', 'size': 'NumAssets'}
-        self.investmentblock['AssetType'] = {'value': np.array(asset_type), 'type': 'int', 'size': 'NumAssets'}
+                    investment_meta["index_extendable"].append(unitblock_index)
+                    investment_meta["Blocks"].append(f"{attr_name.split('_')[0]}_{unitblock_index}")
+                    investment_meta["asset_type"].append(0)
+    
+                unitblock_index += 1
+    
+        # finalize
+        self.generator_node = {
+            'name': 'GeneratorNode',
+            'type': 'float',
+            'size': ("NumberElectricalGenerators",),
+            'value': generator_node
+        }
+        self.investmentblock["Blocks"] = investment_meta["Blocks"]
+        self.investmentblock["Assets"] = {
+            "value": np.array(investment_meta["index_extendable"]),
+            "type": "uint",
+            "size": "NumAssets"
+        }
+        self.investmentblock["AssetType"] = {
+            "value": np.array(investment_meta["asset_type"]),
+            "type": "int",
+            "size": "NumAssets"
+        }
+
 
         
     def add_InvestmentBlock(self, n, components_df, components_type):
