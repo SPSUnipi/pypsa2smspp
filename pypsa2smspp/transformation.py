@@ -31,7 +31,11 @@ from .utils import (
     investmentblock_dimensions,
     hydroblock_dimensions,
     get_attr_name,
-    process_dcnetworkblock
+    process_dcnetworkblock,
+    resolve_param_value,
+    get_block_name,
+    parse_unitblock_parameters,
+    determine_size_type
 )
 from .inverse import (
     component_definition,
@@ -106,7 +110,7 @@ class Transformation:
         
         n.stores["max_hours"] = config.max_hours_stores
         
-        # Initialize with the parser and network
+        # Direct transformation - called with __init__
         remove_zero_p_nom_opt_components(n, nominal_attrs)
         self.read_excel_components()
         self.add_dimensions(n)
@@ -119,7 +123,6 @@ class Transformation:
         self.result = None
 
 
-        
     def add_demand(self, n):
         demand = n.loads_t.p_set.rename(columns=n.loads.bus)
         demand = demand.T.reindex(n.buses.index).fillna(0.)
@@ -157,42 +160,26 @@ class Transformation:
         self.unitblocks[components_df.name] : dict
             Dictionary of transformed parameters for the component.
         """
-        converted_dict = {}
+        
         if hasattr(self.config, attr_name):
             unitblock_parameters = getattr(self.config, attr_name)
         else:
             print("Block not yet implemented") # TODO: Replace with logger
             
+        converted_dict = parse_unitblock_parameters(
+            attr_name,
+            unitblock_parameters,
+            self.smspp_parameters,
+            self.dimensions,
+            conversion_dict,
+            components_df,
+            components_t,
+            n,
+            components_type,
+            component
+        )
         
-        for key, func in unitblock_parameters.items():
-            if callable(func):
-                # Extract parameter names from the function
-                param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
-                args = []
-                
-                for param in param_names:
-                    if self.smspp_parameters[attr_name.split("_")[0]]['Size'][key] not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]']:
-                        weight = True if param in ['capital_cost', 'marginal_cost', 'marginal_cost_quadratic', 'start_up_cost', 'stand_by_cost'] else False
-                        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
-                    elif param in components_df.index or param in components_df.columns:
-                        arg = components_df.get(param)
-                    elif param in components_t.keys():
-                        df = components_t[param]
-                        arg = df[components_df.index].values
-                    args.append(arg)
-                
-                # Apply function to the parameters
-                value = func(*args)
-                value = value[components_df.index].values if isinstance(value, pd.DataFrame) else value
-                value = value.tolist() if isinstance(value, pd.Series) else value
-                variable_type, variable_size = self.add_size_type(attr_name, key, value)
-                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
-            else:
-                value = func
-                variable_type, variable_size = self.add_size_type(attr_name, key)
-                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
-        
-        name = components_df.name if isinstance(components_df, pd.Series) else attr_name.split("_")[0]
+        name = get_block_name(attr_name, index, components_df)
         
         if attr_name in ['Lines_parameters', 'Links_parameters']:
             self.networkblock[name] = {"block": 'Lines', "variables": converted_dict}
@@ -257,6 +244,9 @@ class Transformation:
     
             # StorageUnits
             elif components_type == 'storage_units':
+                # Handle generator_node indices for storage units:
+                # hydro/PHS require two repeated arcs
+
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
     
                 for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
@@ -332,8 +322,15 @@ class Transformation:
             param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
             args = [df_alias.get(param) for param in param_names]
             value = func(*args)
-            variable_type, variable_size = self.add_size_type(attr_name, key, value)
-    
+            variable_type, variable_size = determine_size_type(
+                self.smspp_parameters,
+                self.dimensions,
+                conversion_dict,
+                attr_name,
+                key,
+                value
+            )
+
             if hasattr(self, 'investmentblock') and key in self.investmentblock:
                 previous_value = self.investmentblock[key]["value"]
                 new_value = previous_value + list(value) if isinstance(previous_value, list) else np.concatenate([previous_value, value])
@@ -363,63 +360,6 @@ class Transformation:
         self.smspp_parameters = pd.read_excel(fp, sheet_name=None, index_col=0)
         
     
-    def add_size_type(self, attr_name, key, args=None):
-        """
-        Adds the size and dtype of a variable (for the NetCDF file) based on the Excel file information.
-        """
-        # Ottieni i parametri del tipo di blocco e la riga corrispondente
-        row = self.smspp_parameters[attr_name.split("_")[0]].loc[key]
-        variable_type = row['Type']
-        
-        dimensions = {
-            key: value
-            for subdict in self.dimensions.values()
-            for key, value in subdict.items()
-        }
-        
-        # Useful only for this case. If variable, a solution must be found
-        dimensions[1] = 1
-        dimensions['NumberLines'] = dimensions['Lines']
-        if 'NumAssets_partial' in dimensions:
-            dimensions['NumAssets'] = dimensions['NumAssets_partial']
-
-
-    
-        # Determina la dimensione della variabile
-        if args is None:
-            variable_size = ()
-        else:
-            # Se args è un numero scalare, la dimensione è 1
-            if isinstance(args, (float, int, np.integer)):
-                variable_size = ()
-            else:
-                # Ottieni la forma se args è un array numpy
-                if isinstance(args, np.ndarray):
-                    shape = args.shape
-                else:
-                    shape = (len(args),)  # Se è una lista, trattala come un vettore
-    
-                # Estrai le dimensioni attese dal file Excel
-                size_arr = re.sub(r'\[|\]', '', str(row['Size']).replace("][", ","))
-                size_arr = size_arr.replace(" ", "").split("|")
-    
-                for size in size_arr:
-                    if size == '1' and shape == (1,):
-                        variable_size = ()
-                        break
-                    else:
-                        # Scomponi espressioni tipo "T,L"
-                        size_components = size.split(",")
-                        expected_shape = tuple(dimensions[conversion_dict[s]] for s in size_components if s in conversion_dict)
-    
-                        if shape == expected_shape:
-                            if "1" in size_components or len(size_components) == 1:
-                                variable_size = (conversion_dict[size_components[0]],)  # Vettore
-                            else:
-                                variable_size = (conversion_dict[size_components[0]], conversion_dict[size_components[1]])  # Matrice
-                            break
-        return variable_type, variable_size
-        
     def lines_links(self):
         if self.dimensions['NetworkBlock']['Lines'] > 0 and self.dimensions['NetworkBlock']['Links'] > 0:
             for key, value in self.networkblock['Lines']['variables'].items():

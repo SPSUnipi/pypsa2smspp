@@ -19,6 +19,7 @@ They are typically imported and used within the Transformation class.
 import numpy as np
 import pandas as pd
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
+import re
 
 #%%
 ################################################################################################
@@ -358,5 +359,251 @@ def process_dcnetworkblock(
     
 
     return unitblock_index, lines_index
+
+
+def resolve_param_value(
+    param,
+    smspp_parameters,
+    attr_name,
+    key,
+    components_df,
+    components_t,
+    n,
+    components_type,
+    component
+):
+    """
+    Resolves the correct parameter value to be passed to the lambda function.
+
+    Parameters
+    ----------
+    param : str
+        Parameter name required by the lambda
+    smspp_parameters : dict
+        Parameters read from excel
+    attr_name : str
+        UnitBlock name
+    key : str
+        The *variable* name in the unitblock_parameters (e.g. MaxPower)
+    ...
+    """
+
+    block_class = attr_name.split("_")[0]
+    size = smspp_parameters[block_class]['Size'][key]
+
+    if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]']:
+        weight = param in [
+            'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
+            'start_up_cost', 'stand_by_cost'
+        ]
+        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
+    elif param in components_df.index or param in components_df.columns:
+        arg = components_df.get(param)
+    elif param in components_t.keys():
+        df = components_t[param]
+        arg = df[components_df.index].values
+    else:
+        arg = None  # fallback
+    return arg
+
+
+
+def get_block_name(attr_name, index, components_df):
+    """
+    Computes a consistent block name.
+    """
+    if isinstance(components_df, pd.Series) and hasattr(components_df, "name"):
+        return components_df.name
+    elif index is None:
+        return f"{attr_name.split('_')[0]}"
+    else:
+        return f"{attr_name.split('_')[0]}_{index}"
+    
+    
+def determine_size_type(
+    smspp_parameters,
+    dimensions,
+    conversion_dict,
+    attr_name,
+    key,
+    args=None
+):
+    """
+    Determines the size and type of a variable for NetCDF export.
+
+    Parameters
+    ----------
+    smspp_parameters : dict
+        Excel-parsed parameter sheets
+    dimensions : dict
+        Dictionary of dimension values across blocks
+    conversion_dict : dict
+        Maps PyPSA dimension names to SMS++ dimensions
+    attr_name : str
+        The block attribute name (e.g. ThermalUnitBlock_parameters)
+    key : str
+        The variable name to look up
+    args : any
+        The variable value (optional, default None)
+
+    Returns
+    -------
+    variable_type : str
+    variable_size : tuple
+    """
+    block_class = attr_name.split("_")[0]
+    row = smspp_parameters[block_class].loc[key]
+    variable_type = row['Type']
+
+    # Compose unified dimension dict
+    dim_map = {
+        key: value
+        for subdict in dimensions.values()
+        for key, value in subdict.items()
+    }
+    dim_map[1] = 1
+    dim_map['NumberLines'] = dim_map.get('Lines', 0)
+    if 'NumAssets_partial' in dim_map:
+        dim_map['NumAssets'] = dim_map['NumAssets_partial']
+
+    # Determine size
+    if args is None:
+        variable_size = ()
+    else:
+        if isinstance(args, (float, int, np.integer)):
+            variable_size = ()
+        else:
+            # Shape of args
+            shape = args.shape if isinstance(args, np.ndarray) else (len(args),)
+
+            size_arr = re.sub(r'\[|\]', '', str(row['Size']).replace("][", ","))
+            size_arr = size_arr.replace(" ", "").split("|")
+
+            for size in size_arr:
+                if size == '1' and shape == (1,):
+                    variable_size = ()
+                    break
+                else:
+                    size_components = size.split(",")
+                    expected_shape = tuple(
+                        dim_map[conversion_dict[s]]
+                        for s in size_components
+                        if s in conversion_dict
+                    )
+                    if shape == expected_shape:
+                        if "1" in size_components or len(size_components) == 1:
+                            variable_size = (
+                                conversion_dict[size_components[0]],
+                            )
+                        else:
+                            variable_size = (
+                                conversion_dict[size_components[0]],
+                                conversion_dict[size_components[1]],
+                            )
+                        break
+
+    return variable_type, variable_size
+
+
+def parse_unitblock_parameters(
+    attr_name,
+    unitblock_parameters,
+    smspp_parameters,
+    dimensions,
+    conversion_dict,
+    components_df,
+    components_t,
+    n,
+    components_type,
+    component
+):
+
+    """
+    Parse the parameters for a unit block.
+
+    Parameters
+    ----------
+    attr_name : str
+        The attribute name of the block (e.g. ThermalUnitBlock_parameters)
+    unitblock_parameters : dict
+        Dictionary of functions or values for each variable.
+    smspp_parameters : dict
+        Excel-read parameters describing sizes and types.
+    components_df : pd.DataFrame
+        The static data of the component.
+    components_t : pd.DataFrame
+        The dynamic data (time series) of the component.
+    n : pypsa.Network
+        The PyPSA network object.
+    components_type : str
+        The component type name (e.g. "Generator").
+    component : str or None
+        Single component name, or None.
+
+    Returns
+    -------
+    dict
+        A dictionary of variables with keys
+        {"value", "type", "size"} for each parameter.
+    """
+    converted_dict = {}
+
+    for key, func in unitblock_parameters.items():
+        if callable(func):
+            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            args = [
+                resolve_param_value(
+                    param,
+                    smspp_parameters,
+                    attr_name,
+                    key,
+                    components_df,
+                    components_t,
+                    n,
+                    components_type,
+                    component
+                )
+                for param in param_names
+            ]
+
+            value = func(*args)
+            # force consistent type
+            if isinstance(value, pd.DataFrame):
+                value = value[components_df.index].values
+            elif isinstance(value, pd.Series):
+                value = value.tolist()
+                
+            variable_type, variable_size = determine_size_type(
+                smspp_parameters,
+                dimensions,
+                conversion_dict,
+                attr_name,
+                key,
+                value
+            )
+
+            converted_dict[key] = {
+                "value": value,
+                "type": variable_type,
+                "size": variable_size
+            }
+        else:
+            # fixed value
+            variable_type, variable_size = determine_size_type(
+                smspp_parameters,
+                dimensions,             
+                conversion_dict,
+                attr_name,
+                key,
+                func
+            )
+
+            converted_dict[key] = {
+                "value": func,
+                "type": variable_type,
+                "size": variable_size
+            }
+
+    return converted_dict
 
 
