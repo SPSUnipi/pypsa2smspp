@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 import re
+from pypsa2smspp import logger
 
 #%%
 ################################################################################################
@@ -466,41 +467,55 @@ def determine_size_type(
     if 'NumAssets_partial' in dim_map:
         dim_map['NumAssets'] = dim_map['NumAssets_partial']
 
-    # Determine size
-    if args is None:
-        variable_size = ()
-    else:
+    # es:
+    # [T][1] → "T,1"
+    # [NA]|[T][NA] → "NA", "T,NA"
+
+    size_arr = re.sub(r'\[|\]', '', str(row['Size']).replace("][", ","))
+    size_arr = size_arr.replace(" ", "").split("|")
+    
+    variable_size = None
+
+    if args is not None:
         if isinstance(args, (float, int, np.integer)):
             variable_size = ()
         else:
-            # Shape of args
             shape = args.shape if isinstance(args, np.ndarray) else (len(args),)
-
-            size_arr = re.sub(r'\[|\]', '', str(row['Size']).replace("][", ","))
-            size_arr = size_arr.replace(" ", "").split("|")
-
-            for size in size_arr:
-                if size == '1' and shape == (1,):
+    
+            for size_expr in size_arr:
+                if size_expr == '1' and shape == (1,):
                     variable_size = ()
                     break
-                else:
-                    size_components = size.split(",")
+                size_components = size_expr.split(",")
+                try:
                     expected_shape = tuple(
                         dim_map[conversion_dict[s]]
                         for s in size_components
-                        if s in conversion_dict
                     )
-                    if shape == expected_shape:
-                        if "1" in size_components or len(size_components) == 1:
-                            variable_size = (
-                                conversion_dict[size_components[0]],
-                            )
-                        else:
-                            variable_size = (
-                                conversion_dict[size_components[0]],
-                                conversion_dict[size_components[1]],
-                            )
-                        break
+                except KeyError:
+                    continue
+    
+                if shape == expected_shape:
+                    if len(size_components) == 1 or "1" in size_components:
+                        variable_size = (conversion_dict[size_components[0]],)
+                    else:
+                        variable_size = tuple(
+                            conversion_dict[dim]
+                            for dim in size_components
+                        )
+                    break
+    
+    # se ancora None → errore
+    if variable_size is None:
+        logger.warning(
+            f"[determine_size_type] Mismatch on variable '{key}' "
+            f"in block '{block_class}': expected one of {size_arr}, got shape {shape}"
+        )
+        raise ValueError(
+            f"Size mismatch for variable '{key}' in '{attr_name}': "
+            f"could not match shape {shape} with expected {size_arr}"
+        )
+
 
     return variable_type, variable_size
 
@@ -542,9 +557,9 @@ def parse_unitblock_parameters(
 
     Returns
     -------
-    dict
-        A dictionary of variables with keys
-        {"value", "type", "size"} for each parameter.
+    converted_dict : dict
+        A dictionary with keys as variable names and values as
+        dictionaries describing 'value', 'type', and 'size'
     """
     converted_dict = {}
 
@@ -568,8 +583,8 @@ def parse_unitblock_parameters(
 
             value = func(*args)
             # force consistent type
-            if isinstance(value, pd.DataFrame):
-                value = value[components_df.index].values
+            if isinstance(value, pd.DataFrame) and component is not None:
+                value = value[[component]].values
             elif isinstance(value, pd.Series):
                 value = value.tolist()
                 
@@ -589,6 +604,7 @@ def parse_unitblock_parameters(
             }
         else:
             # fixed value
+            logger.debug(f"[parse_unitblock_parameters] Using fixed value for {key}")
             variable_type, variable_size = determine_size_type(
                 smspp_parameters,
                 dimensions,             
@@ -605,5 +621,4 @@ def parse_unitblock_parameters(
             }
 
     return converted_dict
-
 

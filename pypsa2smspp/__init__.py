@@ -5,6 +5,23 @@ pypsa2smspp package init
 Exposes high-level transformation and network correction utilities.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# formatter
+formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(name)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+# attach
+logger.addHandler(console_handler)
+
+
 # Transformation logic (PyPSA ↔ SMS++)
 from pypsa2smspp.transformation import Transformation
 from pypsa2smspp.transformation_config import TransformationConfig

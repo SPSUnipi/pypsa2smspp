@@ -17,6 +17,8 @@ import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 from pypsa.optimization.optimize import (assign_solution, assign_duals, post_processing)
+from pypsa2smspp import logger
+
 
 from .constants import conversion_dict, nominal_attrs, renewable_carriers
 from .utils import (
@@ -49,7 +51,6 @@ from .io_parser import (
     assign_design_variables_to_unitblocks,
     prepare_solution,
 )
-
 
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
