@@ -10,7 +10,7 @@ import pypsa
 import pandas as pd
 import re
 import numpy as np
-
+import matplotlib.pyplot as plt
 
 def clean_marginal_cost(n):
     n.links.marginal_cost = 0
@@ -263,6 +263,50 @@ def compare_networks(net1, net2, components_to_check=["loads", "generators", "li
     df_diff = pd.DataFrame(all_differences, columns=["Component", "Element", "Attribute", "Network1", "Network2"])
     return df_diff
 
+def check_all_storages_balance(sut, n, name):
+    """
+    Checks energy balance for all storage units in sut dataframe.
+    inflows: dict of inflow series per storage name
+    """
+    storages = sut['state_of_charge'].columns
+    inflows = sut['inflow']
+
+    for s in storages:
+        soc = sut['state_of_charge'][s]
+        p = sut['p'][s]
+        
+        eta_charge = n.storage_units.efficiency_store.loc[s] if n.storage_units.efficiency_store.loc[s] != 0 else 1
+        eta_discharge = n.storage_units.efficiency_dispatch.loc[s]
+        
+        inflow = 0
+        if isinstance(inflows, pd.DataFrame) and s in inflows:
+            inflow = inflows[s]
+        
+        if isinstance(inflow, pd.Series):
+            inflow = inflow
+        
+        delta_soc = soc.diff().fillna(0).iloc[1:]
+        expected_delta_soc = (
+            eta_charge * (-p.clip(upper=0))
+            - p.clip(lower=0) / eta_discharge
+            + inflow
+        ).iloc[1:]
+        
+        mismatch = delta_soc - expected_delta_soc
+        
+        # set mismatch very small values to zero
+        mismatch = np.where(np.abs(mismatch) < 1e-1, 0, mismatch)
+        
+        plt.figure()
+        plt.plot(mismatch, label=f"{s}")
+        plt.title(f"Energy balance mismatch for {s}-{name}")
+        plt.ylabel("MWh")
+        plt.xlabel("Timestep")
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+        print(f"{s} - {name} - Max mismatch: {np.abs(mismatch).max():.3f} MWh")
 
 
 

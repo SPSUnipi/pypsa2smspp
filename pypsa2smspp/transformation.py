@@ -37,7 +37,9 @@ from .utils import (
     resolve_param_value,
     get_block_name,
     parse_unitblock_parameters,
-    determine_size_type
+    determine_size_type,
+    merge_lines_and_links,
+    rename_links_to_lines
 )
 from .inverse import (
     component_definition,
@@ -113,22 +115,32 @@ class Transformation:
         
         # Direct transformation - called with __init__
         remove_zero_p_nom_opt_components(n, nominal_attrs)
-        self.read_excel_components()
-        self.add_dimensions(n)
-        self.iterate_components(n)
-        self.add_demand(n)
-        self.lines_links()
+        self.read_excel_components() # 1
+        self.add_dimensions(n) # 2
+        self.iterate_components(n) # 3
+        self.add_demand(n) # 6
+        self.lines_links() # 7
 
         # SMS
         self.sms_network = None
         self.result = None
+        
+    
+    ### 1 ###
+    def read_excel_components(self, fp=FP_PARAMS):
+        """
+        Reads Excel file for size and type of SMS++ parameters. Each sheet includes a class of components
 
-
-    def add_demand(self, n):
-        demand = n.loads_t.p_set.rename(columns=n.loads.bus)
-        demand = demand.T.reindex(n.buses.index).fillna(0.)
-        self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}
-                
+        Returns:
+        ----------
+        all_sheets : dict
+            Dictionary where keys are sheet names and values are DataFrames containing 
+            data for each UnitBlock type (or lines).
+        """
+        self.smspp_parameters = pd.read_excel(fp, sheet_name=None, index_col=0)
+    
+ 
+    ### 2 ###          
     def add_dimensions(self, n):
         """
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
@@ -137,8 +149,169 @@ class Transformation:
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
         self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, nominal_attrs)
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
-    
         
+        
+    ### 3 ###
+    def iterate_components(self, n):
+        """
+        Iterates over the network components and adds them as unit blocks.
+    
+        Parameters
+        ----------
+        n : PyPSA Network
+            PyPSA network object containing components to iterate over.
+        """
+    
+        generator_node = []
+        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
+        unitblock_index = 0
+        lines_index = 0
+    
+        for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
+    
+            components_df = components.df
+            components_t = components.dynamic
+            components_type = components.list_name
+    
+            if components_type not in ['storage_units']:
+                df_investment = self.add_InvestmentBlock(n, components_df, components.name) # 4
+    
+            # Lines and Links in unico blocco
+            if components_type in ["lines", "links"]:
+                get_bus_idx(
+                    n,
+                    components_df,
+                    [components_df.bus0, components_df.bus1],
+                    ["start_line_idx", "end_line_idx"]
+                )
+    
+                attr_name = get_attr_name(components.name, None, renewable_carriers)
+                self.add_UnitBlock(attr_name, components_df, components_t, components.name, n) # 5
+    
+                unitblock_index, lines_index = process_dcnetworkblock(
+                    components_df,
+                    components.name,
+                    investment_meta,
+                    unitblock_index,
+                    lines_index,
+                    df_investment,
+                    nominal_attrs,
+                )
+    
+                continue
+    
+            # StorageUnits
+            elif components_type == 'storage_units':
+                # Handle generator_node indices for storage units:
+                # hydro/PHS require two repeated arcs
+
+                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+    
+                for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
+                    if carrier in ['hydro', 'PHS']:
+                        generator_node.extend([bus] * 2)
+                    else:
+                        generator_node.append(bus)
+    
+            # Generators / Stores
+            else:
+                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+                generator_node.extend(components_df['bus_idx'].values)
+    
+            # iterate each component one by one
+            for component in components_df.index:
+                carrier = components_df.loc[component].carrier if "carrier" in components_df.columns else None
+                attr_name = get_attr_name(components.name, carrier, renewable_carriers)
+    
+                self.add_UnitBlock(
+                    attr_name,
+                    components_df.loc[[component]],
+                    components_t,
+                    components.name,
+                    n,
+                    component,
+                    unitblock_index
+                ) # 5
+    
+                if is_extendable(components_df.loc[[component]], components.name, nominal_attrs):
+                    investment_meta["index_extendable"].append(unitblock_index)
+                    investment_meta["Blocks"].append(f"{attr_name.split('_')[0]}_{unitblock_index}")
+                    investment_meta["asset_type"].append(0)
+    
+                unitblock_index += 1
+    
+        # finalize
+        self.generator_node = {
+            'name': 'GeneratorNode',
+            'type': 'float',
+            'size': ("NumberElectricalGenerators",),
+            'value': generator_node
+        }
+        self.investmentblock["Blocks"] = investment_meta["Blocks"]
+        self.investmentblock["Assets"] = {
+            "value": np.array(investment_meta["index_extendable"]),
+            "type": "uint",
+            "size": "NumAssets"
+        }
+        self.investmentblock["AssetType"] = {
+            "value": np.array(investment_meta["asset_type"]),
+            "type": "int",
+            "size": "NumAssets"
+        }
+        
+    ### 4 ###  
+    def add_InvestmentBlock(self, n, components_df, components_type):
+        """
+        Parse and add the InvestmentBlock to self.investmentblock.
+        
+        This method filters extendable components, renames columns for
+        compatibility, and updates the InvestmentBlock variable values.
+        """
+        # filter extendable elements
+        components_df = filter_extendable_components(components_df, components_type, nominal_attrs)
+    
+        # rename for compatibility with InvestmentBlock expected names
+        aliases = get_nominal_aliases(components_type, nominal_attrs)
+        df_alias = components_df.rename(columns=aliases)
+    
+        # store temporary dimension info
+        if "Fake_dimension" not in self.dimensions:
+            self.dimensions["Fake_dimension"] = {}
+        self.dimensions["Fake_dimension"]["NumAssets_partial"] = len(df_alias)
+    
+        attr_name = "InvestmentBlock_parameters"
+        unitblock_parameters = getattr(self.config, attr_name)
+    
+        for key, func in unitblock_parameters.items():
+            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            args = [df_alias.get(param) for param in param_names]
+            value = func(*args)
+    
+            variable_type, variable_size = determine_size_type(
+                self.smspp_parameters,
+                self.dimensions,
+                conversion_dict,
+                attr_name,
+                key,
+                value
+            )
+    
+            self.investmentblock.setdefault(
+                key,
+                {"value": np.array([]), "type": variable_type, "size": variable_size}
+            )
+    
+            if self.investmentblock[key]["value"].size == 0:
+                self.investmentblock[key]["value"] = value
+            else:
+                self.investmentblock[key]["value"] = np.concatenate(
+                    [self.investmentblock[key]["value"], value]
+                )
+    
+        return df_alias
+    
+    
+    ### 5 ###
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
         """
         Adds a unit block to the `unitblocks` dictionary for a given component.
@@ -193,191 +366,35 @@ class Transformation:
             
             self.unitblocks[f"{attr_name.split('_')[0]}_{index}"]['dimensions'] = dimensions
         
-
+    ### 6 ###
+    def add_demand(self, n):
+       demand = n.loads_t.p_set.rename(columns=n.loads.bus)
+       # To be sure index of demand matches with buses (probably useless since SMS++ does not care)
+       demand = demand.T.reindex(n.buses.index).fillna(0.)
+       self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}        
     
-    def iterate_components(self, n):
-        """
-        Iterates over the network components and adds them as unit blocks.
-    
-        Parameters
-        ----------
-        n : PyPSA Network
-            PyPSA network object containing components to iterate over.
-        """
-    
-        generator_node = []
-        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
-        unitblock_index = 0
-        lines_index = 0
-    
-        for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
-    
-            components_df = components.df
-            components_t = components.dynamic
-            components_type = components.list_name
-    
-            if components_type not in ['storage_units']:
-                df_investment = self.add_InvestmentBlock(n, components_df, components.name)
-    
-            # Lines and Links in unico blocco
-            if components_type in ["lines", "links"]:
-                get_bus_idx(
-                    n,
-                    components_df,
-                    [components_df.bus0, components_df.bus1],
-                    ["start_line_idx", "end_line_idx"]
-                )
-    
-                attr_name = get_attr_name(components.name, None, renewable_carriers)
-                self.add_UnitBlock(attr_name, components_df, components_t, components.name, n)
-    
-                unitblock_index, lines_index = process_dcnetworkblock(
-                    components_df,
-                    components.name,
-                    investment_meta,
-                    unitblock_index,
-                    lines_index,
-                    df_investment,
-                    nominal_attrs,
-                )
-    
-                continue
-    
-            # StorageUnits
-            elif components_type == 'storage_units':
-                # Handle generator_node indices for storage units:
-                # hydro/PHS require two repeated arcs
-
-                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
-    
-                for bus, carrier in zip(components_df['bus_idx'].values, components_df['carrier']):
-                    if carrier in ['hydro', 'PHS']:
-                        generator_node.extend([bus] * 2)
-                    else:
-                        generator_node.append(bus)
-    
-            # Generators / Stores
-            else:
-                get_bus_idx(n, components_df, components_df.bus, "bus_idx")
-                generator_node.extend(components_df['bus_idx'].values)
-    
-            # iterate each component one by one
-            for component in components_df.index:
-                carrier = components_df.loc[component].carrier if "carrier" in components_df.columns else None
-                attr_name = get_attr_name(components.name, carrier, renewable_carriers)
-    
-                self.add_UnitBlock(
-                    attr_name,
-                    components_df.loc[[component]],
-                    components_t,
-                    components.name,
-                    n,
-                    component,
-                    unitblock_index
-                )
-    
-                if is_extendable(components_df.loc[[component]], components.name, nominal_attrs):
-                    investment_meta["index_extendable"].append(unitblock_index)
-                    investment_meta["Blocks"].append(f"{attr_name.split('_')[0]}_{unitblock_index}")
-                    investment_meta["asset_type"].append(0)
-    
-                unitblock_index += 1
-    
-        # finalize
-        self.generator_node = {
-            'name': 'GeneratorNode',
-            'type': 'float',
-            'size': ("NumberElectricalGenerators",),
-            'value': generator_node
-        }
-        self.investmentblock["Blocks"] = investment_meta["Blocks"]
-        self.investmentblock["Assets"] = {
-            "value": np.array(investment_meta["index_extendable"]),
-            "type": "uint",
-            "size": "NumAssets"
-        }
-        self.investmentblock["AssetType"] = {
-            "value": np.array(investment_meta["asset_type"]),
-            "type": "int",
-            "size": "NumAssets"
-        }
-
-
-        
-    def add_InvestmentBlock(self, n, components_df, components_type):
-        components_df = filter_extendable_components(components_df, components_type, nominal_attrs)
-    
-        # Rinomina temporanea per compatibilità col dizionario statico
-        aliases = get_nominal_aliases(components_type, nominal_attrs)
-        df_alias = components_df.rename(columns=aliases)
-    
-        if 'Fake_dimension' not in self.dimensions:
-            self.dimensions['Fake_dimension'] = {}
-        self.dimensions['Fake_dimension']['NumAssets_partial'] = len(df_alias)
-    
-        converted_dict = {}
-        attr_name = 'InvestmentBlock_parameters'
-        unitblock_parameters = getattr(self.config, attr_name)
-    
-        for key, func in unitblock_parameters.items():
-            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
-            args = [df_alias.get(param) for param in param_names]
-            value = func(*args)
-            variable_type, variable_size = determine_size_type(
-                self.smspp_parameters,
-                self.dimensions,
-                conversion_dict,
-                attr_name,
-                key,
-                value
-            )
-
-            if hasattr(self, 'investmentblock') and key in self.investmentblock:
-                previous_value = self.investmentblock[key]["value"]
-                new_value = previous_value + list(value) if isinstance(previous_value, list) else np.concatenate([previous_value, value])
-                self.investmentblock[key]["value"] = new_value
-            else:
-                converted_dict[key] = {"value": value, "type": variable_type, "size": variable_size}
-    
-        if not hasattr(self, 'investmentblock'):
-            self.investmentblock = converted_dict
-        else:
-            self.investmentblock.update(converted_dict)
-        
-        return df_alias
-
-        
-
-    def read_excel_components(self, fp=FP_PARAMS):
-        """
-        Reads Excel file for size and type of SMS++ parameters. Each sheet includes a class of components
-
-        Returns:
-        ----------
-        all_sheets : dict
-            Dictionary where keys are sheet names and values are DataFrames containing 
-            data for each UnitBlock type (or lines).
-        """
-        self.smspp_parameters = pd.read_excel(fp, sheet_name=None, index_col=0)
-        
-    
+    ### 7 ###
     def lines_links(self):
-        if self.dimensions['NetworkBlock']['Lines'] > 0 and self.dimensions['NetworkBlock']['Links'] > 0:
-            for key, value in self.networkblock['Lines']['variables'].items():
-                # Required to avoid problems for line susceptance
-                if not isinstance(self.networkblock['Lines']['variables'][key]['value'], (int, float, np.integer)):
-                    self.networkblock['Lines']['variables'][key]['value'] = np.concatenate([
-                        self.networkblock["Lines"]['variables'][key]['value'], 
-                        self.networkblock["Links"]['variables'][key]['value']
-                    ])
-            self.networkblock.pop("Links", None)
+        """
+        Merge or rename network blocks to ensure a single 'Lines' block for SMS++.
     
-        elif self.dimensions['NetworkBlock']['Lines'] == 0 and self.dimensions['NetworkBlock']['Links'] > 0:
-            # Se ci sono solo i Links, rinominali in Lines
-            self.networkblock["Lines"] = self.networkblock.pop("Links")
-            for key, value in self.networkblock['Lines']['variables'].items():
-                value['size'] = tuple('NumberLines' if x == 'Links' else x for x in value['size'])
-            
+        Explanation:
+        ------------
+        SMS++ currently only supports DCNetworkBlock for electrical lines.
+        Links are interpreted as lines with efficiencies < 1 and merged
+        into the Lines block. If no true Lines exist, Links are renamed to Lines.
+        """
+        if (
+            self.dimensions["NetworkBlock"]["Lines"] > 0
+            and self.dimensions["NetworkBlock"]["Links"] > 0
+        ):
+            merge_lines_and_links(self.networkblock)
+        elif (
+            self.dimensions["NetworkBlock"]["Lines"] == 0
+            and self.dimensions["NetworkBlock"]["Links"] > 0
+        ):
+            rename_links_to_lines(self.networkblock)
+
     
             
 ###########################################################################################################################
@@ -653,33 +670,237 @@ class Transformation:
     
     ## Create SMSNetwork
     def convert_to_blocks(self):
-        # pySMSpp
-        sn = SMSNetwork(file_type=SMSFileType.eBlockFile) # Empty Block
+        """
+        Builds the SMSNetwork block hierarchy depending on whether
+        the problem is an investment (NumAssets > 0) or only unit commitment.
+    
+        Sets:
+        -------
+        self.sms_network : SMSNetwork
+            The built SMSNetwork structure.
+    
+        Returns
+        -------
+        SMSNetwork
+            The network with all blocks added.
+        """
+    
+        # -----------------
+        # Initialize empty SMSNetwork
+        # -----------------
+        sn = SMSNetwork(file_type=SMSFileType.eBlockFile)
         master = sn
-        
         index_id = 0
-        
+    
+        # -----------------
+        # Check if investment problem
+        # -----------------
         if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
             name_id = 'InvestmentBlock'
-            
-            # self.add_slackunitblock()
-            
             sn = self.convert_to_investmentblock(master, index_id, name_id)
-            
+    
+            # InnerBlock for UC is inside InvestmentBlock
             master = sn.blocks[name_id]
             name_id = 'InnerBlock'
             index_id += 1
-            
         else:
             name_id = 'Block_0'
-        
-        self.convert_to_ucblock(master, index_id, name_id)
-        
-        self.sms_network = sn
-        
-        return sn
-        
     
+        # -----------------
+        # Add UCBlock (always present)
+        # -----------------
+        self.convert_to_ucblock(master, index_id, name_id)
+    
+        # Save final
+        self.sms_network = sn
+        return sn
+    
+    def convert_to_investmentblock(self, master, index_id, name_id):
+        """
+        Adds an InvestmentBlock to the SMSNetwork, including the
+        investment-related variables.
+    
+        Parameters
+        ----------
+        master : SMSNetwork
+            The root SMSNetwork object
+        index_id : int
+            ID for block naming
+        name_id : str
+            Name for the InvestmentBlock
+            
+        Returns
+        -------
+        SMSNetwork
+            The updated SMSNetwork with the InvestmentBlock added.
+        """
+    
+        # -----------------
+        # InvestmentBlock dimensions
+        # -----------------
+        kwargs = self.dimensions['InvestmentBlock']
+    
+        # -----------------
+        # Add variables from investmentblock dictionary
+        # -----------------
+        for name, variable in self.investmentblock.items():
+            if name != 'Blocks':
+                kwargs[name] = Variable(
+                    name,
+                    variable['type'],
+                    variable['size'],
+                    variable['value']
+                )
+    
+        # -----------------
+        # Register block
+        # -----------------
+        master.add(
+            "InvestmentBlock",
+            name_id,
+            id=f"{index_id}",
+            **kwargs
+        )
+        return master
+  
+    def convert_to_ucblock(self, master, index_id, name_id):
+        """
+        Converts the unit blocks into a UCBlock (or InnerBlock) format.
+    
+        Parameters
+        ----------
+        master : SMSNetwork
+            The SMSNetwork object to which to attach the UCBlock.
+        index_id : int
+            The block id.
+        name_id : str
+            The block name ("UCBlock" or "InnerBlock").
+    
+        Returns
+        -------
+        SMSNetwork
+            The SMSNetwork with the UCBlock added.
+        """
+    
+        # UCBlock dimensions (NumberUnits, NumberNodes, etc.)
+        ucblock_dims = self.dimensions['UCBlock']
+    
+        # -----------------
+        # Demand (load)
+        # -----------------
+        demand_var = {
+            self.demand['name']: Variable(
+                self.demand['name'],
+                self.demand['type'],
+                self.demand['size'],
+                self.demand['value']
+            )
+        }
+    
+        # -----------------
+        # GeneratorNode
+        # -----------------
+        gen_node_var = {
+            self.generator_node['name']: Variable(
+                self.generator_node['name'],
+                self.generator_node['type'],
+                self.generator_node['size'],
+                self.generator_node['value']
+            )
+        }
+    
+        # -----------------
+        # Network lines (Lines block only, merged with Links if needed)
+        # -----------------
+        line_vars = {}
+        if ucblock_dims.get("NumberLines", 0) > 0:
+            for var_name, var in self.networkblock['Lines']['variables'].items():
+                line_vars[var_name] = Variable(
+                    var_name,
+                    var['type'],
+                    var['size'],
+                    var['value']
+                )
+    
+        # -----------------
+        # Assemble all kwargs
+        # -----------------
+        block_kwargs = {
+            **ucblock_dims,
+            **demand_var,
+            **gen_node_var,
+            **line_vars
+        }
+    
+        # -----------------
+        # Add UCBlock itself
+        # -----------------
+        master.add(
+            "UCBlock",
+            name_id,
+            id=f"{index_id}",
+            **block_kwargs
+        )
+    
+        # -----------------
+        # Add all UnitBlocks inside UCBlock
+        # -----------------
+        for ub_name, unit_block in self.unitblocks.items():
+            ub_kwargs = {}
+            for var_name, var in unit_block['variables'].items():
+                ub_kwargs[var_name] = Variable(
+                    var_name,
+                    var['type'],
+                    var['size'],
+                    var['value']
+                )
+    
+            # Add also any special dimensions
+            if 'dimensions' in unit_block:
+                for dim_name, dim_value in unit_block['dimensions'].items():
+                    ub_kwargs[dim_name] = dim_value
+    
+            # create Block
+            unit_block_obj = Block().from_kwargs(
+                block_type=unit_block['block'],
+                **ub_kwargs
+            )
+    
+            # attach to UCBlock
+            master.blocks[name_id].add_block(unit_block['enumerate'], block=unit_block_obj)
+    
+        # -----------------
+        # Done
+        # -----------------
+        return master
+
+    
+    def optimize(self, configfile, *args, **kwargs):
+        """
+        Optimizes the UCBlock using the SMS++ solver.
+
+        Parameters
+        ----------
+        configfile : str
+            Path to the configuration file for the SMS++ solver.
+        *args, **kwargs : additional arguments
+        
+        Returns
+        --------
+        result : dict
+            The optimization result, including status and objective value.
+        """
+        if self.sms_network is None:
+            raise ValueError("SMSNetwork not initialized.")
+    
+        self.result = self.sms_network.optimize(configfile, *args, **kwargs)
+        
+        return self.result
+    
+#############################################################################################
+############################## Backup #######################################################
+#############################################################################################
+
     def add_slackunitblock(self):
         index = len(self.unitblocks) 
         
@@ -709,141 +930,3 @@ class Transformation:
             
             self.generator_node['value'].append(bus)
             index += 1
-        
-        
-        
-    
-    def convert_to_investmentblock(self, master, index_id, name_id):
-        """
-        Converts the unit blocks into a InvestmentBlock format.
-        
-        Returns:
-        ----------
-        investmentblock : SMSNetwork
-            SMSNetwork object containing the network in SMS++ InvestmentBlock format.
-        """
-        
-        # Dimensions of the problem
-        kwargs = self.dimensions['InvestmentBlock']
-        
-        for name, variable in self.investmentblock.items():
-            if name != 'Blocks':
-                kwargs[name] = Variable(
-                    name,
-                    variable['type'],
-                    variable['size'],
-                    variable['value'])
-        
-        master.add(
-            "InvestmentBlock",  # block type
-            f"{name_id}",  # block name
-            id=f"{index_id}",  # block id
-            **kwargs
-        )
-        
-        return master
-        
-  
-    def convert_to_ucblock(self, master, index_id, name_id):
-        """
-        Converts the unit blocks into a UCBlock format.
-        
-        Returns:
-        ----------
-        ucblock : SMSNetwork
-            SMSNetwork object containing the network in SMS++ UCBlock format.
-        """
-        
-        # Dimensions of the problem
-        kwargs = self.dimensions['UCBlock']
-
-        # Load
-        demand_name = self.demand['name']
-        demand_type = self.demand['type']
-        demand_size = self.demand['size']
-        demand_value = self.demand['value']
-
-        demand = {demand_name: Variable(  # active power demand
-                demand_name,
-                demand_type,
-                demand_size,
-                demand_value )}
-
-        kwargs = {**kwargs, **demand}
-
-        # Generator node
-        generator_node = {self.generator_node['name']: Variable(
-            self.generator_node['name'],
-            self.generator_node['type'],
-            self.generator_node['size'],
-            self.generator_node['value'])}
-
-        kwargs = {**kwargs, **generator_node}
-
-        # Lines
-        if kwargs['NumberLines'] > 0:
-            line_variables = {}
-            for name, variable in self.networkblock['Lines']['variables'].items():
-                line_variables[name] = Variable(
-                    name,
-                    variable['type'],
-                    variable['size'],
-                    variable['value'])
-
-            kwargs = {**kwargs, **line_variables}
-
-        # Add UC block
-        master.add(
-            "UCBlock",  # block type
-            f"{name_id}",  # block name
-            id=f"{index_id}",  # block id
-            **kwargs
-        )
-
-        # Add unit blocks
-        for name, unit_block in self.unitblocks.items():
-            kwargs = {}
-            for variable_name, variable in unit_block['variables'].items():
-                kwargs[variable_name] = Variable(
-                    variable_name,
-                    variable['type'],
-                    variable['size'],
-                    variable['value'])
-                
-            if 'dimensions' in unit_block.keys():
-                for dimension_name, dimension in unit_block['dimensions'].items():
-                    kwargs[dimension_name] = dimension
-
-            unit_block_toadd = Block().from_kwargs(
-                block_type=unit_block['block'],
-                **kwargs
-            )
-
-            # Why should I have name UnitBlock_0?
-            master.blocks[f"{name_id}"].add_block(unit_block['enumerate'], block=unit_block_toadd)
-
-        return master
-    
-    
-    
-    def optimize(self, configfile, *args, **kwargs):
-        """
-        Optimizes the UCBlock using the SMS++ solver.
-
-        Parameters
-        ----------
-        configfile : str
-            Path to the configuration file for the SMS++ solver.
-        *args, **kwargs : additional arguments
-        
-        Returns
-        --------
-        result : dict
-            The optimization result, including status and objective value.
-        """
-        if self.sms_network is None:
-            raise ValueError("SMSNetwork not initialized.")
-    
-        self.result = self.sms_network.optimize(configfile, *args, **kwargs)
-        
-        return self.result

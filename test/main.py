@@ -65,9 +65,9 @@ tran = transformation.convert_to_blocks()
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
+    temporary_smspp_file = "output/network_uc_hydro_0011.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/temp_solution_file.nc"
+    solution_file = "output/solution_uc_hydro_0011.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):

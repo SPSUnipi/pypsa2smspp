@@ -164,3 +164,4 @@ test/*/microgrid*
 *.lp
 test/output/*
 test/networks/base*
+test/investment*

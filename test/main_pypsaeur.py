@@ -46,7 +46,7 @@ n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
-# n_smspp = clean_ciclicity_storage(n_smspp)
+n_smspp = clean_ciclicity_storage(n_smspp)
 # n_smspp = clean_storage_units(n_smspp)
 # n_smspp = reduced_snapshot(n_smspp)
 
@@ -72,9 +72,9 @@ print(f"Il tempo per la conversione con pysmspp è di {datetime.now() - then} se
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/temp_network.nc"  # path to temporary SMS++ file
+    temporary_smspp_file = "output/network_pypsaeur_0110.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/temp_solution_file.nc"
+    solution_file = "output/solution_pypsaeur_0110.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):
@@ -127,3 +127,6 @@ else:
     error = (objective_pypsa - objective_smspp) / objective_pypsa
     
     print(f"Error PyPSA-SMS++ of {error}%")
+
+
+

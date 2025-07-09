@@ -362,6 +362,109 @@ def process_dcnetworkblock(
     return unitblock_index, lines_index
 
 
+def parse_unitblock_parameters(
+    attr_name,
+    unitblock_parameters,
+    smspp_parameters,
+    dimensions,
+    conversion_dict,
+    components_df,
+    components_t,
+    n,
+    components_type,
+    component
+):
+
+    """
+    Parse the parameters for a unit block.
+
+    Parameters
+    ----------
+    attr_name : str
+        The attribute name of the block (e.g. ThermalUnitBlock_parameters)
+    unitblock_parameters : dict
+        Dictionary of functions or values for each variable.
+    smspp_parameters : dict
+        Excel-read parameters describing sizes and types.
+    components_df : pd.DataFrame
+        The static data of the component.
+    components_t : pd.DataFrame
+        The dynamic data (time series) of the component.
+    n : pypsa.Network
+        The PyPSA network object.
+    components_type : str
+        The component type name (e.g. "Generator").
+    component : str or None
+        Single component name, or None.
+
+    Returns
+    -------
+    converted_dict : dict
+        A dictionary with keys as variable names and values as
+        dictionaries describing 'value', 'type', and 'size'
+    """
+    converted_dict = {}
+
+    for key, func in unitblock_parameters.items():
+        if callable(func):
+            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            args = [
+                resolve_param_value(
+                    param,
+                    smspp_parameters,
+                    attr_name,
+                    key,
+                    components_df,
+                    components_t,
+                    n,
+                    components_type,
+                    component
+                )
+                for param in param_names
+            ]
+
+            value = func(*args)
+            # force consistent type
+            if isinstance(value, pd.DataFrame) and component is not None:
+                value = value[[component]].values
+            elif isinstance(value, pd.Series):
+                value = value.tolist()
+                
+            variable_type, variable_size = determine_size_type(
+                smspp_parameters,
+                dimensions,
+                conversion_dict,
+                attr_name,
+                key,
+                value
+            )
+
+            converted_dict[key] = {
+                "value": value,
+                "type": variable_type,
+                "size": variable_size
+            }
+        else:
+            # fixed value
+            logger.debug(f"[parse_unitblock_parameters] Using fixed value for {key}")
+            variable_type, variable_size = determine_size_type(
+                smspp_parameters,
+                dimensions,             
+                conversion_dict,
+                attr_name,
+                key,
+                func
+            )
+
+            converted_dict[key] = {
+                "value": func,
+                "type": variable_type,
+                "size": variable_size
+            }
+
+    return converted_dict
+
+
 def resolve_param_value(
     param,
     smspp_parameters,
@@ -520,105 +623,50 @@ def determine_size_type(
     return variable_type, variable_size
 
 
-def parse_unitblock_parameters(
-    attr_name,
-    unitblock_parameters,
-    smspp_parameters,
-    dimensions,
-    conversion_dict,
-    components_df,
-    components_t,
-    n,
-    components_type,
-    component
-):
-
+def merge_lines_and_links(networkblock: dict) -> None:
     """
-    Parse the parameters for a unit block.
+    Merge the variables of 'Lines' and 'Links' into a single block 'Lines'.
+    This is required because SMS++ expects a unified DCNetworkBlock for 
+    all transmission elements, treating links as lines with efficiencies < 1.
 
     Parameters
     ----------
-    attr_name : str
-        The attribute name of the block (e.g. ThermalUnitBlock_parameters)
-    unitblock_parameters : dict
-        Dictionary of functions or values for each variable.
-    smspp_parameters : dict
-        Excel-read parameters describing sizes and types.
-    components_df : pd.DataFrame
-        The static data of the component.
-    components_t : pd.DataFrame
-        The dynamic data (time series) of the component.
-    n : pypsa.Network
-        The PyPSA network object.
-    components_type : str
-        The component type name (e.g. "Generator").
-    component : str or None
-        Single component name, or None.
+    networkblock : dict
+        The Transformation.networkblock dictionary.
 
-    Returns
-    -------
-    converted_dict : dict
-        A dictionary with keys as variable names and values as
-        dictionaries describing 'value', 'type', and 'size'
+    Notes
+    -----
+    If both Lines and Links exist, their variables are concatenated.
     """
-    converted_dict = {}
+    for key, value in networkblock["Lines"]["variables"].items():
+        try:
+            if not isinstance(value["value"], (int, float, np.integer)):
+                networkblock["Lines"]["variables"][key]["value"] = np.concatenate([
+                    networkblock["Lines"]["variables"][key]["value"],
+                    networkblock["Links"]["variables"][key]["value"]
+                ])
+        except ValueError as e:
+            logger.warning(f"Could not merge variable {key} due to shape mismatch: {e}")
+    # after merging, drop the separate Links block
+    networkblock.pop("Links", None)
 
-    for key, func in unitblock_parameters.items():
-        if callable(func):
-            param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
-            args = [
-                resolve_param_value(
-                    param,
-                    smspp_parameters,
-                    attr_name,
-                    key,
-                    components_df,
-                    components_t,
-                    n,
-                    components_type,
-                    component
-                )
-                for param in param_names
-            ]
 
-            value = func(*args)
-            # force consistent type
-            if isinstance(value, pd.DataFrame) and component is not None:
-                value = value[[component]].values
-            elif isinstance(value, pd.Series):
-                value = value.tolist()
-                
-            variable_type, variable_size = determine_size_type(
-                smspp_parameters,
-                dimensions,
-                conversion_dict,
-                attr_name,
-                key,
-                value
-            )
+def rename_links_to_lines(networkblock: dict) -> None:
+    """
+    Rename 'Links' block as 'Lines' if there are no actual Lines present.
+    This is required because SMS++ expects a block named 'Lines'.
 
-            converted_dict[key] = {
-                "value": value,
-                "type": variable_type,
-                "size": variable_size
-            }
-        else:
-            # fixed value
-            logger.debug(f"[parse_unitblock_parameters] Using fixed value for {key}")
-            variable_type, variable_size = determine_size_type(
-                smspp_parameters,
-                dimensions,             
-                conversion_dict,
-                attr_name,
-                key,
-                func
-            )
+    Parameters
+    ----------
+    networkblock : dict
+        The Transformation.networkblock dictionary.
 
-            converted_dict[key] = {
-                "value": func,
-                "type": variable_type,
-                "size": variable_size
-            }
+    Notes
+    -----
+    Also adjusts the variable sizes from 'Links' to 'Lines'.
+    """
+    networkblock["Lines"] = networkblock.pop("Links")
+    for key, var in networkblock["Lines"]["variables"].items():
+        var["size"] = tuple("NumberLines" if x == "Links" else x for x in var["size"])
 
-    return converted_dict
 
