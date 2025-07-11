@@ -120,14 +120,14 @@ def prepare_solution(n, ds: xr.Dataset) -> None:
     -------
     None (modifies n in place)
     """
-    n.model = type("FakeModel", (), {})()
-    n.model.variables = {name: FakeVariable(solution=dataarray) for name, dataarray in ds.items()}
+    n._model = type("FakeModel", (), {})()
+    n._model.variables = {name: FakeVariable(solution=dataarray) for name, dataarray in ds.items()}
 
-    n.model.parameters = type("FakeParameters", (), {})()
-    n.model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+    n._model.parameters = type("FakeParameters", (), {})()
+    n._model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
 
-    n.model.constraints = type("FakeConstraints", (), {})()
-    n.model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+    n._model.constraints = type("FakeConstraints", (), {})()
+    n._model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
 
-    n.model.objective = type("FakeObjective", (), {})()
-    n.model.objective.value = 10000  # arbitrary
+    n._model.objective = type("FakeObjective", (), {})()
+    n._model.objective.value = 10000  # arbitrary

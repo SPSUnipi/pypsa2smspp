@@ -623,11 +623,11 @@ class Transformation:
         
         prepare_solution(n, self.ds)
         
-        assign_solution(n)
+        n.optimize.assign_solution()
         # assign_duals(n) # Still doesn't work
         
         n._multi_invest = False
-        post_processing(n) # Forse non serve nemmeno
+        n.optimize.post_processing()
         
         
     
