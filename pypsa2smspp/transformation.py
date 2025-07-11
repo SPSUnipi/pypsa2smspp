@@ -114,7 +114,7 @@ class Transformation:
         n.stores["max_hours"] = config.max_hours_stores
         
         # Direct transformation - called with __init__
-        remove_zero_p_nom_opt_components(n, nominal_attrs)
+        # remove_zero_p_nom_opt_components(n, nominal_attrs)
         self.read_excel_components() # 1
         self.add_dimensions(n) # 2
         self.iterate_components(n) # 3
@@ -173,8 +173,8 @@ class Transformation:
             components_t = components.dynamic
             components_type = components.list_name
     
-            if components_type not in ['storage_units']:
-                df_investment = self.add_InvestmentBlock(n, components_df, components.name) # 4
+            # if components_type not in ['storage_units']:
+            df_investment = self.add_InvestmentBlock(n, components_df, components.name) # 4
     
             # Lines and Links in unico blocco
             if components_type in ["lines", "links"]:

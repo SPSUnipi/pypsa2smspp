@@ -42,7 +42,7 @@ from pypsa2smspp.network_correction import (
     )
 
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
+n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
@@ -55,6 +55,8 @@ network.optimize(solver_name='gurobi')
 
 network.generators.p_nom_extendable = False
 n_smspp.generators.p_nom_extendable = False
+network.lines.s_nom_extendable = False
+n_smspp.lines.s_nom_extendable = False
 
 # network.export_to_netcdf("network_errore.nc")
 

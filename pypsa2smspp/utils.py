@@ -233,11 +233,11 @@ def investmentblock_dimensions(n, nominal_attrs):
     """
     Computes the dimensions of the InvestmentBlock from the PyPSA network.
     """
-    investment_components = ['generators', 'stores', 'lines', 'links']
+    investment_components = ['generators', 'storage_units', 'stores', 'lines', 'links']
     num_assets = 0
     for comp in investment_components:
         df = getattr(n, comp)
-        comp_type = comp[:-1].capitalize() if comp != "stores" else "Store"
+        comp_type = comp[:-1].capitalize() if comp != "storage_units" else "StorageUnit"
         attr = nominal_attrs.get(comp_type)
         if attr and f"{attr}_extendable" in df.columns:
             num_assets += df[f"{attr}_extendable"].sum()

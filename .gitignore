@@ -165,3 +165,4 @@ test/*/microgrid*
 test/output/*
 test/networks/base*
 test/investment*
+test/configs/data/~$components.xlsx
