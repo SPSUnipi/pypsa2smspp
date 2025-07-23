@@ -38,7 +38,8 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     reduced_snapshot,
     parse_txt_file,
-    compare_networks
+    compare_networks,
+    add_slack_unit
     )
 
 #%% Network definition with PyPSA
@@ -47,6 +48,7 @@ n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 n_smspp = clean_ciclicity_storage(n_smspp)
+# n_smspp = add_slack_unit(n_smspp)
 # n_smspp = clean_storage_units(n_smspp)
 # n_smspp = reduced_snapshot(n_smspp)
 

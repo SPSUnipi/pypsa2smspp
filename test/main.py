@@ -47,12 +47,10 @@ nd = NetworkDefinition(config)
 
 nd.n = add_slack_unit(nd.n)
 
-
-
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
 
-# network.export_to_netcdf("network_pypsa.nc")
+# network.export_to_netcdf("test_pypsa.nc")
 
 # network.model.to_file(fn = "f.lp")
 #%% Transformation class

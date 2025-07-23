@@ -358,7 +358,8 @@ class Transformation:
         if attr_name in ['Lines_parameters', 'Links_parameters']:
             self.networkblock[name] = {"block": 'Lines', "variables": converted_dict}
         else:
-            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "DesignVariable": components_df['p_nom'].values, "variables": converted_dict}
+            nom = nominal_attrs[components_type]
+            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "DesignVariable": components_df[nom].values, "variables": converted_dict}
         
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']

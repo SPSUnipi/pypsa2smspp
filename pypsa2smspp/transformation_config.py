@@ -49,7 +49,7 @@ class TransformationConfig:
             "Availability": 1,
             "QuadTerm": lambda marginal_cost_quadratic: marginal_cost_quadratic,
             "LinearTerm": lambda marginal_cost: marginal_cost,
-            "ConstantTerm": 0.0,
+            "ConstTerm": 0.0,
             "StartUpCost": lambda start_up_cost: start_up_cost,
             "InitialPower": lambda p: p[0][0],
             "FixedConsumption": 0.0,
