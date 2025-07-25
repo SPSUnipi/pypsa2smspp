@@ -155,7 +155,7 @@ class TransformationConfig:
         
         self.ThermalUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
-            "p": lambda activepower: activepower,
+            "p": lambda activepower, designvariable, extendable: activepower * designvariable if extendable else activepower,
             }
         
         self.HydroUnitBlock_inverse = {
