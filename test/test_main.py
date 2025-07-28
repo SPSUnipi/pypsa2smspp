@@ -73,7 +73,7 @@ def process_network(network_name="test_pypsa"):
 
     if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
         ### UCBlock configuration ###
-        configfile = pysmspp.SMSConfig(template="uc_solverconfig")  # load a default config file [highs solver]
+        configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig")  # load a default config file [highs solver]
         temporary_smspp_file = "output/network_pypsaeur_0110.nc"  # path to temporary SMS++ file
         output_file = "output/temp_log_file.txt"  # path to the output file (optional)
         solution_file = "output/solution_pypsaeur_0110.nc"
