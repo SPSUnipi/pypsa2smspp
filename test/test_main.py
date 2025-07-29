@@ -81,6 +81,7 @@ def process_network(network_name="test_pypsa"):
         # Check if the file exists
         if os.path.exists(solution_file):
             os.remove(solution_file)
+        os.makedirs(os.path.dirname(solution_file), exist_ok=True)
         
         then = datetime.now()
         result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
@@ -120,6 +121,7 @@ def process_network(network_name="test_pypsa"):
         # Check if the file exists
         if os.path.exists(solution_file):
             os.remove(solution_file)
+        os.makedirs(os.path.dirname(solution_file), exist_ok=True)
         
         result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock')
         
