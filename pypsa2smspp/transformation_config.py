@@ -105,7 +105,8 @@ class TransformationConfig:
             "EndLine": lambda end_line_idx: end_line_idx.values,
             "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
             "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
-            "LineSusceptance": lambda p_nom: np.zeros_like(p_nom)
+            "LineSusceptance": lambda p_nom: np.zeros_like(p_nom),
+            "Efficiency": lambda efficiency: efficiency.values,
             }
 
         self.HydroUnitBlock_parameters = {
