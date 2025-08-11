@@ -474,46 +474,85 @@ class Transformation:
     
     def parse_networkblock_lines(self, solution_0):
         """
-        Parse NetworkBlock_i blocks from an in-memory SMS++ solution and store line-level time series.
+        Parse line-level time series from an SMS++ solution.
     
-        This function reads the variables (DualCost, FlowValue, NodeInjection) from each
-        NetworkBlock_i inside solution_0 and stacks them into 2D arrays of shape 
-        (time, element). The result is stored in self.networkblock['Lines'].
-    
-        Parameters
-        ----------
-        solution_0 : Block
-            The 'Solution_0' block from the loaded SMSNetwork object.
+        If Solution_0 contains a single 'NetworkBlock' already aggregated across time,
+        read variables directly. Otherwise, fall back to stacking 'NetworkBlock_i'
+        (one per snapshot). Result is stored in self.networkblock['Lines'][var] with
+        shape (time, element).
         """
     
-        num_blocks = self.dimensions['UCBlock']['TimeHorizon']
-        variable_shapes = {"DualCost": None, "FlowValue": None, "NodeInjection": None}
-        stacked = {var: [] for var in variable_shapes}
+        vars_of_interest = ("DualCost", "FlowValue", "NodeInjection")
     
-        for i in range(num_blocks):
-            block_key = f"NetworkBlock_{i}"
-            block = solution_0.blocks.get(block_key)
+        blocks = solution_0.blocks
     
-            if block is None:
-                raise KeyError(f"{block_key} not found in Solution_0")
+        # --- Case 1: new format, single aggregated block -------------------------
+        if "NetworkBlock" in blocks:
+            block = blocks["NetworkBlock"]
     
-            for var in stacked:
+            for var in vars_of_interest:
                 if var not in block.variables:
-                    raise KeyError(f"{var} not found in {block_key}")
+                    raise KeyError(f"{var} not found in NetworkBlock")
+    
+                arr = block.variables[var].data  # expected shape: (time, element)
+    
+                # Sanity: make sure we end up with 2D (time, element)
+                if arr.ndim == 1:
+                    # If ndim==1, assume it is (element,) repeated over a single time
+                    arr = arr[np.newaxis, :]
+    
+                if arr.ndim != 2:
+                    raise ValueError(
+                        f"Unexpected shape for {var} in NetworkBlock: {arr.shape} (expected 2D)"
+                    )
+    
+                self.networkblock["Lines"][var] = arr
+    
+            return  # done
+    
+        # --- Case 2: legacy format, multiple NetworkBlock_i ----------------------
+        # Collect and sort by numeric suffix to be safe w.r.t. missing/extra blocks
+        nb_keys = [
+            k for k in blocks.keys()
+            if k.startswith("NetworkBlock_") and k[len("NetworkBlock_"):].isdigit()
+        ]
+        if not nb_keys:
+            raise KeyError("No 'NetworkBlock' or 'NetworkBlock_i' blocks found in Solution_0")
+    
+        nb_keys.sort(key=lambda k: int(k.split("_")[-1]))
+    
+        # Stack per-time blocks into (time, element)
+        variable_first_lengths = {v: None for v in vars_of_interest}
+        stacked = {v: [] for v in vars_of_interest}
+    
+        for k in nb_keys:
+            block = blocks[k]
+            for var in vars_of_interest:
+                if var not in block.variables:
+                    raise KeyError(f"{var} not found in {k}")
                 arr = block.variables[var].data
     
-                if variable_shapes[var] is None:
-                    variable_shapes[var] = arr.shape[0]
-                elif variable_shapes[var] != arr.shape[0]:
-                    raise ValueError(f"Inconsistent shape for {var} in block {i}: expected {variable_shapes[var]}, got {arr.shape[0]}")
+                # Each per-time block is expected to be 1D (element,) or 2D (1, element)
+                if arr.ndim == 2 and arr.shape[0] == 1:
+                    arr = arr[0]
+                if arr.ndim != 1:
+                    raise ValueError(f"Unexpected shape for {var} in {k}: {arr.shape} (expected 1D)")
+    
+                # Track element dimension consistency
+                if variable_first_lengths[var] is None:
+                    variable_first_lengths[var] = arr.shape[0]
+                elif variable_first_lengths[var] != arr.shape[0]:
+                    raise ValueError(
+                        f"Inconsistent element size for {var}: "
+                        f"expected {variable_first_lengths[var]}, got {arr.shape[0]} in {k}"
+                    )
     
                 stacked[var].append(arr)
     
-        if "Lines" not in self.networkblock:
-            self.networkblock["Lines"] = {}
-    
-        for var, values in stacked.items():
-            self.networkblock["Lines"][var] = np.stack(values, axis=0)
+        for var, lst in stacked.items():
+            # Shape -> (time, element)
+            self.networkblock["Lines"][var] = np.stack(lst, axis=0)
+
 
 
     

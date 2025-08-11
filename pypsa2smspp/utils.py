@@ -353,8 +353,9 @@ def process_dcnetworkblock(
     for idx in components_df[extendable_mask].index:
         investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
         investment_meta["index_extendable"].append(lines_index)  
-    unitblock_index += 1
-    lines_index += 1
+        lines_index += 1
+        unitblock_index += 1
+    
 
     investment_meta["asset_type"].extend([1] * len(df_investment))
     
