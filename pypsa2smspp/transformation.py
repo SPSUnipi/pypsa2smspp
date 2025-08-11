@@ -243,7 +243,7 @@ class Transformation:
         # finalize
         self.generator_node = {
             'name': 'GeneratorNode',
-            'type': 'float',
+            'type': 'int',
             'size': ("NumberElectricalGenerators",),
             'value': generator_node
         }
