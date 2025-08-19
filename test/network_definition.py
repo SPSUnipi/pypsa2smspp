@@ -62,7 +62,7 @@ class NetworkDefinition:
         all_sheets = self.read_excel_components()
         self.add_all_components(all_sheets)
         
-        self.add_costs_components()
+        #self.add_costs_components()
         self.add_demand()
         self.add_renewables()
         

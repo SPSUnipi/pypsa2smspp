@@ -40,17 +40,22 @@ from pypsa2smspp.network_correction import (
     reduced_snapshot,
     parse_txt_file,
     compare_networks,
-    add_slack_unit
+    add_slack_unit,
+    from_investment_to_uc
     )
 
 times = dict()
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
+n_smspp = pypsa.Network("networks/base_s_10_elec_1h_europe.nc")
 investment_bool = False
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 n_smspp = clean_ciclicity_storage(n_smspp)
+# n_smspp.links.p_nom_extendable = True
+# n_smspp = clean_storage_units(n_smspp)
+
+# n_smspp = clean_stores(n_smspp)
 
 
 if investment_bool:
@@ -58,6 +63,8 @@ if investment_bool:
 else:
     n_smspp.generators.p_nom_extendable = False
     n_smspp.lines.s_nom_extendable = False
+    n_smspp.lines.s_nom *= 1.5
+    n_smspp = add_slack_unit(n_smspp)
 
 network = n_smspp.copy()
 then = datetime.now()
@@ -65,9 +72,15 @@ network.optimize(solver_name='gurobi')
 times['PyPSA'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per ottimizzare con PyPSA è di {datetime.now() - then} secondi")
 
-# network.export_to_netcdf("network_errore.nc")
+network.export_to_netcdf("network_pypsa.nc")
 
 # network.model.to_file(fn = "pypsa.lp")
+
+# network = from_investment_to_uc(network)
+# then = datetime.now()
+# network.optimize(solver_name='gurobi')
+# times['PyPSA_UC'] = (datetime.now() - then).total_seconds()
+# print(f"Il tempo per ottimizzare con PyPSA è di {datetime.now() - then} secondi")
 
 #%% Transformation class
 then = datetime.now()
@@ -80,13 +93,12 @@ tran = transformation.convert_to_blocks()
 times['PySMSpp conversion'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per la conversione con pysmspp è di {datetime.now() - then} secondi")
 
-
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/network_pypsaeur_0110.nc"  # path to temporary SMS++ file
+    temporary_smspp_file = "output/network_ucblock.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/solution_pypsaeur_0110.nc"
+    solution_file = "output/solution_ucblock.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):
@@ -139,7 +151,7 @@ else:
     times['SMS++ (solver+writing)'] = (datetime.now() - then).total_seconds()
     print(f"Il tempo di tran.optimize è di {datetime.now() - then} secondi")
     
-    objective_pypsa = network.objective + network.objective_constant
+    objective_pypsa = network.objective # + network.objective_constant
     objective_smspp = result.objective_value
     error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
     
@@ -156,3 +168,5 @@ else:
     
     
 times = pd.DataFrame.from_dict(times, orient="index", columns=["Seconds"])
+# network.export_to_netcdf("network_pypsa.nc")
+# n_smspp.export_to_netcdf("network_smspp.nc")

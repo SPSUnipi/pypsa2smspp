@@ -12,6 +12,8 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 
+from pypsa2smspp.constants import nominal_attrs
+
 def clean_marginal_cost(n):
     n.links.marginal_cost = 0
     n.storage_units.marginal_cost = 0
@@ -55,10 +57,64 @@ def clean_storage_units(n):
         n.storage_units_t[key].drop(columns=n.storage_units_t[key].columns, inplace=True)
     return n
 
-def clean_stores(n):
-    n.stores.drop(n.stores.index, inplace=True)
-    for key in n.stores_t.keys():
-        n.stores_t[key].drop(columns=n.stores_t[key].columns, inplace=True)
+# def clean_stores(n):
+#     n.stores.drop(n.stores.index, inplace=True)
+#     for key in n.stores_t.keys():
+#         n.stores_t[key].drop(columns=n.stores_t[key].columns, inplace=True)
+#     return n
+
+def clean_stores(n, carriers=None):
+    """
+    Remove Stores (optionally filtered by carrier) and all incident charge/discharge
+    Links from a PyPSA network. Also drops the dedicated store buses.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network to clean.
+    carriers : list[str] or None
+        If provided, only stores with carrier in this list are removed
+        (e.g., ["battery"], ["H2"]). If None, remove all stores.
+
+    Returns
+    -------
+    pypsa.Network
+        The modified network (mutated in place and also returned).
+    """
+    # --- Select stores to remove
+    if carriers is None:
+        store_idx = n.stores.index
+    else:
+        store_idx = n.stores.index[n.stores["carrier"].isin(carriers)]
+
+    if len(store_idx) == 0:
+        return n  # nothing to do
+
+    # --- Buses dedicated to those stores
+    store_buses = n.stores.loc[store_idx, "bus"].unique()
+
+    # --- Remove links incident to any store bus (charge/discharge, electrolysis/FC, etc.)
+    mask_links = n.links["bus0"].isin(store_buses) | n.links["bus1"].isin(store_buses)
+    link_idx = n.links.index[mask_links]
+
+    if len(link_idx):
+        n.links.drop(link_idx, inplace=True)
+        # Drop link time-series columns safely if present
+        for key, df in n.links_t.items():
+            cols = df.columns.intersection(link_idx)
+            if len(cols):
+                df.drop(columns=cols, inplace=True)
+
+    # --- Remove stores and their time-series
+    n.stores.drop(store_idx, inplace=True)
+    for key, df in n.stores_t.items():
+        cols = df.columns.intersection(store_idx)
+        if len(cols):
+            df.drop(columns=cols, inplace=True)
+
+    # --- Remove the now-unneeded store buses
+    n.buses.drop(store_buses, errors="ignore", inplace=True)
+
     return n
 
 
@@ -134,6 +190,45 @@ def add_slack_unit(n):
         
     return n
 
+
+def from_investment_to_uc(n):
+    """
+    For each investment component in the network, set the nominal capacity equal to
+    the optimized value (if available) and turn off extendability.
+
+    Notes:
+    - Uses 'nominal_attrs' to map component class -> nominal attribute (e.g., p_nom/s_nom/e_nom).
+    - Handles irregular plural names like 'storage_units'.
+    - Keeps existing nominal values where *_opt is NaN or missing.
+    """
+    # Map irregular (or just explicit) plural attribute names on the Network
+    component_df_name = {
+        "Generator": "generators",
+        "Line": "lines",
+        "Transformer": "transformers",
+        "Link": "links",
+        "Store": "stores",
+        "StorageUnit": "storage_units",  # <- the tricky one
+    }
+
+    for comp, nominal_attr in nominal_attrs.items():
+        df_name = component_df_name.get(comp, comp.lower() + "s")
+        if not hasattr(n, df_name):
+            continue  # component not present in this network
+
+        df = getattr(n, df_name)
+        opt_attr = f"{nominal_attr}_opt"
+        extend_attr = f"{nominal_attr}_extendable"
+
+        # If optimized values exist, copy them where available, otherwise keep current
+        if opt_attr in df.columns:
+            # Fill only where *_opt is not NaN; keep original elsewhere
+            df[nominal_attr] = df[opt_attr].fillna(df[nominal_attr])
+
+        # Disable extendability if the flag exists
+        if extend_attr in df.columns:
+            df[extend_attr] = False
+    return n
 
 def parse_txt_file(file_path):
     data = {'DCNetworkBlock': {'PowerFlow': []}}

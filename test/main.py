@@ -105,12 +105,12 @@ else:
     if os.path.exists(solution_file):
         os.remove(solution_file)
     
-    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock')
+    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock', log_executable_call=True)
     
     
-    objective_pypsa = network.objective + network.objective_constant
+    objective_pypsa = network.objective # + network.objective_constant
     objective_smspp = result.objective_value
-    error = (objective_pypsa - objective_smspp) / objective_pypsa
+    error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
     
     print(f"Error PyPSA-SMS++ of {error}%")
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")

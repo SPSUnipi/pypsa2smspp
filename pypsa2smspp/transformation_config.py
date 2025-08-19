@@ -141,7 +141,7 @@ class TransformationConfig:
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min.replace(0, 1e-6).values,
-            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, 10000).values,
+            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, 1e7).values,
             "InstalledQuantity": lambda p_nom: p_nom.replace(0, 1e-6).values,
             }
         
@@ -169,7 +169,7 @@ class TransformationConfig:
         
         # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
         self.BatteryUnitBlock_inverse = {
-            "p_nom": lambda designvariable: designvariable,
+            "e_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: np.maximum(activepower, 0),
             "p_store": lambda activepower: np.maximum(-activepower, 0),
             "state_of_charge": lambda storagelevel: storagelevel,
