@@ -87,7 +87,7 @@ class TransformationConfig:
             "MaxStorage": lambda e_nom_opt: e_nom_opt,
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
-            "InitialPower": lambda e_initial, max_hours: e_initial / max_hours,
+            "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours)[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
             "Cost": lambda marginal_cost: marginal_cost
             }

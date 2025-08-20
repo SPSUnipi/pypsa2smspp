@@ -313,6 +313,192 @@ def get_attr_name(component_type: str, carrier: str | None = None, renewable_car
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
 
 
+def build_store_and_merged_links(n, merge_links=False, logger=print):
+    """
+    Build enriched stores_df (adds efficiency_store/efficiency_dispatch)
+    and links_merged_df (replaces per-store charge/discharge link pair with
+    a single merged link with eta=1 and summed capital_cost). Keeps a mapping
+    for perfect inverse transformation.
+
+    Returns
+    -------
+    stores_df : pd.DataFrame
+        Copy of n.stores with extra columns:
+        - efficiency_store (eta_ch)
+        - efficiency_dispatch (eta_dis)
+
+    links_merged_df : pd.DataFrame
+        Copy of n.links where the store-related charge/discharge rows are
+        replaced by a single merged link per store. The merged link has:
+        - efficiency = 1.0
+        - marginal_cost = 0.0
+        - capital_cost = capex_ch + capex_dis
+        - p_nom = chosen from originals (see note below)
+        - p_nom_extendable = common value (assert both equal)
+        - name includes both original names for traceability
+
+    store_link_map : dict
+        Mapping with all info needed for inverse reconstruction:
+        {store_name: {
+            'bus_elec': str,
+            'bus_store': str,
+            'name_link_ch': str or None,
+            'name_link_dis': str or None,
+            'eta_ch': float,
+            'eta_dis': float,
+            'p_nom_ch': float, 'p_nom_dis': float,
+            'p_nom_extendable': bool,
+            'capex_ch': float, 'capex_dis': float,
+            'merged_name': str
+        }}
+
+    Notes
+    -----
+    - Charge link is detected as (bus0 == bus_elec) & (bus1 == bus_store).
+      Discharge link as (bus0 == bus_store) & (bus1 == bus_elec).
+    - If only one of the two links exists, we still merge using the available
+      one and set missing values to defaults; a warning is emitted.
+    - On p_nom: PyPSA-Eur ties charger/discharger sizes in practice. We:
+        * assert ~equal within tolerance, otherwise pick min and warn.
+      This avoids over-stating capability if data are slightly inconsistent.
+    """
+
+    stores_df = n.stores.copy()
+    links_merged_df = n.links.copy()
+
+    # Add the two new columns with safe defaults
+    for col in ["efficiency_store", "efficiency_dispatch"]: # Serve questo passaggio?
+        if col not in stores_df.columns:
+            stores_df[col] = np.nan
+
+    store_link_map = {}
+
+    if not merge_links or links_merged_df.empty or stores_df.empty:
+        return stores_df, links_merged_df, store_link_map
+
+    # We will collect rows to drop and rows to append
+    rows_to_drop = []
+    rows_to_append = []
+
+    # Tolerance for p_nom equality check
+    PNOM_TOL = 1e-6
+
+    # Build a fast index by bus to find links connected to a given store bus
+    # We'll just filter per store; clarity over micro-optimization.
+    for store_name, srow in stores_df.iterrows():
+        bus_store = srow["bus"]
+        # Heuristic: the links are the ones connected to the bus
+        mask_ch = (links_merged_df["bus0"] == bus_store) | (links_merged_df["bus1"] == bus_store)
+        cand = links_merged_df[mask_ch]
+        if cand.empty:
+            # No links connected to this store -> nothing to merge
+            continue
+        
+        charge_row = cand[cand['bus1'] == bus_store].iloc[0]
+        discharge_row = cand[cand['bus0'] == bus_store].iloc[0]
+        bus_elec = charge_row['bus0'] if charge_row['bus0'] == discharge_row['bus1'] else None
+
+        if bus_elec is None:
+            # Could not determine the paired electrical bus; skip merge
+            continue
+
+        # Extract params with defaults
+        # Charge (elec -> store
+        eta_ch = charge_row.efficiency
+        p_nom_ch = charge_row.p_nom
+        capex_ch = charge_row.capital_cost
+        ext_ch = charge_row.p_nom_extendable
+        name_ch = charge_row.name
+
+
+        # Discharge (store -> elec)
+        eta_dis = discharge_row.efficiency
+        p_nom_dis = discharge_row.p_nom
+        capex_dis = discharge_row.capital_cost
+        ext_dis = discharge_row.p_nom_extendable
+        name_dis = discharge_row.name
+
+
+        # Extendability must match (as per your assumption)
+        if ext_ch != ext_dis:
+            logger(f"[merge] Warning: extendability mismatch for store '{store_name}' "
+                   f"(charge={ext_ch}, discharge={ext_dis}). Using logical AND.")
+        pnom_extendable = bool(ext_ch and ext_dis)
+
+        # Choose p_nom for the merged link
+        # In PyPSA-Eur they should be equal; we assert/clip to min to be safe.
+        if abs(p_nom_ch - p_nom_dis) > PNOM_TOL:
+            logger(f"[merge] Warning: p_nom mismatch for store '{store_name}' "
+                   f"(ch={p_nom_ch}, dis={p_nom_dis}). Using min().")
+        p_nom_merged = float(min(p_nom_ch, p_nom_dis))
+
+        # Capital cost is the SUM (two converters of same size)
+        capex_merged = float(capex_ch + capex_dis)
+
+        # Update store efficiencies
+        stores_df.at[store_name, "efficiency_store"] = float(eta_ch)
+        stores_df.at[store_name, "efficiency_dispatch"] = float(eta_dis)
+
+        # Prepare merged link row:
+        # We clone one of the originals to inherit optional columns, then override.
+        new_row = charge_row if charge_row is not None else discharge_row
+
+        merged_name = f"{name_ch or 'NA'}__{name_dis or 'NA'}"
+
+        # Override key fields
+        new_row.name = merged_name
+        new_row["bus0"] = bus_elec
+        new_row["bus1"] = bus_store
+        new_row["efficiency"] = 1.0
+        new_row["marginal_cost"] = 0.0
+        new_row["capital_cost"] = capex_merged
+        new_row["p_nom"] = p_nom_merged
+        new_row["p_nom_extendable"] = pnom_extendable
+
+        # If there are p_nom_min/max columns, keep them consistent (safe defaults)
+        for col in ["p_nom_min", "p_nom_max"]:
+            if col in new_row.index and pd.isna(new_row[col]):
+                # set permissive bounds
+                new_row[col] = 0.0 if col.endswith("_min") else np.inf
+
+        # Mark rows to drop (original charge/discharge)
+        if name_ch is not None:
+            rows_to_drop.append(name_ch)
+        if name_dis is not None:
+            rows_to_drop.append(name_dis)
+
+        rows_to_append.append(new_row)
+
+        # Save mapping for inverse
+        store_link_map[store_name] = {
+            "bus_elec": bus_elec,
+            "bus_store": bus_store,
+            "name_link_ch": name_ch,
+            "name_link_dis": name_dis,
+            "eta_ch": float(eta_ch),
+            "eta_dis": float(eta_dis),
+            "p_nom_ch": float(p_nom_ch),
+            "p_nom_dis": float(p_nom_dis),
+            "p_nom_extendable": pnom_extendable,
+            "capex_ch": float(capex_ch),
+            "capex_dis": float(capex_dis),
+            "merged_name": merged_name,
+        }
+
+    # Apply drops/appends
+    if rows_to_drop:
+        links_merged_df = links_merged_df.drop(index=[r for r in rows_to_drop if r in links_merged_df.index])
+    if rows_to_append:
+        links_merged_df = pd.concat([links_merged_df, pd.DataFrame(rows_to_append)], axis=0)
+
+    return stores_df, links_merged_df, store_link_map
+
+def correct_dimensions(dimensions, stores_df, links_merged_df, n):
+    dimensions['NetworkBlock']['Links'] -= len(stores_df)
+    dimensions['NetworkBlock']['combined'] -= len(stores_df)
+    dimensions['UCBlock']['NumberLines'] -= len(stores_df)
+    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df[stores_df['e_nom_extendable'] == True])
+
 def process_dcnetworkblock(
     components_df,
     components_name,

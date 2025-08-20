@@ -172,7 +172,7 @@ class NetworkDefinition:
             df_demand_year = np.random.normal(
                 np.tile(df_demand_day["demand"], n_days),
                 np.tile(df_demand_day["standard_deviation"], n_days),
-            )
+            ) * 100
             self.n.loads_t.p_set[load] = df_demand_year
                     
     def add_renewables(self):

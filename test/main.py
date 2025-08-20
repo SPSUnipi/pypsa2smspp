@@ -55,7 +55,7 @@ network.optimize(solver_name='gurobi')
 # network.model.to_file(fn = "f.lp")
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network)
+transformation = Transformation(network, merge_links=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
@@ -85,7 +85,7 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
-
+    
     solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
     # transformation.parse_txt_to_unitblocks(output_file)
     transformation.inverse_transformation(nd.n)
@@ -115,9 +115,9 @@ else:
     print(f"Error PyPSA-SMS++ of {error}%")
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
-    solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
-    transformation.inverse_transformation(nd.n)
+    # solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
+    # transformation.inverse_transformation(nd.n)
     
-    statistics = network.statistics()
-    statistics_smspp = nd.n.statistics()
+    # statistics = network.statistics()
+    # statistics_smspp = nd.n.statistics()
 
