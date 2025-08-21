@@ -46,7 +46,7 @@ from pypsa2smspp.network_correction import (
 
 times = dict()
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_2_elec_1h_inv.nc")
+n_smspp = pypsa.Network("networks/base_s_10_elec_1h_europe.nc")
 investment_bool = True
 
 n_smspp = clean_global_constraints(n_smspp)
@@ -73,7 +73,7 @@ network.optimize(solver_name='gurobi')
 times['PyPSA'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per ottimizzare con PyPSA è di {datetime.now() - then} secondi")
 
-network.export_to_netcdf("network_pypsa.nc")
+# network.export_to_netcdf("network_pypsa.nc")
 
 # network.model.to_file(fn = "pypsa.lp")
 
@@ -85,7 +85,7 @@ network.export_to_netcdf("network_pypsa.nc")
 
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network)
+transformation = Transformation(network, merge_links=True)
 times['Direct transformation'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per la trasformazione diretta è di {datetime.now() - then} secondi")
 

@@ -369,12 +369,11 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     # Add the two new columns with safe defaults
     for col in ["efficiency_store", "efficiency_dispatch"]: # Serve questo passaggio?
         if col not in stores_df.columns:
-            stores_df[col] = np.nan
+            stores_df[col] = 1.0
 
-    store_link_map = {}
 
     if not merge_links or links_merged_df.empty or stores_df.empty:
-        return stores_df, links_merged_df, store_link_map
+        return stores_df, links_merged_df
 
     # We will collect rows to drop and rows to append
     rows_to_drop = []
@@ -454,6 +453,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         new_row["capital_cost"] = capex_merged
         new_row["p_nom"] = p_nom_merged
         new_row["p_nom_extendable"] = pnom_extendable
+        new_row["p_min_pu"] = -1.0
 
         # If there are p_nom_min/max columns, keep them consistent (safe defaults)
         for col in ["p_nom_min", "p_nom_max"]:
@@ -469,21 +469,6 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
 
         rows_to_append.append(new_row)
 
-        # Save mapping for inverse
-        store_link_map[store_name] = {
-            "bus_elec": bus_elec,
-            "bus_store": bus_store,
-            "name_link_ch": name_ch,
-            "name_link_dis": name_dis,
-            "eta_ch": float(eta_ch),
-            "eta_dis": float(eta_dis),
-            "p_nom_ch": float(p_nom_ch),
-            "p_nom_dis": float(p_nom_dis),
-            "p_nom_extendable": pnom_extendable,
-            "capex_ch": float(capex_ch),
-            "capex_dis": float(capex_dis),
-            "merged_name": merged_name,
-        }
 
     # Apply drops/appends
     if rows_to_drop:
@@ -491,7 +476,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     if rows_to_append:
         links_merged_df = pd.concat([links_merged_df, pd.DataFrame(rows_to_append)], axis=0)
 
-    return stores_df, links_merged_df, store_link_map
+    return stores_df, links_merged_df
 
 def correct_dimensions(dimensions, stores_df, links_merged_df, n):
     dimensions['NetworkBlock']['Links'] -= len(stores_df)

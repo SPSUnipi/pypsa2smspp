@@ -43,6 +43,8 @@ def clean_ciclicity_storage(n):
     n.storage_units.cyclic_state_of_charge = False
     n.storage_units.cyclic_state_of_charge_per_period = False
     n.storage_units.state_of_charge_initial = n.storage_units.max_hours * n.storage_units.p_nom
+    n.stores.e_cyclic = False
+    n.stores.e_cycic_per_period = False
     return n
 
 def clean_marginal_cost_intermittent(n):

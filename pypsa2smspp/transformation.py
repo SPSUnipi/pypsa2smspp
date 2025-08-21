@@ -54,6 +54,7 @@ from .io_parser import (
     parse_txt_to_unitblocks,
     assign_design_variables_to_unitblocks,
     prepare_solution,
+    split_merged_dcnetworkblocks
 )
 
 NP_DOUBLE = np.float64
@@ -271,22 +272,23 @@ class Transformation:
         investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
         unitblock_index = 0
         lines_index = 0
+        self._dc_names = []
+        self._dc_types = []
     
         if getattr(self, "merge_links", False):
-            stores_df, links_merged_df, store_link_map = build_store_and_merged_links(
-                n, merge_links=self.merge_links, logger=logger
-            )
-            self._store_link_map = store_link_map
+            stores_df, links_merged_df = build_store_and_merged_links(
+                n, merge_links=self.merge_links, logger=logger)
             correct_dimensions(self.dimensions, stores_df, links_merged_df, n)
         else:
-            stores_df = n.stores.copy()
-            links_merged_df = n.links.copy()
-            self._store_link_map = {}
+            stores_df, links_merged_df = build_store_and_merged_links(
+                n, merge_links=False, logger=logger) 
+
     
         # Iterate in the same order as before
         for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
     
             # --- CHANGED: pick the right dataframe per component ---
+            # TODO build a proper definition to define the DataFrame
             if components.list_name == "stores":
                 components_df = stores_df
                 components_t = components.dynamic
@@ -304,6 +306,10 @@ class Transformation:
     
             # Lines and Links path unchanged
             if components_type in ["lines", "links"]:
+                self._dc_names.extend(list(components_df.index))
+                self._dc_types.extend(
+                    ["line" if components_type == "lines" else "link"] * len(components_df)
+                )
                 get_bus_idx(
                     n,
                     components_df,
@@ -588,6 +594,8 @@ class Transformation:
             design_vars = solution_0.variables["DesignVariables"].data
             block_names = self.investmentblock.get("Blocks", [])
             assign_design_variables_to_unitblocks(self.unitblocks, block_names, design_vars)
+       
+        split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
     
     
@@ -722,27 +730,29 @@ class Transformation:
                 "DesignVariable": self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
             }
         
-        
+
     def prepare_dc_unitblock_info(self, n):
         """
-        Prepare names and types for DCNetworkBlock unitblocks.
+        Return the (names, types) sequence for DCNetworkBlock unitblocks.
     
-        This function extracts line and link names from the PyPSA network
-        and returns them in the same order as stored in the combined NetCDF
-        solution. It also returns a list of 'line' or 'link' types accordingly.
+        Preferred source:
+          - self._dc_names / self._dc_types recorded during iterate_components(),
+            which exactly match the order and count used to build the DC block.
     
-        Parameters
-        ----------
-        n : pypsa.Network
-            PyPSA network object.
+        Fallback (legacy):
+          - concatenate n.lines.index then n.links.index, with basic sanity checks
+            against self.dimensions['NetworkBlock'].
     
         Returns
         -------
-        names : list of str
-            Ordered names for each DC network component.
-        types : list of str
-            List of 'line' or 'link' corresponding to each element.
+        names : list[str]
+        types : list[str]  # values are 'line' or 'link'
         """
+        # Preferred path: use the exact order captured at build time
+        if hasattr(self, "_dc_names") and hasattr(self, "_dc_types") and self._dc_names:
+            return list(self._dc_names), list(self._dc_types)
+    
+        # Fallback: reconstruct from network object (legacy behavior)
         num_lines = self.dimensions['NetworkBlock']['Lines']
         num_links = self.dimensions['NetworkBlock']['Links']
     
@@ -750,14 +760,18 @@ class Transformation:
         link_names = list(n.links.index)
     
         if len(line_names) != num_lines:
-            raise ValueError("Mismatch between dimensions and n.lines")
-    
+            raise ValueError(
+                f"Mismatch between dimensions and n.lines "
+                f"(expected {num_lines}, got {len(line_names)})"
+            )
         if len(link_names) != num_links:
-            raise ValueError("Mismatch between dimensions and n.links")
+            raise ValueError(
+                f"Mismatch between dimensions and n.links "
+                f"(expected {num_links}, got {len(link_names)})"
+            )
     
         names = line_names + link_names
-        types = ['line'] * num_lines + ['link'] * num_links
-    
+        types = (['line'] * num_lines) + (['link'] * num_links)
         return names, types
 
 

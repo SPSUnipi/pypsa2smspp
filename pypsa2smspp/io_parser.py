@@ -97,6 +97,106 @@ def assign_design_variables_to_unitblocks(unitblocks, block_names_investment, de
         unitblocks[name]["DesignVariable"] = value
 
 
+def split_merged_dcnetworkblocks(unitblocks, delimiter="__", reuse_index_for_first=True, logger=print):
+    """
+    Split merged DCNetworkBlock_* entries in a unitblocks dict into two blocks.
+
+    Parameters
+    ----------
+    unitblocks : dict
+        Dictionary of unitblocks (as built by parse_solution_to_unitblocks).
+    delimiter : str, default="__"
+        String that separates the two original link names inside the merged name.
+    reuse_index_for_first : bool, default=True
+        If True, the first split block keeps the original index
+        (e.g., DCNetworkBlock_7), the second gets a new index.
+        If False, the original entry is removed and two new blocks are appended.
+    logger : callable, default=print
+        Logging function.
+
+    Returns
+    -------
+    unitblocks : dict
+        Modified dictionary with merged blocks split into two entries.
+    """
+    keys = list(unitblocks.keys())
+    candidates = []
+    for k in keys:
+        if not k.startswith("DCNetworkBlock_"):
+            continue
+        blk = unitblocks[k]
+        name = blk.get("name", "")
+        if isinstance(name, str) and delimiter in name:
+            candidates.append(k)
+
+    if not candidates:
+        logger("[split] No merged DCNetworkBlock entries found; nothing to do.")
+        return unitblocks
+
+    # Next fresh index for UnitBlock/DCNetworkBlock
+    def _next_index():
+        max_idx = -1
+        for kk in unitblocks.keys():
+            if "_" in kk and kk.split("_")[-1].isdigit():
+                max_idx = max(max_idx, int(kk.split("_")[-1]))
+        return max_idx + 1
+
+    for k in candidates:
+        blk = unitblocks[k]
+        merged_name = blk.get("name", "")
+        parts = merged_name.split(delimiter)
+        if len(parts) != 2:
+            logger(f"[split] Skipping '{k}' because name does not split cleanly: {merged_name}")
+            continue
+        name_ch, name_dis = parts[0].strip(), parts[1].strip()
+
+        flow = blk.get("FlowValue", None)
+        if flow is None:
+            logger(f"[split] Block '{k}' has no FlowValue; skipping.")
+            continue
+
+        flow_charge = np.maximum(flow, 0.0)
+        flow_dis    = np.maximum(-flow, 0.0)
+
+        base_charge = dict(blk)
+        base_dis    = dict(blk)
+
+        base_charge["name"] = name_ch
+        base_charge["FlowValue"] = flow_charge
+
+        base_dis["name"] = name_dis
+        base_dis["FlowValue"] = flow_dis
+
+        if reuse_index_for_first:
+            idx_first = int(k.split("_")[-1])
+            key_first = f"DCNetworkBlock_{idx_first}"
+            enum_first = f"UnitBlock_{idx_first}"
+
+            idx_second = _next_index()
+            key_second = f"DCNetworkBlock_{idx_second}"
+            enum_second = f"UnitBlock_{idx_second}"
+
+            base_charge["enumerate"] = enum_first
+            unitblocks[key_first] = base_charge
+
+            base_dis["enumerate"] = enum_second
+            unitblocks[key_second] = base_dis
+        else:
+            del unitblocks[k]
+            idx_first = _next_index()
+            idx_second = idx_first + 1
+            key_first = f"DCNetworkBlock_{idx_first}"
+            key_second = f"DCNetworkBlock_{idx_second}"
+            base_charge["enumerate"] = f"UnitBlock_{idx_first}"
+            base_dis["enumerate"] = f"UnitBlock_{idx_second}"
+            unitblocks[key_first] = base_charge
+            unitblocks[key_second] = base_dis
+
+        logger(f"[split] '{k}' -> '{name_ch}' + '{name_dis}'")
+
+    return unitblocks
+
+
 class FakeVariable:
     """
     A dummy wrapper used to emulate PyPSA-style model.variable.solution attributes.
