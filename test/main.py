@@ -72,7 +72,7 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     if os.path.exists(solution_file):
         os.remove(solution_file)
     
-    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file)
+    result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, log_executable_call=True)
     
     statistics = network.statistics()
     operational_cost = statistics['Operational Expenditure'].sum()

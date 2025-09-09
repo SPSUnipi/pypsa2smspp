@@ -46,21 +46,22 @@ from pypsa2smspp.network_correction import (
 
 times = dict()
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_10_elec_1h_europe.nc")
-investment_bool = True
+n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
+investment_bool = False
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 n_smspp = clean_ciclicity_storage(n_smspp)
-n_smspp.links.p_nom_extendable = True
+
 
 # n_smspp = clean_storage_units(n_smspp)
 
-# n_smspp = clean_stores(n_smspp)
+n_smspp = clean_stores(n_smspp)
 
 
 if investment_bool:
     n_smspp = add_slack_unit(n_smspp)
+    n_smspp.links.p_nom_extendable = True
 else:
     n_smspp.generators.p_nom_extendable = False
     n_smspp.lines.s_nom_extendable = False

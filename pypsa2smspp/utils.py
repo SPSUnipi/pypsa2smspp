@@ -289,7 +289,8 @@ def get_attr_name(component_type: str, carrier: str | None = None, renewable_car
         elif carrier == "slack":
             return "SlackUnitBlock_parameters"
         else:
-            return "ThermalUnitBlock_parameters"
+            return "IntermittentUnitBlock_parameters"
+            # return "ThermalUnitBlock_parameters"
 
     # StorageUnit
     if component_type == "StorageUnit":
