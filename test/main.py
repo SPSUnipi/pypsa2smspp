@@ -61,6 +61,7 @@ print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
 
+
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig")  # load a default config file [highs solver]

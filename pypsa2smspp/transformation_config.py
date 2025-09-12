@@ -33,6 +33,8 @@ class TransformationConfig:
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
+            "InvestmentCost": lambda capital_cost: capital_cost,
+            "MaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item()
         }
 
         # Parameters for thermal units
@@ -71,7 +73,11 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda p: p[0][0],
             "InitialStorage": lambda state_of_charge, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge[0][0],
-            "Cost": lambda marginal_cost: marginal_cost
+            "Cost": lambda marginal_cost: marginal_cost,
+            "BatteryInvestmentCost": lambda capital_cost: capital_cost,
+            "ConverterInvestmentCost": 0.0,
+            "BatteryMaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item(),
+            "ConverterMaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: 10*p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item()
             }
 
         self.BatteryUnitBlock_store_parameters = {
@@ -89,7 +95,11 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours)[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
-            "Cost": lambda marginal_cost: marginal_cost
+            "Cost": lambda marginal_cost: marginal_cost,
+            "BatteryInvestmentCost": lambda capital_cost: capital_cost,
+            "ConverterInvestmentCost": 0.0,
+            "BatteryMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
+            "ConverterMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: 10*e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
             }
 
         self.Lines_parameters = {
