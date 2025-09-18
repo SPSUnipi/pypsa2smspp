@@ -83,7 +83,8 @@ class TransformationConfig:
         self.BatteryUnitBlock_store_parameters = {
             "Kappa": 1.0,
             "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
-            "MinPower": lambda e_nom, e_min_pu, max_hours, e_nom_extendable: (e_nom * e_min_pu / max_hours).where(~e_nom_extendable, e_min_pu),
+            "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch: 1 / efficiency_dispatch[0],
@@ -96,10 +97,10 @@ class TransformationConfig:
             "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours)[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
             "Cost": lambda marginal_cost: marginal_cost,
-            "BatteryInvestmentCost": lambda capital_cost: capital_cost,
-            "ConverterInvestmentCost": 0.0,
-            "BatteryMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
-            "ConverterMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: 10*e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
+            # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
+            # "ConverterInvestmentCost": 1.0,
+            # "BatteryMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
+            # "ConverterMaxCapacityDesign": lambda e_nom, e_nom_extendable, e_nom_max: 10*e_nom_max.replace(np.inf, 1e7).item() if e_nom_extendable.item() else e_nom.item(),
             }
 
         self.Lines_parameters = {

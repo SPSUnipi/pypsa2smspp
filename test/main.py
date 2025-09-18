@@ -48,23 +48,24 @@ nd = NetworkDefinition(config)
 nd.n = add_slack_unit(nd.n)
 nd.n = clean_ciclicity_storage(nd.n)
 
+
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
 
 # network.export_to_netcdf("test_pypsa.nc")
 
-# network.model.to_file(fn = "f.lp")
+network.model.to_file(fn = "pypsa.lp")
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network, merge_links=False)
+transformation = Transformation(network, merge_links=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
 
-
-if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
+a = 5
+if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or a == 5:
     ### UCBlock configuration ###
-    configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig")  # load a default config file [highs solver]
+    configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig_grb")  # load a default config file [highs solver]
     temporary_smspp_file = "output/network_uc_hydro_0011.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
     solution_file = "output/solution_uc_hydro_0011.nc"
@@ -77,7 +78,11 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     
     statistics = network.statistics()
     operational_cost = statistics['Operational Expenditure'].sum()
-    error = (operational_cost - result.objective_value) / operational_cost * 100
+    # error = (operational_cost - result.objective_value) / operational_cost * 100
+
+    objective_pypsa = network.objective # + network.objective_constant
+    objective_smspp = result.objective_value
+    error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
     
     print(f"Error PyPSA-SMS++ of {error}%")
     
