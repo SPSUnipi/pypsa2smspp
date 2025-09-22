@@ -84,14 +84,14 @@ class TransformationConfig:
             "Kappa": 1.0,
             "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
-            "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            # "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch: 1 / efficiency_dispatch[0],
             "StoringBatteryRho": lambda efficiency_store: efficiency_store[0],
             "Demand": 0.0,
             "MinStorage": 0.0,
-            "MaxStorage": lambda e_nom_opt: e_nom_opt,
+            "MaxStorage": lambda e_nom: e_nom,
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours)[0],
@@ -181,9 +181,10 @@ class TransformationConfig:
         # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
         self.BatteryUnitBlock_inverse = {
             "e_nom": lambda designvariable: designvariable,
-            "p_dispatch": lambda activepower: np.maximum(activepower, 0),
-            "p_store": lambda activepower: np.maximum(-activepower, 0),
-            "state_of_charge": lambda storagelevel: storagelevel,
+            # "p_dispatch": lambda activepower: np.maximum(activepower, 0),
+            # "p_store": lambda activepower: np.maximum(-activepower, 0),
+            "p": lambda activepower: activepower,
+            "e": lambda storagelevel: storagelevel,
             }
         
         self.DCNetworkBlock_lines_inverse = {
@@ -217,4 +218,4 @@ class TransformationConfig:
             "Bus": "buses"
         }
 
-        self.max_hours_stores = 10
+        self.max_hours_stores = 1

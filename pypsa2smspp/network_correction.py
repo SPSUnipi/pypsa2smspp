@@ -166,31 +166,46 @@ def reduced_snapshot(n):
         n.generators_t[key].drop(columns=gens_to_drop, inplace=True, errors="ignore")
     return n
 
-def add_slack_unit(n):
+def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     """
-    Adds a high-cost slack generator to each bus in the network.
-    
+    Adds a high-cost slack generator to each bus in the network,
+    excluding buses whose names end with specific suffixes (e.g., H2, battery).
+
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to which slack units will be added.
+    exclude_suffixes : tuple of str, optional
+        Bus-name suffixes (case-insensitive) to exclude. Default: ("H2", "battery")
     """
-    # Compute the maximum demand over all time steps and buses
+    # Compute the maximum total demand over all time steps
     max_total_demand = n.loads_t.p_set.sum(axis=1).max()
 
+    # Helper to decide if a bus should be excluded
+    def _is_excluded(bus_name: str) -> bool:
+        bn = str(bus_name).strip().lower()
+        return any(bn.endswith(sfx.lower()) for sfx in exclude_suffixes)
+
+    # Iterate over eligible buses only
     for bus in n.buses.index:
-        n.add("Generator",
-              name=f"slack_unit {bus}",
-              carrier = 'slack',
-              bus=bus,
-              p_nom=max_total_demand,
-              p_max_pu=1,
-              p_min_pu=0,
-              marginal_cost=10000,
-              capital_cost=0,
-              p_nom_extendable = False)
-        
+        if _is_excluded(bus):
+            continue
+
+        n.add(
+            "Generator",
+            name=f"slack_unit {bus}",
+            carrier="slack",
+            bus=bus,
+            p_nom=max_total_demand,
+            p_max_pu=1,
+            p_min_pu=0,
+            marginal_cost=10000,
+            capital_cost=0,
+            p_nom_extendable=False,
+        )
+
     return n
+
 
 
 def from_investment_to_uc(n):

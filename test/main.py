@@ -10,6 +10,11 @@ import os
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+import os
+from pathlib import Path
+print("CWD =", os.getcwd())
+print("OUT exists?", Path("output").exists(), "writable?", os.access("output", os.W_OK))
+
 # Aggiunge il percorso relativo per la cartella `config`
 sys.path.append(os.path.abspath("../scripts"))
 # Aggiunge il percorso relativo per la cartella `scripts`

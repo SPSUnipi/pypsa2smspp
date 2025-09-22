@@ -454,7 +454,9 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         new_row["capital_cost"] = capex_merged
         new_row["p_nom"] = p_nom_merged
         new_row["p_nom_extendable"] = pnom_extendable
-        new_row["p_min_pu"] = -1.0
+        new_row["p_min_pu"] = -eta_dis # Correction to account limit of perspective
+        # If you don't add this, the store is gonna produce too much (to have -1, they can discharge 1/eta_dis)
+        # To correct if there are problems with sector coupling
 
         # If there are p_nom_min/max columns, keep them consistent (safe defaults)
         for col in ["p_nom_min", "p_nom_max"]:
