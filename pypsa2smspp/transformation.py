@@ -41,7 +41,9 @@ from .utils import (
     merge_lines_and_links,
     rename_links_to_lines,
     build_store_and_merged_links,
-    correct_dimensions
+    correct_dimensions,
+    explode_multilinks_into_branches,
+    add_hyperarcid_to_parameters
 )
 from .inverse import (
     component_definition,
@@ -159,7 +161,8 @@ class Transformation:
         """
         Iterates over the network components and adds them as unit blocks.
         """
-    
+        
+        # Probably useful to group this part as 'preprocessing' as it is independent from the rest
         generator_node = []
         investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
         unitblock_index = 0
@@ -174,8 +177,13 @@ class Transformation:
         else:
             stores_df, links_merged_df = build_store_and_merged_links(
                 n, merge_links=False, logger=logger) 
-
-    
+        
+        if "NumberBranches" in self.dimensions['NetworkBlock']:
+            n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
+            links_merged_df = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
+            add_hyperarcid_to_parameters(self.config.Lines_parameters, self.config.Links_parameters)
+        
+        
         # Iterate in the same order as before
         for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
     

@@ -28,6 +28,7 @@ conversion_dict = {
     "NR": "NumberReservoirs",
     "NP": "TotalNumberPieces",
     "Nass": "NumAssets",
+    "NB": "NumberBranches",
     "1": 1
 }
 

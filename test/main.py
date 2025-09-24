@@ -5,22 +5,35 @@ Created on Tue Oct 29 14:14:38 2024
 @author: aless
 """
 
-import sys
-import os
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-import os
+# --- Force working directory to this file's folder and build robust paths ---
+import os, sys
 from pathlib import Path
-print("CWD =", os.getcwd())
-print("OUT exists?", Path("output").exists(), "writable?", os.access("output", os.W_OK))
 
-# Aggiunge il percorso relativo per la cartella `config`
-sys.path.append(os.path.abspath("../scripts"))
-# Aggiunge il percorso relativo per la cartella `scripts`
-sys.path.append(os.path.abspath("."))
+HERE = Path(__file__).resolve().parent          # .../pypsa2smspp/test
+os.chdir(HERE)                                  # force CWD regardless of VSCode
 
-DIR = os.path.dirname(os.path.abspath(__file__))
+print(">>> FORCED CWD:", Path.cwd())
+
+# Ensure PYTHONPATH for imports from repo root (e.g., scripts/)
+REPO_ROOT = HERE.parent                          # .../pypsa2smspp
+SCRIPTS = (REPO_ROOT / "scripts").resolve()
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+# Safe output directory (create if missing, check writability)
+OUT = HERE / "output"
+OUT.mkdir(parents=True, exist_ok=True)
+if not os.access(OUT, os.W_OK):
+    raise PermissionError(f"Output dir not writable: {OUT} (check owner/perms)")
+
+# Build your output file path here and pass it as string to downstream code
+# OUTPUT_NC = OUT / "network_uc_hydro_0011.nc"
+# If a stale, read-only file is blocking writes, you can optionally remove it:
+# if OUTPUT_NC.exists():
+#     OUTPUT_NC.unlink()
+
+# print(">>> Output target:", OUTPUT_NC)
+# ---------------------------------------------------------------------------
 
 
 from configs.test_config import TestConfig
@@ -59,6 +72,7 @@ network.optimize(solver_name='gurobi')
 
 # network.export_to_netcdf("test_pypsa.nc")
 
+
 network.model.to_file(fn = "pypsa.lp")
 #%% Transformation class
 then = datetime.now()
@@ -66,7 +80,7 @@ transformation = Transformation(network, merge_links=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
-
+m
 a = 5
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or a == 5:
     ### UCBlock configuration ###
