@@ -293,6 +293,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n):
     if "NumberBranches" in dimensions['NetworkBlock']:
         # To understand if all of these are needed
         dimensions['NetworkBlock']['NumberBranches'] -= len(stores_df)
+        dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
 
 
