@@ -282,6 +282,21 @@ def hydroblock_dimensions():
     dimensions["TotalNumberPieces"] = 2
     return dimensions
 
+# -------------------------------- Correction --------------------------------------
+
+def correct_dimensions(dimensions, stores_df, links_merged_df, n):
+    dimensions['NetworkBlock']['Links'] -= len(stores_df)
+    dimensions['NetworkBlock']['combined'] -= len(stores_df)
+    dimensions['UCBlock']['NumberLines'] -= len(stores_df)
+    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df[stores_df['e_nom_extendable'] == True])
+    
+    if "NumberBranches" in dimensions['NetworkBlock']:
+        # To understand if all of these are needed
+        dimensions['NetworkBlock']['NumberBranches'] -= len(stores_df)
+        # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
+
+
+
 #%%
 ###############################################################################################
 ############################### Direct transformation #########################################
@@ -340,6 +355,7 @@ def get_attr_name(component_type: str, carrier: str | None = None, renewable_car
 
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
 
+# ------------------------ Pre-processing functions --------------------------------
 
 def build_store_and_merged_links(n, merge_links=False, logger=print):
     """
@@ -509,96 +525,99 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     return stores_df, links_merged_df
 
 
+
 def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, logger=print):
     """
     Split multi-output links in `links_merged_df` into one row per output branch.
     Does NOT touch `n.links`. Returns a new DataFrame where:
-      - Each physical link row produces N rows (one per non-empty output).
-      - Column 'Hyper' identifies the original physical link for all its branches.
-      - 'name' is made unique as: f"{original_name}__to_{busX}".
+      - Each physical link row produces N rows (one per non-empty output) if it is a multilink;
+        otherwise produces exactly 1 row identical in name to the original.
+      - Column 'hyper' identifies the original physical link for all its branches.
+      - 'name' is suffixed as f"{original}__to_{busX}" ONLY for true multilinks.
       - bus2/bus3/... and efficiency2/efficiency3/... columns are DROPPED.
-    Also returns NumberBranches (len of the exploded df).
-
-    Assumptions:
-      - 'bus0' is the source; 'bus1' is the first (always present) output.
-      - 'efficiency' is the efficiency for bus1.
-      - Additional outputs follow the pattern: bus2, bus3, ... and efficiency2, efficiency3, ...
-      - Empty outputs are NaN or empty-string.
+    NOTE: we keep the function signature; if you need the next hyper_id, you can return it too.
     """
     if links_merged_df.empty:
         return links_merged_df.copy()
 
     df = links_merged_df.copy()
 
-    # Identify additional bus/efficiency columns dynamically
+    # Identify extra bus/eff columns dynamically
     bus_extra_cols = []
-    eff_extra_cols = []
     k = 2
     while f"bus{k}" in df.columns:
         bus_extra_cols.append(f"bus{k}")
-        eff_extra_cols.append(f"efficiency{k}")
         k += 1
 
-    # Quick check: if no bus2+ columns exist, there is nothing to explode.
+    # If no bus2+ columns exist at all, nothing to explode; just attach hyper & is_primary_branch
     if not bus_extra_cols:
-        return df
+        out = df.copy()
+        out["hyper"] = np.arange(hyper_id, hyper_id + len(out), dtype=int)
+        out["is_primary_branch"] = True
+        return out
 
-    # Build per-row outputs: ('bus_col', 'eff_col') pairs
-    def _non_empty_mask(series: pd.Series) -> pd.Series:
-        return series.notna() & (series.astype(str).str.strip() != "")
+    def _non_empty(val) -> bool:
+        return pd.notna(val) and str(val).strip() != ""
 
     new_rows = []
 
-    # Preserve the original column order as much as possible; we will drop extra cols later
-    base_cols = list(df.columns)
-    # We will add 'Hyper' at the end
-    if "Hyper" not in base_cols:
-        base_cols.append("Hyper")
-
     for link_name, row in df.iterrows():
-        # First output is always (bus1, efficiency)
-        outputs = [("bus1", "efficiency")]
-
-        # Add any valid extra outputs that are actually populated
+        # Gather valid extra outputs for THIS row
+        extra_outputs = []
         for idx, bcol in enumerate(bus_extra_cols, start=2):
-            # Find matching efficiency column if present
-            ecol = f"efficiency{idx}"
-            if bcol in df.columns and _non_empty_mask(pd.Series([row[bcol]])).iloc[0]:
-                # If efficiency column doesn't exist, this is an error: better to fail fast
+            bval = row.get(bcol, np.nan)
+            if _non_empty(bval):
+                ecol = f"efficiency{idx}"
                 if ecol not in df.columns or pd.isna(row.get(ecol, np.nan)):
-                    raise ValueError(
-                        f"Multi-link '{link_name}' has '{bcol}={row[bcol]}' but missing '{ecol}'."
-                    )
-                outputs.append((bcol, ecol))
+                    raise ValueError(f"Multi-link '{link_name}' has '{bcol}={bval}' but missing '{ecol}'.")
+                extra_outputs.append((bcol, ecol))
 
-        # Create one row per output
-        for bcol, ecol in outputs:
+        is_multilink = len(extra_outputs) > 0
+
+        if not is_multilink:
+            # Single-output link: keep as-is (no renaming)
             out_row = row.copy()
-
-            # Set the target bus as the one from the current output
-            out_row["bus1"] = row[bcol]
-            # Set the efficiency as the one for the current output
-            out_row["efficiency"] = float(row[ecol])
-
-            # Make the 'name' unique and descriptive
-            out_row.name = f"{link_name}__to_{out_row['bus1']}"
-
-            # Set Hyper equal for all branches of this physical link
             out_row["hyper"] = hyper_id
-
+            out_row["is_primary_branch"] = True
             new_rows.append(out_row)
+            hyper_id += 1
+            continue
+
+        # True multilink: create one row per output (bus1 + extras) and rename
+        # primary branch = bus1
+        primary_bus = row["bus1"]
+        primary_eff = row["efficiency"]
+
+        # primary
+        pr = row.copy()
+        pr["bus1"] = primary_bus
+        pr["efficiency"] = float(primary_eff)
+        pr.name = f"{link_name}__to_{primary_bus}"
+        pr["hyper"] = hyper_id
+        pr["is_primary_branch"] = True
+        new_rows.append(pr)
+
+        # extras
+        for bcol, ecol in extra_outputs:
+            child = row.copy()
+            child["bus1"] = row[bcol]
+            child["efficiency"] = float(row[ecol])
+            child.name = f"{link_name}__to_{child['bus1']}"
+            child["hyper"] = hyper_id
+            child["is_primary_branch"] = False
+            new_rows.append(child)
 
         hyper_id += 1
 
     exploded = pd.DataFrame(new_rows)
 
     # Drop the extra bus/eff columns to avoid ambiguity downstream
-    cols_to_drop = [c for c in exploded.columns if
-                    (c.startswith("bus") and c not in ("bus0", "bus1")) or
-                    (c.startswith("efficiency") and c != "efficiency")]
+    cols_to_drop = [c for c in exploded.columns
+                    if (c.startswith("bus") and c not in ("bus0", "bus1"))
+                    or (c.startswith("efficiency") and c != "efficiency")]
     exploded = exploded.drop(columns=cols_to_drop, errors="ignore")
 
-    # Simple log
+    # Log
     if callable(logger):
         n_phys = len(df)
         number_branches = len(exploded)
@@ -606,21 +625,9 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
         logger(f"[multilink] Exploded {n_phys} physical links into {number_branches} branches (+{extra}).")
 
     return exploded
+    # If you need the next hyper_id, you can instead: `return exploded, hyper_id`
 
 
-
-def correct_dimensions(dimensions, stores_df, links_merged_df, n):
-    dimensions['NetworkBlock']['Links'] -= len(stores_df)
-    dimensions['NetworkBlock']['combined'] -= len(stores_df)
-    dimensions['UCBlock']['NumberLines'] -= len(stores_df)
-    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df[stores_df['e_nom_extendable'] == True])
-    
-    if "NumberBranches" in dimensions['NetworkBlock']:
-        # To understand if all of these are needed
-        dimensions['NetworkBlock']['NumberBranches'] -= len(stores_df)
-        dimensions['NetworkBlock']['combined'] = dimensions['NetworkBlock']['NumberBranches']
-        dimensions['NetworkBlock']['Links'] = dimensions['NetworkBlock']['combined'] - dimensions['NetworkBlock']['Lines']
-        # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
 
 
 # Translate into generic once the ucblock\investmentblock general use is defined  
@@ -641,7 +648,20 @@ def add_hyperarcid_to_parameters(Lines_parameters, Links_parameters):
     # For links
     if "HyperArcID" not in Links_parameters:
         Links_parameters["HyperArcID"] = hyper_def
+        
+    Links_parameters.update({
+    "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable, is_primary_branch:
+        (p_nom[is_primary_branch] * p_max_pu[is_primary_branch]).where(
+            ~p_nom_extendable[is_primary_branch], p_max_pu[is_primary_branch]
+        ).values,
+    "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable, is_primary_branch:
+        (p_nom[is_primary_branch] * p_min_pu[is_primary_branch]).where(
+            ~p_nom_extendable[is_primary_branch], p_min_pu[is_primary_branch]
+        ).values,
+    "LineSusceptance": lambda p_nom, is_primary_branch:
+        np.zeros_like(p_nom[is_primary_branch].values)})
 
+# ------------------------------------------
 
 def process_dcnetworkblock(
     components_df,
@@ -826,7 +846,7 @@ def resolve_param_value(
     block_class = attr_name.split("_")[0]
     size = smspp_parameters[block_class]['Size'][key]
 
-    if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]']:
+    if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]']:
         weight = param in [
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
             'start_up_cost', 'stand_by_cost'

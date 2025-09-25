@@ -178,7 +178,7 @@ class Transformation:
             stores_df, links_merged_df = build_store_and_merged_links(
                 n, merge_links=False, logger=logger) 
         
-        if "NumberBranches" in self.dimensions['NetworkBlock']:
+        if self.dimensions["NetworkBlock"]["NumberBranches"] > self.dimensions["NetworkBlock"]["NumberLines"]:
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
             links_merged_df = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
             add_hyperarcid_to_parameters(self.config.Lines_parameters, self.config.Links_parameters)

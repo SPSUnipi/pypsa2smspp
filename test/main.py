@@ -80,7 +80,7 @@ transformation = Transformation(network, merge_links=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 tran = transformation.convert_to_blocks()
-m
+
 a = 5
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or a == 5:
     ### UCBlock configuration ###
