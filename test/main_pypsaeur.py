@@ -5,19 +5,35 @@ Created on Wed May 28 16:25:30 2025
 @author: aless
 """
 
-import sys
-import os
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+# --- Force working directory to this file's folder and build robust paths ---
+import os, sys
+from pathlib import Path
 
+HERE = Path(__file__).resolve().parent          # .../pypsa2smspp/test
+os.chdir(HERE)                                  # force CWD regardless of VSCode
 
-# Aggiunge il percorso relativo per la cartella `config`
-sys.path.append(os.path.abspath("../scripts"))
-# Aggiunge il percorso relativo per la cartella `scripts`
-sys.path.append(os.path.abspath("."))
+print(">>> FORCED CWD:", Path.cwd())
 
-DIR = os.path.dirname(os.path.abspath(__file__))
+# Ensure PYTHONPATH for imports from repo root (e.g., scripts/)
+REPO_ROOT = HERE.parent                          # .../pypsa2smspp
+SCRIPTS = (REPO_ROOT / "scripts").resolve()
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
+# Safe output directory (create if missing, check writability)
+OUT = HERE / "output"
+OUT.mkdir(parents=True, exist_ok=True)
+if not os.access(OUT, os.W_OK):
+    raise PermissionError(f"Output dir not writable: {OUT} (check owner/perms)")
+
+# Build your output file path here and pass it as string to downstream code
+# OUTPUT_NC = OUT / "network_uc_hydro_0011.nc"
+# If a stale, read-only file is blocking writes, you can optionally remove it:
+# if OUTPUT_NC.exists():
+#     OUTPUT_NC.unlink()
+
+# print(">>> Output target:", OUTPUT_NC)
+# ---------------------------------------------------------------------------
 
 from configs.test_config import TestConfig
 from network_definition import NetworkDefinition
@@ -46,8 +62,8 @@ from pypsa2smspp.network_correction import (
 
 times = dict()
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
-investment_bool = False
+n_smspp = pypsa.Network("networks/base_s_2_elec_1h_inv.nc")
+investment_bool = True
 
 n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
