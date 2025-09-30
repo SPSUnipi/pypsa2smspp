@@ -182,6 +182,24 @@ def get_nominal_aliases(component_type, nominal_attrs):
         base + "_max": "p_nom_max",
     }
 
+
+def first_scalar(x):
+    """Return the first scalar value from a pandas/NumPy 1-length container, else cast to float.
+    This keeps code robust when inputs come as 1-length Series/Index/ndarray.
+    """
+    try:
+        # pandas Series/Index
+        if hasattr(x, "iloc"):
+            return float(x.iloc[0])
+        # numpy array / list / tuple
+        if hasattr(x, "__len__") and not hasattr(x, "shape") or (hasattr(x, "shape") and x.shape != ()):
+            return float(list(x)[0])
+        # 0-d numpy or plain scalar
+        return float(getattr(x, "item", lambda: x)())
+    except Exception:
+        return float(x)
+
+
 #%%
 #################################################################################################
 ############################### Dimensions for SMS++ ############################################
@@ -629,8 +647,6 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
     # If you need the next hyper_id, you can instead: `return exploded, hyper_id`
 
 
-
-
 # Translate into generic once the ucblock\investmentblock general use is defined  
 def add_hyperarcid_to_parameters(Lines_parameters, Links_parameters):
     """
@@ -661,6 +677,74 @@ def add_hyperarcid_to_parameters(Lines_parameters, Links_parameters):
         ).values,
     "LineSusceptance": lambda p_nom, is_primary_branch:
         np.zeros_like(p_nom[is_primary_branch].values)})
+
+    
+# Sempre nella classe Transformation
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None):
+    """
+    Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
+    Keys are only added if missing, so it remains idempotent.
+    """
+
+    # --- IntermittentUnitBlock ---
+    d = IntermittentUnitBlock_parameters
+
+    # !!! "InvestmentCost"
+    if "InvestmentCost" not in d:
+        # Pass-through of capital_cost (assumed already scalar or 1-length)
+        d["InvestmentCost"] = lambda capital_cost: capital_cost
+
+    # !!! "MaxCapacityDesign"
+    if "MaxCapacityDesign" not in d:
+        # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
+        def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
+            p_nom_max_safe = p_nom_max.replace(np.inf, 1e7)
+            return (first_scalar(p_nom_max_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        d["MaxCapacityDesign"] = _max_cap_design
+
+    # --- BatteryUnitBlock_store ---
+    b = BatteryUnitBlock_store_parameters
+
+    # !!! "BatteryInvestmentCost"
+    if "BatteryInvestmentCost" not in b:
+        b["BatteryInvestmentCost"] = lambda capital_cost: capital_cost
+
+    # !!! "ConverterInvestmentCost"
+    if "ConverterInvestmentCost" not in b:
+        b["ConverterInvestmentCost"] = 0.0
+
+    # !!! "BatteryMaxCapacityDesign"
+    if "BatteryMaxCapacityDesign" not in b:
+        def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
+            e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
+            return (first_scalar(e_nom_max_safe)
+                    if bool(first_scalar(e_nom_extendable))
+                    else first_scalar(e_nom))
+        b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
+
+    # !!! "ConverterMaxCapacityDesign"
+    if "ConverterMaxCapacityDesign" not in b:
+        def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
+            e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
+            # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
+            return (10.0 * first_scalar(e_nom_max_safe)
+                    if bool(first_scalar(e_nom_extendable))
+                    else first_scalar(e_nom))
+        b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
+
+    
+    # --- IntermittentUnitBlock_inverse ---
+    IntermittentUnitBlock_inverse["p_nom"] = (
+        lambda intermittentdesign: intermittentdesign
+    )
+
+    # --- BatteryUnitBlock_inverse ---
+    BatteryUnitBlock_inverse["e_nom"] = (
+        lambda batterydesign: batterydesign
+    )
+
 
 # ------------------------------------------
 

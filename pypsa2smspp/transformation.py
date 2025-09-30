@@ -43,7 +43,8 @@ from .utils import (
     build_store_and_merged_links,
     correct_dimensions,
     explode_multilinks_into_branches,
-    add_hyperarcid_to_parameters
+    add_hyperarcid_to_parameters,
+    apply_expansion_overrides
 )
 from .inverse import (
     component_definition,
@@ -88,7 +89,7 @@ class Transformation:
         Parameters for a ThermalUnitBlock
     """
 
-    def __init__(self, n, merge_links=False, config=TransformationConfig()):
+    def __init__(self, n, merge_links=False, expansion_ucblock: bool = False, config=TransformationConfig()):
         """
         Initializes the Transformation class.
 
@@ -115,6 +116,7 @@ class Transformation:
         
         self.config = config
         self.merge_links = merge_links
+        self.expansion_ucblock = expansion_ucblock
         
         n.stores["max_hours"] = config.max_hours_stores
         
@@ -162,6 +164,7 @@ class Transformation:
         Iterates over the network components and adds them as unit blocks.
         """
         
+        # ------------- Preprocessing ----------------
         # Probably useful to group this part as 'preprocessing' as it is independent from the rest
         generator_node = []
         investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
@@ -182,7 +185,11 @@ class Transformation:
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
             links_merged_df = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
             add_hyperarcid_to_parameters(self.config.Lines_parameters, self.config.Links_parameters)
+
+        if getattr(self, "expansion_ucblock", False):
+            apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse)
         
+        # ------------- Main loop over components ----------------
         
         # Iterate in the same order as before
         for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
@@ -386,13 +393,19 @@ class Transformation:
         else:
             nom = nominal_attrs[components_type]
             ext = components_df[f"{nom}_extendable"].iloc[0]
-            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], "DesignVariable": components_df[nom].values, "Extendable":ext, "variables": converted_dict}
+            design_key = (
+                "DesignVariable" if not self.expansion_ucblock else
+                ("IntermittentDesign" if "IntermittentUnitBlock" in name else
+                "BatteryDesign" if "BatteryUnitBlock" in name else
+                "DesignVariable")   # fallback
+            )
+            self.unitblocks[name] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], design_key: components_df[nom].values, "Extendable":ext, "variables": converted_dict}
         
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']
             self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
             
-            self.unitblocks[f"{attr_name.split('_')[0]}_{index}"]['dimensions'] = dimensions
+            self.unitblocks[name]['dimensions'] = dimensions
         
     ### 6 ###
     def add_demand(self, n):
@@ -770,16 +783,16 @@ class Transformation:
         # -----------------
         # Check if investment problem
         # -----------------
-        # if self.dimensions['InvestmentBlock']['NumAssets'] > 0:
-        #     name_id = 'InvestmentBlock'
-        #     sn = self.convert_to_investmentblock(master, index_id, name_id)
+        if (not self.expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
+             name_id = 'InvestmentBlock'
+             sn = self.convert_to_investmentblock(master, index_id, name_id)
     
-        #     # InnerBlock for UC is inside InvestmentBlock
-        #     master = sn.blocks[name_id]
-        #     name_id = 'InnerBlock'
-        #     index_id += 1
-        # else:
-        #     name_id = 'Block_0'
+             # InnerBlock for UC is inside InvestmentBlock
+             master = sn.blocks[name_id]
+             name_id = 'InnerBlock'
+             index_id += 1
+        else:
+            name_id = 'Block_0'
         
         name_id = 'Block_0'
     
