@@ -53,7 +53,7 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost_intermittent,
     clean_storage_units,
     clean_stores,
-    reduced_snapshot,
+    reduce_snapshots_and_scale_costs,
     parse_txt_file,
     compare_networks,
     add_slack_unit,
@@ -69,10 +69,11 @@ n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 n_smspp = clean_ciclicity_storage(n_smspp)
 
+n_smspp = reduce_snapshots_and_scale_costs(n_smspp, 240) 
 
 # n_smspp = clean_storage_units(n_smspp)
 
-n_smspp = clean_stores(n_smspp)
+# n_smspp = clean_stores(n_smspp)
 
 
 if investment_bool:
@@ -156,7 +157,7 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
 else:
     ### InvestmentBlock configuration ###
     configfile = pysmspp.SMSConfig(template="InvestmentBlock/BSPar.txt")
-    temporary_smspp_file = "output/temp_network_investment.nc"
+    temporary_smspp_file = "output/network_inv_240_bat.nc"
     output_file = "output/temp_log_file_investment.txt"  # path to the output file (optional)
     solution_file = "output/temp_solution_file_investment.nc"
     

@@ -66,28 +66,53 @@ def evaluate_function(func, normalized_keys, unit_block, df):
 
 def dataarray_components(n, value, component, unit_block, key):
     """
-    Generates the dimension and coordinate structure for a DataArray from inverse values.
+    Generates dims/coords for a DataArray from inverse values.
+    Handles scalars (0-D), 1-D (snapshot or ext), and (T,1) 2-D.
     """
-    if isinstance(value, np.ndarray):
-        if value.ndim == 1 and len(value) == len(n.snapshots):
-            dims = ["snapshot", component]
-            coords = {
-                "snapshot": n.snapshots,
-                component: [unit_block["name"]]
-            }
-            value = value[:, np.newaxis]
-        elif value.ndim == 1:
-            dims = [f"{component}-ext"]
-            coords = {f"{component}-ext": [unit_block["name"]]}
-        else:
-            raise ValueError(f"Unsupported shape for variable {key}: {value.shape}")
-    else:
-        value = np.array([value])
+    # Unmask masked arrays; use NaN for masked scalars
+    if isinstance(value, np.ma.MaskedArray):
+        value = value.filled(np.nan)
+
+    # Coerce to ndarray
+    value = np.asarray(value)
+
+    # Case A: scalar (0-D) -> treat as single 'ext' value
+    if value.ndim == 0:
+        value = value.reshape(1)  # shape -> (1,)
         dims = [f"{component}-ext"]
         coords = {f"{component}-ext": [unit_block["name"]]}
+    
+    # Case B: 1-D
+    elif value.ndim == 1:
+        if len(value) == len(n.snapshots):
+            # time series for a single unit
+            value = value[:, np.newaxis]  # (T,) -> (T,1)
+            dims = ["snapshot", component]
+            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+        else:
+            # single value per unit (or param vector not time-based)
+            dims = [f"{component}-ext"]
+            coords = {f"{component}-ext": [unit_block["name"]]}
+    
+    # Case C: 2-D (accept (T,1) or (1,T))
+    elif value.ndim == 2:
+        T = len(n.snapshots)
+        if value.shape == (T, 1):
+            dims = ["snapshot", component]
+            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+        elif value.shape == (1, T):
+            value = value.T
+            dims = ["snapshot", component]
+            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+        else:
+            raise ValueError(f"Unsupported shape for variable {key}: {value.shape}")
+    
+    else:
+        raise ValueError(f"Unsupported ndim for variable {key}: {value.ndim}")
 
     var_name = f"{component}-{key}"
     return value, dims, coords, var_name
+
 
 
 def block_to_dataarrays(n, unit_name, unit_block, component, config) -> dict:

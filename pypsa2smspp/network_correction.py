@@ -11,6 +11,7 @@ import pandas as pd
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Union, Sequence
 
 from pypsa2smspp.constants import nominal_attrs
 
@@ -143,28 +144,119 @@ def one_bus_network(n):
     n.loads_t.p_set = pd.DataFrame(n.loads_t.p_set.sum(axis=1), index=n.loads_t.p_set.index, columns=[n.buses.index[0]])
     
     return n
-    
-def reduced_snapshot(n):
-    n.snapshots = n.snapshots[:24]
-    # Ritaglia tutte le timeseries dinamiche
-    for attr in dir(n):
-        if attr.endswith('_t'):
-            df_dict = getattr(n, attr)
-            for key in df_dict:
-                df_dict[key] = df_dict[key].loc[n.snapshots]
-                
-    # Trova gli indici dei generatori con carrier da rimuovere
-    renewable_carriers = ['solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror']
-    gens_to_drop = n.generators[n.generators.carrier.isin(renewable_carriers)].index
-    print(gens_to_drop)
-    
-    # Rimuovi da generators
-    n.generators.drop(index=gens_to_drop, inplace=True)
-    
-    # Rimuovi da tutte le timeseries relative ai generatori
-    for key in n.generators_t:
-        n.generators_t[key].drop(columns=gens_to_drop, inplace=True, errors="ignore")
-    return n
+
+
+def reduce_snapshots_and_scale_costs(
+    n,
+    target: Union[int, Sequence, pd.Index],
+    *,
+    drop_renewables: bool = False,
+    renewable_carriers: Sequence[str] = ('solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror'),
+    adjust_snapshot_weightings: bool = False,
+    evenly_spaced: bool = False,
+    inplace: bool = False,
+):
+    """
+    Reduce the number of snapshots in a PyPSA network and scale capital_costs.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network to modify.
+    target : int | Sequence | pd.Index
+        If int:
+            - keep that many snapshots (first ones, by default);
+            - if `evenly_spaced=True`, pick them evenly spaced across horizon.
+        If a sequence/index of snapshot labels, keep exactly those.
+    drop_renewables : bool, optional
+        If True, drop generators whose 'carrier' is in `renewable_carriers`.
+    renewable_carriers : Sequence[str], optional
+        Carriers to drop if `drop_renewables` is True.
+    adjust_snapshot_weightings : bool, optional
+        If True, scale n.snapshot_weightings['objective'] by (old_len / new_len).
+    evenly_spaced : bool, optional
+        If True and `target` is int, select snapshots evenly spaced instead of the first ones.
+    inplace : bool, optional
+        If False (default), operate on a copy and return it. If True, modify `n` in place.
+
+    Returns
+    -------
+    pypsa.Network
+        The modified network (or the same object if `inplace=True`).
+    """
+
+    net = n if inplace else n.copy()
+
+    old_snapshots = net.snapshots.copy()
+    old_len = len(old_snapshots)
+    if old_len == 0:
+        raise ValueError("Network has no snapshots to reduce.")
+
+    if isinstance(target, int):
+        if target <= 0:
+            raise ValueError("target (int) must be > 0.")
+        if target > old_len:
+            raise ValueError(f"target ({target}) cannot exceed original snapshots ({old_len}).")
+
+        if evenly_spaced:
+            # Equally spaced selection
+            idx = np.linspace(0, old_len - 1, target, dtype=int)
+            idx = np.unique(idx)
+            new_snapshots = old_snapshots[idx]
+        else:
+            # Just take the first N snapshots
+            new_snapshots = old_snapshots[:target]
+
+    else:
+        # Sequence of labels
+        new_snapshots = pd.Index(target)
+        missing = new_snapshots.difference(old_snapshots)
+        if len(missing) > 0:
+            raise ValueError(f"Some requested snapshots are not in the network: {missing[:5].tolist()} ...")
+
+    new_len = len(new_snapshots)
+    if new_len == 0:
+        raise ValueError("Resulting snapshot set is empty.")
+
+    # Apply new snapshots
+    net.snapshots = new_snapshots
+
+    # Slice all *_t DataFrames
+    for attr in dir(net):
+        if attr.endswith("_t"):
+            df_dict = getattr(net, attr)
+            for key, df in list(df_dict.items()):
+                if hasattr(df, "loc"):
+                    df_dict[key] = df.loc[new_snapshots]
+
+    # Optionally drop renewable generators
+    if drop_renewables and hasattr(net, "generators"):
+        to_drop = net.generators.loc[net.generators["carrier"].isin(renewable_carriers)].index
+        if len(to_drop) > 0:
+            net.generators.drop(index=to_drop, inplace=True)
+            if hasattr(net, "generators_t"):
+                for key, df in list(net.generators_t.items()):
+                    if hasattr(df, "drop"):
+                        df.drop(columns=to_drop, inplace=True, errors="ignore")
+
+    # Scale capital_costs
+    scale_capex = new_len / old_len
+    capex_tables = ["generators", "links", "stores", "storage_units", "lines", "transformers"]
+    for tab in capex_tables:
+        if hasattr(net, tab):
+            df = getattr(net, tab)
+            if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
+                df["capital_cost"] = df["capital_cost"] * scale_capex
+
+    # Optionally adjust snapshot_weightings
+    if adjust_snapshot_weightings and hasattr(net, "snapshot_weightings"):
+        sw = net.snapshot_weightings
+        if "objective" in sw.columns:
+            sw.loc[new_snapshots, "objective"] = sw.loc[new_snapshots, "objective"] * (old_len / new_len)
+
+    return net
+
+
 
 def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     """
