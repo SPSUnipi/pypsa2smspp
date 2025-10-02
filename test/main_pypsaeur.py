@@ -69,11 +69,11 @@ n_smspp = clean_global_constraints(n_smspp)
 n_smspp = clean_e_sum(n_smspp)
 n_smspp = clean_ciclicity_storage(n_smspp)
 
-n_smspp = reduce_snapshots_and_scale_costs(n_smspp, 240) 
+# n_smspp = reduce_snapshots_and_scale_costs(n_smspp, 240) 
 
 # n_smspp = clean_storage_units(n_smspp)
 
-# n_smspp = clean_stores(n_smspp)
+n_smspp = clean_stores(n_smspp)
 
 
 if investment_bool:
