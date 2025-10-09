@@ -35,8 +35,6 @@ if not os.access(OUT, os.W_OK):
 # print(">>> Output target:", OUTPUT_NC)
 # ---------------------------------------------------------------------------
 
-from configs.test_config import TestConfig
-from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
@@ -103,7 +101,7 @@ print(f"Il tempo per ottimizzare con PyPSA è di {datetime.now() - then} secondi
 
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network, merge_links=True)
+transformation = Transformation(network, merge_links=True, expansion_ucblock=False)
 times['Direct transformation'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per la trasformazione diretta è di {datetime.now() - then} secondi")
 
@@ -112,7 +110,7 @@ tran = transformation.convert_to_blocks()
 times['PySMSpp conversion'] = (datetime.now() - then).total_seconds()
 print(f"Il tempo per la conversione con pysmspp è di {datetime.now() - then} secondi")
 
-if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
+if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0  or transformation.expansion_ucblock:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig")  # load a default config file [highs solver]
     temporary_smspp_file = "output/network_ucblock.nc"  # path to temporary SMS++ file
