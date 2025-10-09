@@ -191,7 +191,7 @@ class TransformationConfig:
         
         self.DCNetworkBlock_links_inverse = {
             "p0": lambda flowvalue: flowvalue,
-            "p1": lambda flowvalue: -flowvalue,
+            "p1": lambda flowvalue, efficiency: -flowvalue * efficiency,
             "mu_lower": lambda dualcost: dualcost,
             "mu_upper": lambda dualcost: dualcost,
             "p_nom": lambda designvariable: designvariable,

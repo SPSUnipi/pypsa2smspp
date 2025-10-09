@@ -544,22 +544,23 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     return stores_df, links_merged_df
 
 
-
-def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, logger=print):
+def explode_multilinks_into_branches(
+    links_merged_df: pd.DataFrame,
+    hyper_id,
+    logger=print,
+    return_efficiencies: bool = True,
+):
     """
-    Split multi-output links in `links_merged_df` into one row per output branch.
-    Does NOT touch `n.links`. Returns a new DataFrame where:
-      - Each physical link row produces N rows (one per non-empty output) if it is a multilink;
-        otherwise produces exactly 1 row identical in name to the original.
-      - Column 'hyper' identifies the original physical link for all its branches.
-      - 'name' is suffixed as f"{original}__to_{busX}" ONLY for true multilinks.
-      - bus2/bus3/... and efficiency2/efficiency3/... columns are DROPPED.
-    NOTE: we keep the function signature; if you need the next hyper_id, you can return it too.
+    Split multi-output links into separate branches, keeping track of efficiencies.
+    If `return_efficiencies=True`, returns (exploded_df, efficiencies_dict),
+    where efficiencies_dict maps each physical link -> [eff1, eff2, ...].
+    Missing efficiencyN values are padded with 0.0 to ensure uniform length.
     """
     if links_merged_df.empty:
-        return links_merged_df.copy()
+        return (links_merged_df.copy(), {}) if return_efficiencies else links_merged_df.copy()
 
     df = links_merged_df.copy()
+    efficiencies_dict = {}
 
     # Identify extra bus/eff columns dynamically
     bus_extra_cols = []
@@ -568,12 +569,9 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
         bus_extra_cols.append(f"bus{k}")
         k += 1
 
-    # If no bus2+ columns exist at all, nothing to explode; just attach hyper & is_primary_branch
-    if not bus_extra_cols:
-        out = df.copy()
-        out["hyper"] = np.arange(hyper_id, hyper_id + len(out), dtype=int)
-        out["is_primary_branch"] = True
-        return out
+    # Determine total number of efficiency columns present in the DF
+    eff_cols = [c for c in df.columns if c.startswith("efficiency")]
+    max_eff_count = 1 + sum([f"efficiency{i}" in df.columns for i in range(2, k)])  # e.g. efficiency, efficiency2, efficiency3...
 
     def _non_empty(val) -> bool:
         return pd.notna(val) and str(val).strip() != ""
@@ -581,20 +579,40 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
     new_rows = []
 
     for link_name, row in df.iterrows():
-        # Gather valid extra outputs for THIS row
-        extra_outputs = []
+        eff_list = []
+
+        # Primary efficiency always exists (fill NaN with 0)
+        try:
+            eff_list.append(float(row.get("efficiency", 0.0)))
+        except Exception:
+            eff_list.append(0.0)
+
+        # Extra efficiencies (efficiency2, efficiency3, ...)
         for idx, bcol in enumerate(bus_extra_cols, start=2):
-            bval = row.get(bcol, np.nan)
-            if _non_empty(bval):
-                ecol = f"efficiency{idx}"
-                if ecol not in df.columns or pd.isna(row.get(ecol, np.nan)):
-                    raise ValueError(f"Multi-link '{link_name}' has '{bcol}={bval}' but missing '{ecol}'.")
-                extra_outputs.append((bcol, ecol))
+            ecol = f"efficiency{idx}"
+            if ecol in df.columns:
+                val = row.get(ecol, np.nan)
+                if _non_empty(val):
+                    eff_list.append(float(val))
+                else:
+                    eff_list.append(0.0)
+            else:
+                eff_list.append(0.0)
+
+        # Pad with zeros if needed (so all lists have equal length)
+        if len(eff_list) < max_eff_count:
+            eff_list += [0.0] * (max_eff_count - len(eff_list))
+
+        efficiencies_dict[link_name] = eff_list
+
+        # ---- build exploded rows ----
+        extra_outputs = [(bcol, f"efficiency{idx}")
+                         for idx, bcol in enumerate(bus_extra_cols, start=2)
+                         if _non_empty(row.get(bcol, np.nan))]
 
         is_multilink = len(extra_outputs) > 0
 
         if not is_multilink:
-            # Single-output link: keep as-is (no renaming)
             out_row = row.copy()
             out_row["hyper"] = hyper_id
             out_row["is_primary_branch"] = True
@@ -602,12 +620,10 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
             hyper_id += 1
             continue
 
-        # True multilink: create one row per output (bus1 + extras) and rename
-        # primary branch = bus1
+        # true multilink
         primary_bus = row["bus1"]
         primary_eff = row["efficiency"]
 
-        # primary
         pr = row.copy()
         pr["bus1"] = primary_bus
         pr["efficiency"] = float(primary_eff)
@@ -616,7 +632,6 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
         pr["is_primary_branch"] = True
         new_rows.append(pr)
 
-        # extras
         for bcol, ecol in extra_outputs:
             child = row.copy()
             child["bus1"] = row[bcol]
@@ -630,34 +645,44 @@ def explode_multilinks_into_branches(links_merged_df: pd.DataFrame, hyper_id, lo
 
     exploded = pd.DataFrame(new_rows)
 
-    # Drop the extra bus/eff columns to avoid ambiguity downstream
+    # Drop redundant bus/eff columns
     cols_to_drop = [c for c in exploded.columns
                     if (c.startswith("bus") and c not in ("bus0", "bus1"))
                     or (c.startswith("efficiency") and c != "efficiency")]
     exploded = exploded.drop(columns=cols_to_drop, errors="ignore")
 
-    # Log
     if callable(logger):
         n_phys = len(df)
         number_branches = len(exploded)
         extra = number_branches - n_phys
         logger(f"[multilink] Exploded {n_phys} physical links into {number_branches} branches (+{extra}).")
 
+    if return_efficiencies:
+        return exploded, efficiencies_dict
     return exploded
-    # If you need the next hyper_id, you can instead: `return exploded, hyper_id`
+
 
 
 # Translate into generic once the ucblock\investmentblock general use is defined  
-def add_hyperarcid_to_parameters(Lines_parameters, Links_parameters):
+def add_sectorcoupled_parameters(
+    Lines_parameters,
+    Links_parameters,
+    inverse_dict=None,     
+    max_eff_len: int = 1,
+):
     """
-    Add a HyperArcID entry to Lines_parameters and Links_parameters.
-    For now it uses a dummy lambda that simply returns the Hyper column if present.
-    You can later customize the logic.
+    Add a HyperArcID entry to Lines_parameters and Links_parameters and
+    (optionally) patch DCNetworkBlock_links_inverse by adding p2..pn.
+
+    For p2..pn we use the rule:
+        if efficiency == 1 -> zeros_like(flowvalue)
+        else               -> -flowvalue * efficiency
+    p1 is kept as-is if already present in inverse_dict (fallback provided otherwise).
     """
 
-    # Default lambda: looks for a Series/array called 'Hyper' and returns its values
-    hyper_def = lambda hyper: hyper.values
-    
+    # --- existing behavior (unchanged) -----------------------------------------
+    hyper_def = lambda hyper: hyper.values  # default HyperArcID
+
     # For lines
     if "HyperArcID" not in Lines_parameters:
         Lines_parameters["HyperArcID"] = hyper_def
@@ -665,18 +690,48 @@ def add_hyperarcid_to_parameters(Lines_parameters, Links_parameters):
     # For links
     if "HyperArcID" not in Links_parameters:
         Links_parameters["HyperArcID"] = hyper_def
-        
+
     Links_parameters.update({
-    "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable, is_primary_branch:
-        (p_nom[is_primary_branch] * p_max_pu[is_primary_branch]).where(
-            ~p_nom_extendable[is_primary_branch], p_max_pu[is_primary_branch]
-        ).values,
-    "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable, is_primary_branch:
-        (p_nom[is_primary_branch] * p_min_pu[is_primary_branch]).where(
-            ~p_nom_extendable[is_primary_branch], p_min_pu[is_primary_branch]
-        ).values,
-    "LineSusceptance": lambda p_nom, is_primary_branch:
-        np.zeros_like(p_nom[is_primary_branch].values)})
+        "MaxPowerFlow": lambda p_nom, p_max_pu, p_nom_extendable, is_primary_branch:
+            (p_nom[is_primary_branch] * p_max_pu[is_primary_branch]).where(
+                ~p_nom_extendable[is_primary_branch], p_max_pu[is_primary_branch]
+            ).values,
+        "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable, is_primary_branch:
+            (p_nom[is_primary_branch] * p_min_pu[is_primary_branch]).where(
+                ~p_nom_extendable[is_primary_branch], p_min_pu[is_primary_branch]
+            ).values,
+        "LineSusceptance": lambda p_nom, is_primary_branch:
+            np.zeros_like(p_nom[is_primary_branch].values)
+    })
+
+    # --- NEW: patch inverse_dict (in place, no return) -------------------------
+    if inverse_dict is None:
+        return  # nothing to patch
+
+    # Special rule for p2..pn
+    def _p_rule(flowvalue, efficiency):
+        """Return zeros if efficiency==1, else -flowvalue*efficiency. Handles arrays/scalars."""
+        fv = np.asarray(flowvalue)
+        ef = np.asarray(efficiency)
+
+        # Try to broadcast ef to fv shape (covers fv:(T,E) vs ef:(T,) cases)
+        if ef.shape != fv.shape:
+            try:
+                ef = np.broadcast_to(ef, fv.shape)
+            except ValueError:
+                if ef.ndim == 1 and fv.ndim > 1 and ef.shape[0] == fv.shape[0]:
+                    ef = ef.reshape((fv.shape[0],) + (1,) * (fv.ndim - 1))
+                else:
+                    ef = np.broadcast_to(ef, fv.shape)  # will raise if impossible
+
+        mask_one = np.isclose(ef, 1.0)
+        return np.where(mask_one, 0.0, -fv * ef)
+
+    # Add/override p2..pn
+    max_eff_len = int(max(1, max_eff_len))
+    for k in range(2, max_eff_len + 1):
+        inverse_dict[f"p{k}"] = _p_rule
+
 
     
 # Sempre nella classe Transformation
@@ -744,6 +799,74 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     BatteryUnitBlock_inverse["e_nom"] = (
         lambda batterydesign: batterydesign
     )
+    
+    
+
+
+def build_dc_index(n, links_merged_df_before_split, links_df_after_split):
+    """
+    Build a unified DC index registry capturing both physical and branch views.
+    Returns a dict with:
+      - physical: {'names': [...], 'types': [...]}           # NumberLines order
+      - branch:   {'names': [...], 'types': [...]}            # NumberBranches order (links-only here)
+      - map_df:   DataFrame with per-branch mapping:
+          columns = ['kind','name','hyper','is_primary_branch','phys_name','phys_kind']
+        where:
+          - 'name' is branch name (for non-multilink, equals physical name)
+          - 'phys_name' is the physical object name
+          - 'kind' is 'line' or 'link' (branch-level)
+          - 'phys_kind' is 'line' or 'link' (physical)
+    """
+    # --- physical view (NumberLines): lines + links (pre-split) ---
+    phys_line_names = list(n.lines.index)
+    phys_line_types = ['line'] * len(phys_line_names)
+
+    phys_link_names = list(links_merged_df_before_split.index)
+    phys_link_types = ['link'] * len(phys_link_names)
+
+    phys_names = phys_line_names + phys_link_names
+    phys_types = phys_line_types + phys_link_types
+
+    # --- branch view (NumberBranches): after split (only links contribute >1) ---
+    # Lines are not split, so their "branch view" is trivial and not needed for links_df_after_split
+    # We keep only link branches here and rely on hyper offset based on len(lines).
+    branch_names = list(links_df_after_split.index)
+    branch_types = ['link'] * len(branch_names)
+
+    # --- mapping per-branch -> physical ---
+    # hyper of lines: 0..len(lines)-1
+    # hyper of links: start from len(lines)
+    # links_df_after_split must contain ['hyper','is_primary_branch']
+    if not {'hyper','is_primary_branch'}.issubset(links_df_after_split.columns):
+        raise ValueError("links_df_after_split must have 'hyper' and 'is_primary_branch' columns.")
+
+    # Build DataFrame for link branches
+    map_link = pd.DataFrame({
+        'kind': ['link'] * len(branch_names),
+        'name': branch_names,
+        'hyper': links_df_after_split['hyper'].astype(int).values,
+        'is_primary_branch': links_df_after_split['is_primary_branch'].astype(bool).values,
+    }, index=branch_names)
+
+    # Resolve phys_name from hyper
+    # lines occupy the first block of hypers
+    n_lines = len(phys_line_names)
+    def _phys_from_hyper(h):
+        if h < n_lines:
+            return phys_line_names[h], 'line'
+        else:
+            return phys_link_names[h - n_lines], 'link'
+
+    phys_resolved = map_link['hyper'].map(lambda h: _phys_from_hyper(int(h)))
+    map_link['phys_name'] = [p[0] for p in phys_resolved]
+    map_link['phys_kind'] = [p[1] for p in phys_resolved]
+
+    # Return registry
+    return {
+        'physical': {'names': phys_names, 'types': phys_types},
+        'branch':   {'names': branch_names, 'types': branch_types},
+        'map_df':   map_link,
+    }
 
 
 # ------------------------------------------

@@ -97,7 +97,7 @@ if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or transformat
     operational_cost = statistics['Operational Expenditure'].sum()
     # error = (operational_cost - result.objective_value) / operational_cost * 100
 
-    objective_pypsa = network.objective # + network.objective_constant
+    objective_pypsa = network.objective + network.objective_constant
     objective_smspp = result.objective_value
     error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
     

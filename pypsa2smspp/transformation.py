@@ -43,8 +43,9 @@ from .utils import (
     build_store_and_merged_links,
     correct_dimensions,
     explode_multilinks_into_branches,
-    add_hyperarcid_to_parameters,
-    apply_expansion_overrides
+    add_sectorcoupled_parameters,
+    apply_expansion_overrides,
+    build_dc_index
 )
 from .inverse import (
     component_definition,
@@ -181,10 +182,30 @@ class Transformation:
             stores_df, links_merged_df = build_store_and_merged_links(
                 n, merge_links=False, logger=logger) 
         
+        
+        links_before = links_merged_df.copy()
+        
         if self.dimensions["NetworkBlock"]["NumberBranches"] > self.dimensions["NetworkBlock"]["NumberLines"]:
+            # hyper alle linee
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
-            links_merged_df = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
-            add_hyperarcid_to_parameters(self.config.Lines_parameters, self.config.Links_parameters)
+            links_after, self.networkblock['efficiencies'] = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
+            self.networkblock["max_eff_len"] = max((len(v) for v in self.networkblock['efficiencies'].values()), default=1)
+            add_sectorcoupled_parameters(self.config.Lines_parameters, self.config.Links_parameters, self.config.DCNetworkBlock_links_inverse, self.networkblock['max_eff_len'])
+        else:
+            links_after = links_merged_df.copy()
+            # assicura colonne per coerenza (no split): un solo branch per link
+            if "hyper" not in links_after.columns:
+                links_after["hyper"] = np.arange(len(n.lines), len(n.lines) + len(links_after), dtype=int)
+            if "is_primary_branch" not in links_after.columns:
+                links_after["is_primary_branch"] = True
+        
+        
+        self._dc_index = build_dc_index(n, links_before, links_after)
+        
+        # TODO remove when necessary
+        self._dc_names  = list(self._dc_index['physical']['names'])
+        self._dc_types  = list(self._dc_index['physical']['types'])
+
 
         if getattr(self, "expansion_ucblock", False):
             apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse)
@@ -200,7 +221,7 @@ class Transformation:
                 components_df = stores_df
                 components_t = components.dynamic
             elif components.list_name == "links":
-                components_df = links_merged_df
+                components_df = links_after
                 components_t = components.dynamic
             else:
                 components_df = components.df
@@ -621,6 +642,9 @@ class Transformation:
             raise ValueError("Shape mismatch between FlowValue and DualCost")
     
         names, types = self.prepare_dc_unitblock_info(n)
+        
+        links_effs = self.networkblock.get("efficiencies", {})
+        max_eff_len = self.networkblock.get("max_eff_len", 1)
     
         if len(names) != flow_matrix.shape[1]:
             raise ValueError("Mismatch between total network components and columns in FlowValue")
@@ -633,39 +657,39 @@ class Transformation:
             unitblock_name = f"DCNetworkBlock_{block_index}"
             block_type = types[i]
             block_label = "DCNetworkBlock_links" if block_type == "link" else "DCNetworkBlock_lines"
-    
-            self.unitblocks[unitblock_name] = {
+
+            entry = {
                 "enumerate": f"UnitBlock_{block_index}",
                 "block": block_label,
                 "name": names[i],
                 "FlowValue": flow_matrix[:, i],
                 "DualCost": dual_matrix[:, i],
-                "DesignVariable": self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
+                "DesignVariable": self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i],
             }
+            
+            if block_type == "link":
+                # Add value of efficiency
+                eff_list = links_effs.get(names[i], None)
+                if eff_list is None:
+                    # If not present, create [1.0, 0.0, ..., 0.0] max_eff_len long (fallback)
+                    eff_list = [1.0] + [0.0] * max(0, max_eff_len - 1)
+                entry["Efficiencies"] = eff_list
+            
+            self.unitblocks[unitblock_name] = entry
         
 
     def prepare_dc_unitblock_info(self, n):
         """
-        Return the (names, types) sequence for DCNetworkBlock unitblocks.
-    
-        Preferred source:
-          - self._dc_names / self._dc_types recorded during iterate_components(),
-            which exactly match the order and count used to build the DC block.
-    
-        Fallback (legacy):
-          - concatenate n.lines.index then n.links.index, with basic sanity checks
-            against self.dimensions['NetworkBlock'].
-    
-        Returns
-        -------
-        names : list[str]
-        types : list[str]  # values are 'line' or 'link'
+        Return the (names, types) for DCNetworkBlock unitblocks.
+        Prefer the 'physical' view from self._dc_index (NumberLines),
+        which matches FlowValue columns in NetworkBlock.
         """
-        # Preferred path: use the exact order captured at build time
-        if hasattr(self, "_dc_names") and hasattr(self, "_dc_types") and self._dc_names:
-            return list(self._dc_names), list(self._dc_types)
+        if hasattr(self, "_dc_index") and self._dc_index and 'physical' in self._dc_index:
+            names = list(self._dc_index['physical']['names'])
+            types = list(self._dc_index['physical']['types'])
+            return names, types
     
-        # Fallback: reconstruct from network object (legacy behavior)
+        # Fallback legacy (se proprio manca il registry)
         num_lines = self.dimensions['NetworkBlock']['Lines']
         num_links = self.dimensions['NetworkBlock']['Links']
     
@@ -686,6 +710,7 @@ class Transformation:
         names = line_names + link_names
         types = (['line'] * num_lines) + (['link'] * num_links)
         return names, types
+
 
 
 
