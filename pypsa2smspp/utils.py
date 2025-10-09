@@ -744,12 +744,12 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # --- IntermittentUnitBlock ---
     d = IntermittentUnitBlock_parameters
 
-    # !!! "InvestmentCost"
+    # "InvestmentCost"
     if "InvestmentCost" not in d:
         # Pass-through of capital_cost (assumed already scalar or 1-length)
         d["InvestmentCost"] = lambda capital_cost: capital_cost
 
-    # !!! "MaxCapacityDesign"
+    # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
         # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
         def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
@@ -758,19 +758,28 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
         d["MaxCapacityDesign"] = _max_cap_design
+        
+    # "MinCapacityDesign
+    if "MinCapacityDesign" not in d:
+        def _min_cap_design(p_nom, p_nom_extendable, p_nom_min):
+            p_nom_min_safe = p_nom_min.replace(np.inf, 1e-6)
+            return (first_scalar(p_nom_min_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        d["MinCapacityDesign"] = _min_cap_design
 
     # --- BatteryUnitBlock_store ---
     b = BatteryUnitBlock_store_parameters
 
-    # !!! "BatteryInvestmentCost"
+    # "BatteryInvestmentCost"
     if "BatteryInvestmentCost" not in b:
         b["BatteryInvestmentCost"] = lambda capital_cost: capital_cost
 
-    # !!! "ConverterInvestmentCost"
+    # "ConverterInvestmentCost"
     if "ConverterInvestmentCost" not in b:
         b["ConverterInvestmentCost"] = 0.0
 
-    # !!! "BatteryMaxCapacityDesign"
+    # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
         def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
             e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
@@ -778,8 +787,17 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
+        
+    # "BatteryMinCapacityDesign"
+    if "BatteryMinCapacityDesign" not in b:
+        def _battery_min_cap_design(e_nom, e_nom_extendable, e_nom_min):
+            e_nom_min_safe = e_nom_min.replace(np.inf, 1e-6)
+            return (first_scalar(e_nom_min_safe)
+                    if bool(first_scalar(e_nom_extendable))
+                    else first_scalar(e_nom))
+        b["BatteryMinCapacityDesign"] = _battery_min_cap_design
 
-    # !!! "ConverterMaxCapacityDesign"
+    # "ConverterMaxCapacityDesign"
     if "ConverterMaxCapacityDesign" not in b:
         def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
             e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
@@ -788,6 +806,17 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
+        
+    
+    # "ConverterMaxCapacityDesign"
+    if "ConverterMinCapacityDesign" not in b:
+        def _conv_min_cap_design(e_nom, e_nom_extendable, e_nom_min):
+            e_nom_min_safe = e_nom_min.replace(np.inf, 1e7)
+            # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
+            return (10.0 * first_scalar(e_nom_min_safe)
+                    if bool(first_scalar(e_nom_extendable))
+                    else first_scalar(e_nom))
+        b["ConverterMaxCapacityDesign"] = _conv_min_cap_design
 
     
     # --- IntermittentUnitBlock_inverse ---
