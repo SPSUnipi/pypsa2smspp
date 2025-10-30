@@ -16,7 +16,6 @@ import xarray as xr
 import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
-from pypsa.optimization.optimize import (assign_solution, assign_duals, post_processing)
 from pypsa2smspp import logger
 
 
@@ -772,7 +771,9 @@ class Transformation:
                 datasets.append(ds)
     
         # Merge in a single dataset
-        return xr.merge(datasets)
+        # keep current behavior explicitly and avoid FutureWarnings
+        return xr.merge(datasets, join="outer", compat="no_conflicts")
+
 
 
 

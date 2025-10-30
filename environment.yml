@@ -1,9 +1,9 @@
-name: pypsa-clean
+name: pypsa2smspp
 channels:
   - conda-forge
   - gurobi
 dependencies:
-  - python=3.10
+  - python=3.11
   - numpy
   - pandas>=0.24
   - pypsa

@@ -163,7 +163,7 @@ cython_debug/
 test/*/microgrid*
 *.lp
 test/output/*
-test/networks/base*
+test/networks/
 test/investment*
 test/configs/data/~$components.xlsx
 test/gurobi*

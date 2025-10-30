@@ -66,51 +66,51 @@ def evaluate_function(func, normalized_keys, unit_block, df):
 
 def dataarray_components(n, value, component, unit_block, key):
     """
-    Generates dims/coords for a DataArray from inverse values.
-    Handles scalars (0-D), 1-D (snapshot or ext), and (T,1) 2-D.
+    Build xarray dims/coords compliant with PyPSA 1.0 assign_solution():
+    - static per-unit: dims -> ('name',)
+    - time series:     dims -> ('snapshot','name')
     """
     # Unmask masked arrays; use NaN for masked scalars
     if isinstance(value, np.ma.MaskedArray):
         value = value.filled(np.nan)
 
-    # Coerce to ndarray
     value = np.asarray(value)
+    unit_name = unit_block["name"]
 
-    # Case A: scalar (0-D) -> treat as single 'ext' value
     if value.ndim == 0:
-        value = value.reshape(1)  # shape -> (1,)
-        dims = [f"{component}-ext"]
-        coords = {f"{component}-ext": [unit_block["name"]]}
-    
-    # Case B: 1-D
+        # scalar -> one value for this unit: ('name',)
+        value = value.reshape(1)
+        dims = ["name"]
+        coords = {"name": [unit_name]}
+
     elif value.ndim == 1:
         if len(value) == len(n.snapshots):
-            # time series for a single unit
-            value = value[:, np.newaxis]  # (T,) -> (T,1)
-            dims = ["snapshot", component]
-            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+            # (T,) -> ('snapshot','name')
+            value = value[:, np.newaxis]  # (T,1)
+            dims = ["snapshot", "name"]
+            coords = {"snapshot": n.snapshots, "name": [unit_name]}
         else:
-            # single value per unit (or param vector not time-based)
-            dims = [f"{component}-ext"]
-            coords = {f"{component}-ext": [unit_block["name"]]}
-    
-    # Case C: 2-D (accept (T,1) or (1,T))
+            # vector but not time-based -> treat as per-unit static ('name',)
+            # (se è un vettore con più elementi non-temporali, somma o valida prima)
+            value = np.array([value.sum()]) if value.size > 1 else value.reshape(1)
+            dims = ["name"]
+            coords = {"name": [unit_name]}
+
     elif value.ndim == 2:
         T = len(n.snapshots)
         if value.shape == (T, 1):
-            dims = ["snapshot", component]
-            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+            dims = ["snapshot", "name"]
+            coords = {"snapshot": n.snapshots, "name": [unit_name]}
         elif value.shape == (1, T):
             value = value.T
-            dims = ["snapshot", component]
-            coords = {"snapshot": n.snapshots, component: [unit_block["name"]]}
+            dims = ["snapshot", "name"]
+            coords = {"snapshot": n.snapshots, "name": [unit_name]}
         else:
             raise ValueError(f"Unsupported shape for variable {key}: {value.shape}")
-    
     else:
         raise ValueError(f"Unsupported ndim for variable {key}: {value.ndim}")
 
-    var_name = f"{component}-{key}"
+    var_name = f"{component}-{key}"  # e.g., 'Generator-p', 'Store-e_nom', 'Link-p'
     return value, dims, coords, var_name
 
 
