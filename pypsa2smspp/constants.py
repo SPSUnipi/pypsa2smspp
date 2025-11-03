@@ -29,6 +29,7 @@ conversion_dict = {
     "NP": "TotalNumberPieces",
     "Nass": "NumAssets",
     "NB": "NumberBranches",
+    "NDL": "NumberDesignLines",
     "1": 1
 }
 

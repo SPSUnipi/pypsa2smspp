@@ -78,6 +78,8 @@ then = datetime.now()
 transformation = Transformation(network, merge_links=True, expansion_ucblock=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
+m
+
 tran = transformation.convert_to_blocks()
 
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or transformation.expansion_ucblock:

@@ -154,8 +154,9 @@ class Transformation:
         """
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, nominal_attrs)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.expansion_ucblock, nominal_attrs)
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
+        
         
         
     ### 3 ###
@@ -167,7 +168,7 @@ class Transformation:
         # ------------- Preprocessing ----------------
         # Probably useful to group this part as 'preprocessing' as it is independent from the rest
         generator_node = []
-        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": []}
+        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": [], 'design_lines': []}
         unitblock_index = 0
         lines_index = 0
         self._dc_names = []
@@ -176,7 +177,7 @@ class Transformation:
         if getattr(self, "merge_links", False):
             stores_df, links_merged_df = build_store_and_merged_links(
                 n, merge_links=self.merge_links, logger=logger)
-            correct_dimensions(self.dimensions, stores_df, links_merged_df, n)
+            correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
         else:
             stores_df, links_merged_df = build_store_and_merged_links(
                 n, merge_links=False, logger=logger) 
@@ -207,7 +208,7 @@ class Transformation:
 
 
         if getattr(self, "expansion_ucblock", False):
-            apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse)
+            apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse, self.config.InvestmentBlock_parameters)
         
         # ------------- Main loop over components ----------------
         
@@ -228,8 +229,13 @@ class Transformation:
     
             components_type = components.list_name
     
-            # Investment block as before
-            df_investment = self.add_InvestmentBlock(n, components_df, components.name)
+            use_investmentblock = (
+                not getattr(self, "expansion_ucblock", False)
+                or components_type in ["lines", "links"]
+            )
+
+            if use_investmentblock:
+                df_investment = self.add_InvestmentBlock(n, components_df, components.name)
     
             # Lines and Links path unchanged
             if components_type in ["lines", "links"]:
@@ -295,6 +301,13 @@ class Transformation:
                 unitblock_index += 1
     
         # finalize (unchanged)
+        self.networkblock['Design'] = self.investmentblock.copy()
+        self.networkblock['Design']['DesignLines'] = {
+            "value": np.array(investment_meta["design_lines"]),
+            "type": "uint",
+            "size": "NumberDesignLines"
+        }
+        
         self.generator_node = {
             "name": "GeneratorNode",
             "type": "int",

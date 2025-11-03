@@ -274,11 +274,13 @@ def networkblock_dimensions(n):
 
 
 
-def investmentblock_dimensions(n, nominal_attrs):
+def investmentblock_dimensions(n, expansion_ucblock, nominal_attrs):
     """
     Computes the dimensions of the InvestmentBlock from the PyPSA network.
+    If expansion is in UCBlocks, calculates for lines only
+    
     """
-    investment_components = ['generators', 'storage_units', 'stores', 'lines', 'links']
+    investment_components = ['lines', 'links'] if expansion_ucblock else ['generators', 'storage_units', 'stores', 'lines', 'links']
     num_assets = 0
     for comp in investment_components:
         df = getattr(n, comp)
@@ -287,7 +289,7 @@ def investmentblock_dimensions(n, nominal_attrs):
         if attr and f"{attr}_extendable" in df.columns:
             num_assets += df[f"{attr}_extendable"].sum()
 
-    return {"NumAssets": int(num_assets)}
+    return {"NumberDesignLines": int(num_assets)} if expansion_ucblock else {"NumAssets": int(num_assets)}
 
 
 def hydroblock_dimensions():
@@ -302,11 +304,15 @@ def hydroblock_dimensions():
 
 # -------------------------------- Correction --------------------------------------
 
-def correct_dimensions(dimensions, stores_df, links_merged_df, n):
+def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucblock):
     dimensions['NetworkBlock']['Links'] -= len(stores_df)
     dimensions['NetworkBlock']['combined'] -= len(stores_df)
     dimensions['UCBlock']['NumberLines'] -= len(stores_df)
-    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df[stores_df['e_nom_extendable'] == True])
+    
+    if expansion_ucblock:
+        dimensions['InvestmentBlock']['NumberDesignLines'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
+    else:
+        dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
     
     if "NumberBranches" in dimensions['NetworkBlock']:
         # To understand if all of these are needed
@@ -735,7 +741,7 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None):
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
     Keys are only added if missing, so it remains idempotent.
@@ -830,6 +836,14 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     )
     
     
+    # --- InvestmentBlockParameters ---
+    i = InvestmentBlock
+    
+    # DesignLines
+    i['InvestmentCost'] = i.pop('Cost')
+    i['MinCapacityDesign'] = i.pop('LowerBound')
+    i['MaxCapacityDesign'] = i.pop('UpperBound')
+    i.pop('InstalledQuantity')    
 
 
 def build_dc_index(n, links_merged_df_before_split, links_df_after_split):
@@ -940,6 +954,7 @@ def process_dcnetworkblock(
     for idx in components_df[extendable_mask].index:
         investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
         investment_meta["index_extendable"].append(lines_index)  
+        investment_meta["design_lines"].append(lines_index)
         lines_index += 1
         unitblock_index += 1
     
