@@ -62,7 +62,7 @@ class NetworkDefinition:
         all_sheets = self.read_excel_components()
         self.add_all_components(all_sheets)
         
-        # self.add_costs_components()
+        self.add_costs_components()
         self.add_demand()
         self.add_renewables()
         
@@ -169,10 +169,10 @@ class NetworkDefinition:
         n_days = int(len(self.n.snapshots) / 24)
 
         for load in self.n.loads.index:
-            df_demand_year = np.random.normal(
+            df_demand_year = - np.random.normal(
                 np.tile(df_demand_day["demand"], n_days),
                 np.tile(df_demand_day["standard_deviation"], n_days),
-            ) * 100
+            ) 
             self.n.loads_t.p_set[load] = df_demand_year
                     
     def add_renewables(self):

@@ -63,7 +63,7 @@ def get_datafile(fname):
 config = TestConfig()
 nd = NetworkDefinition(config)
 
-nd.n = add_slack_unit(nd.n)
+# nd.n = add_slack_unit(nd.n)
 nd.n = clean_ciclicity_storage(nd.n)
 
 
@@ -83,9 +83,9 @@ tran = transformation.convert_to_blocks()
 if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or transformation.expansion_ucblock:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig_grb")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/network_uc_hydro_0011.nc"  # path to temporary SMS++ file
+    temporary_smspp_file = "output/network_sector.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/solution_uc_hydro_0011.nc"
+    solution_file = "output/solution_sector.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):
