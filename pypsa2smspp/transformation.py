@@ -997,11 +997,78 @@ class Transformation:
     
             # attach to UCBlock
             master.blocks[name_id].add_block(unit_block['enumerate'], block=unit_block_obj)
+            
+        # -----------------
+        # Optionally add DesignNetworkBlock (only in expansion_ucblock mode)
+        # -----------------
+        self.convert_to_designnetworkblock(master, name_id)
     
         # -----------------
         # Done
         # -----------------
         return master
+    
+    
+    def convert_to_designnetworkblock(self, master, ucblock_name):
+        """
+        Optionally adds a DesignNetworkBlock inside the UCBlock, used when
+        expansion_ucblock is active and design lines are present.
+    
+        Parameters
+        ----------
+        master : SMSNetwork
+            The SMSNetwork object containing the UCBlock.
+        ucblock_name : str
+            The name_id of the UCBlock inside master.blocks.
+        """
+    
+        # Condition: only in expansion-ucblock mode AND if we actually have design lines
+        if not getattr(self, "expansion_ucblock", False):
+            return
+    
+        num_design_lines = (
+            self.dimensions
+            .get("InvestmentBlock", {})
+            .get("NumberDesignLines", 0)
+        )
+        if num_design_lines <= 0:
+            return
+    
+        # Safety: if we do not have design information, just skip
+        design_block_def = self.networkblock.get("Design")
+        if design_block_def is None:
+            return
+    
+        # Build kwargs for the DesignNetworkBlock
+        design_kwargs = {}
+    
+        # Add variables from self.networkblock['Design']
+        for var_name, var in design_block_def.items():
+            if var_name != 'Blocks':
+                design_kwargs[var_name] = Variable(
+                    var_name,
+                    var["type"],
+                    var["size"],
+                    var["value"]
+                )
+    
+        # Add dimensions (from investmentblock)
+        for dim_name, dim_value in self.dimensions['InvestmentBlock'].items():
+            design_kwargs[dim_name] = dim_value
+    
+    
+        # Create the DesignNetworkBlock
+        design_block_obj = Block().from_kwargs(
+            block_type="DesignNetworkBlock",
+            **design_kwargs
+        )
+    
+        # Attach it inside the UCBlock; use a stable id/label for the block
+        master.blocks[ucblock_name].add_block(
+            "DesignNetworkBlock",   # block id inside UCBlock
+            block=design_block_obj
+        )
+
 
     
     def optimize(self, configfile, *args, **kwargs):

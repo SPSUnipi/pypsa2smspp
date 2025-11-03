@@ -78,16 +78,16 @@ then = datetime.now()
 transformation = Transformation(network, merge_links=True, expansion_ucblock=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
-m
 
 tran = transformation.convert_to_blocks()
 
-if transformation.dimensions['InvestmentBlock']['NumAssets'] == 0 or transformation.expansion_ucblock:
+
+if transformation.expansion_ucblock or transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig_grb")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/network_sector.nc"  # path to temporary SMS++ file
+    temporary_smspp_file = "output/network_designnetworkblock.nc"  # path to temporary SMS++ file
     output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/solution_sector.nc"
+    solution_file = "output/solution_designnetworkblock.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):
