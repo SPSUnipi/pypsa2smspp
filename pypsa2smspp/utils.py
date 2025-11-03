@@ -773,11 +773,11 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "BatteryInvestmentCost"
     if "BatteryInvestmentCost" not in b:
-        b["BatteryInvestmentCost"] = lambda capital_cost: capital_cost
+        b["BatteryInvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if p_nom_extendable else 0.0
 
     # "ConverterInvestmentCost"
     if "ConverterInvestmentCost" not in b:
-        b["ConverterInvestmentCost"] = 0.0
+        b["ConverterInvestmentCost"] = lambda p_nom_extendable: 1 if p_nom_extendable else 0.0
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
@@ -808,7 +808,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
         b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
         
     
-    # "ConverterMaxCapacityDesign"
+    # "ConverterMinCapacityDesign"
     if "ConverterMinCapacityDesign" not in b:
         def _conv_min_cap_design(e_nom, e_nom_extendable, e_nom_min):
             e_nom_min_safe = e_nom_min.replace(np.inf, 1e7)

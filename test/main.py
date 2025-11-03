@@ -63,7 +63,7 @@ def get_datafile(fname):
 config = TestConfig()
 nd = NetworkDefinition(config)
 
-# nd.n = add_slack_unit(nd.n)
+nd.n = add_slack_unit(nd.n)
 nd.n = clean_ciclicity_storage(nd.n)
 
 

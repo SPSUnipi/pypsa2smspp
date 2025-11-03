@@ -291,7 +291,7 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
             p_nom=max_total_demand,
             p_max_pu=1,
             p_min_pu=0,
-            marginal_cost=10000,
+            marginal_cost=100000,
             capital_cost=0,
             p_nom_extendable=False,
         )
