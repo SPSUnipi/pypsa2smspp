@@ -309,10 +309,10 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     dimensions['NetworkBlock']['combined'] -= len(stores_df)
     dimensions['UCBlock']['NumberLines'] -= len(stores_df)
     
-    if expansion_ucblock:
-        dimensions['InvestmentBlock']['NumberDesignLines'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
-    else:
-        dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
+    #if expansion_ucblock:
+    #    dimensions['InvestmentBlock']['NumberDesignLines'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
+    #else:
+    #    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
     
     if "NumberBranches" in dimensions['NetworkBlock']:
         # To understand if all of these are needed
@@ -753,7 +753,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "InvestmentCost"
     if "InvestmentCost" not in d:
         # Pass-through of capital_cost (assumed already scalar or 1-length)
-        d["InvestmentCost"] = lambda capital_cost: capital_cost
+        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if bool(first_scalar(p_nom_extendable)) else 0.0
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
@@ -779,11 +779,11 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "BatteryInvestmentCost"
     if "BatteryInvestmentCost" not in b:
-        b["BatteryInvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if p_nom_extendable else 0.0
+        b["BatteryInvestmentCost"] = lambda capital_cost, e_nom_extendable: capital_cost if bool(first_scalar(e_nom_extendable)) else 0.0
 
     # "ConverterInvestmentCost"
     if "ConverterInvestmentCost" not in b:
-        b["ConverterInvestmentCost"] = lambda p_nom_extendable: 1 if p_nom_extendable else 0.0
+        b["ConverterInvestmentCost"] = lambda e_nom_extendable: 1e-6 if bool(first_scalar(e_nom_extendable)) else 0.0
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
@@ -822,7 +822,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
             return (10.0 * first_scalar(e_nom_min_safe)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
-        b["ConverterMaxCapacityDesign"] = _conv_min_cap_design
+        b["ConverterMinCapacityDesign"] = _conv_min_cap_design
 
     
     # --- IntermittentUnitBlock_inverse ---

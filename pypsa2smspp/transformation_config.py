@@ -79,7 +79,7 @@ class TransformationConfig:
             }
 
         self.BatteryUnitBlock_store_parameters = {
-            "Kappa": 1.0,
+            # "Kappa": 1.0,
             "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
@@ -89,7 +89,7 @@ class TransformationConfig:
             "StoringBatteryRho": lambda efficiency_store: efficiency_store.iloc[0],
             "Demand": 0.0,
             "MinStorage": 0.0,
-            "MaxStorage": lambda e_nom: e_nom,
+            "MaxStorage": lambda e_nom, e_max_pu, e_nom_extendable: (e_nom * e_max_pu).where(~e_nom_extendable, e_max_pu),
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours).iloc[0],
