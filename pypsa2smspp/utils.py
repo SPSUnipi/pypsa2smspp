@@ -289,7 +289,7 @@ def investmentblock_dimensions(n, expansion_ucblock, nominal_attrs):
         if attr and f"{attr}_extendable" in df.columns:
             num_assets += df[f"{attr}_extendable"].sum()
 
-    return {"NumberDesignLines": int(num_assets)} if expansion_ucblock else {"NumAssets": int(num_assets)}
+    return {"NumberDesignLines": int(num_assets), "NumberSubNetwork": int(len(n.snapshots))} if expansion_ucblock else {"NumAssets": int(num_assets)}
 
 
 def hydroblock_dimensions():
@@ -305,18 +305,29 @@ def hydroblock_dimensions():
 # -------------------------------- Correction --------------------------------------
 
 def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucblock):
-    dimensions['NetworkBlock']['Links'] -= len(stores_df)
-    dimensions['NetworkBlock']['combined'] -= len(stores_df)
-    dimensions['UCBlock']['NumberLines'] -= len(stores_df)
+    """
+    Correct SMS++ dimensions based on particular cases/flags
+    1. if we merge links, reduce the number of lines associated
+    2. if we expand lines with DesignNetworkBlock, define NumberNetworks
+    3. if we are in sector coupled, reduce the number of branches associated (if merge_links)
+    """
     
-    #if expansion_ucblock:
-    #    dimensions['InvestmentBlock']['NumberDesignLines'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
-    #else:
-    #    dimensions['InvestmentBlock']['NumAssets'] -= len(stores_df) # len(stores_df[stores_df['e_nom_extendable'] == True])
+    number_merged_links = dimensions['NetworkBlock']['Links'] - len(links_merged_df)
+    
+    # Reduce the number of lines depending on the merged links
+    dimensions['NetworkBlock']['Links'] -= number_merged_links
+    dimensions['NetworkBlock']['combined'] -= number_merged_links
+    dimensions['UCBlock']['NumberLines'] -= number_merged_links
+    
+    if expansion_ucblock:
+       dimensions['InvestmentBlock']['NumberDesignLines'] -= number_merged_links
+       if dimensions['InvestmentBlock']['NumberDesignLines'] > 0:
+           dimensions['UCBlock']['NumberNetworks'] = 1
+    else:
+       dimensions['InvestmentBlock']['NumAssets'] -= number_merged_links
     
     if "NumberBranches" in dimensions['NetworkBlock']:
-        # To understand if all of these are needed
-        dimensions['NetworkBlock']['NumberBranches'] -= len(stores_df)
+        dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links
         dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
 

@@ -305,7 +305,7 @@ class Transformation:
         self.networkblock['Design']['DesignLines'] = {
             "value": np.array(investment_meta["design_lines"]),
             "type": "uint",
-            "size": "NumberDesignLines"
+            "size": ("NumberDesignLines")
         }
         
         self.generator_node = {
@@ -1065,7 +1065,7 @@ class Transformation:
     
         # Attach it inside the UCBlock; use a stable id/label for the block
         master.blocks[ucblock_name].add_block(
-            "DesignNetworkBlock",   # block id inside UCBlock
+            "NetworkBlock_0",
             block=design_block_obj
         )
 
