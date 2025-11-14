@@ -61,10 +61,15 @@ def get_datafile(fname):
 
 #%% Network definition with PyPSA
 config = TestConfig()
+if "sector" in config.input_name_components:
+    config.load_sign = -1
+
 nd = NetworkDefinition(config)
 
-nd.n = add_slack_unit(nd.n)
 nd.n = clean_ciclicity_storage(nd.n)
+
+if "sector" not in config.input_name_components:
+    nd.n = add_slack_unit(nd.n)
 
 
 network = nd.n.copy()

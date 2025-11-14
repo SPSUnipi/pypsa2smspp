@@ -321,6 +321,8 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     
     if expansion_ucblock:
        dimensions['InvestmentBlock']['NumberDesignLines'] -= number_merged_links
+       if dimensions['InvestmentBlock']['NumberDesignLines'] < 0:
+          dimensions['InvestmentBlock']['NumberDesignLines'] = 0 
        if dimensions['InvestmentBlock']['NumberDesignLines'] > 0:
            dimensions['UCBlock']['NumberNetworks'] = 1
     else:

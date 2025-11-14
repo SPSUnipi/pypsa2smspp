@@ -17,6 +17,7 @@ import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 from pypsa2smspp import logger
+from copy import deepcopy
 
 
 from .constants import conversion_dict, nominal_attrs, renewable_carriers
@@ -89,7 +90,7 @@ class Transformation:
         Parameters for a ThermalUnitBlock
     """
 
-    def __init__(self, n, merge_links=False, expansion_ucblock: bool = False, config=TransformationConfig()):
+    def __init__(self, n, merge_links=False, expansion_ucblock: bool = False, config: "TransformationConfig | None" = None):
         """
         Initializes the Transformation class.
 
@@ -107,6 +108,12 @@ class Transformation:
         
         """
         
+        if config is None:
+            config = TransformationConfig()
+        # Work on a private copy so we can safely mutate dicts
+        self.config = deepcopy(config)
+
+        
         # Attribute for unit blocks
         self.unitblocks = dict()
         self.networkblock = dict()
@@ -114,7 +121,6 @@ class Transformation:
         
         self.dimensions = dict()
         
-        self.config = config
         self.merge_links = merge_links
         self.expansion_ucblock = expansion_ucblock
         

@@ -60,7 +60,7 @@ from pypsa2smspp.network_correction import (
 
 times = dict()
 #%% Network definition with PyPSA
-n_smspp = pypsa.Network("networks/base_s_2_elec_1h.nc")
+n_smspp = pypsa.Network("networks/base_s_5_elec_1h.nc")
 investment_bool = False
 
 n_smspp = clean_global_constraints(n_smspp)

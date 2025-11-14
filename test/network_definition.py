@@ -62,9 +62,11 @@ class NetworkDefinition:
         all_sheets = self.read_excel_components()
         self.add_all_components(all_sheets)
         
-        # self.add_costs_components()
+        if self.parser.add_costs_components:
+            self.add_costs_components()
         self.add_demand()
         self.add_renewables()
+        self.add_hydro_inflow() 
         
     def define_snapshots(self):
         """
@@ -169,7 +171,7 @@ class NetworkDefinition:
         n_days = int(len(self.n.snapshots) / 24)
 
         for load in self.n.loads.index:
-            df_demand_year = np.random.normal(
+            df_demand_year = self.parser.load_sign * np.random.normal(
                 np.tile(df_demand_day["demand"], n_days),
                 np.tile(df_demand_day["standard_deviation"], n_days),
             ) * 100
@@ -197,6 +199,68 @@ class NetworkDefinition:
                 self.n.generators_t.p_max_pu[generator] = df_pv['electricity']
             elif 'wind' in generator.lower():
                 self.n.generators_t.p_max_pu[generator] = df_wind['electricity']
+                
+    def add_hydro_inflow(self):
+        """
+        Adds inflow time series for hydro StorageUnits, if present.
+
+        For each hydro StorageUnit, an inflow profile is created for all snapshots.
+        The mean inflow is set to one quarter of the StorageUnit capacity (p_nom),
+        with random Gaussian variation of ±10% (std = 10% of the mean).
+
+        Notes:
+        -------
+        A hydro StorageUnit is detected if its name contains the substring 'hydro'
+        (case-insensitive). If no such StorageUnit is found, the method exits silently.
+        """
+        # If there are no StorageUnits, nothing to do
+        if self.n.storage_units.empty:
+            LOGGER.info("No StorageUnits found in the network; skipping hydro inflow initialization.")
+            return
+
+        # Identify hydro StorageUnits by name
+        hydro_mask = self.n.storage_units.index.to_series().str.contains("hydro", case=False, na=False)
+        hydro_units = self.n.storage_units.index[hydro_mask]
+
+        if hydro_units.empty:
+            LOGGER.info("No hydro StorageUnits found; skipping hydro inflow initialization.")
+            return
+
+        n_snapshots = len(self.n.snapshots)
+
+        for unit in hydro_units:
+            # Use p_nom as proxy for the unit size
+            if "p_nom" not in self.n.storage_units.columns:
+                LOGGER.warning(
+                    "StorageUnits have no 'p_nom' column; cannot compute inflow for '%s'. Skipping.", unit
+                )
+                continue
+
+            capacity = self.n.storage_units.at[unit, "p_nom"]
+
+            if pd.isna(capacity):
+                LOGGER.warning(
+                    "Capacity 'p_nom' for StorageUnit '%s' is NaN; cannot compute inflow. Skipping.", unit
+                )
+                continue
+
+            # Base inflow: one quarter of capacity
+            base_inflow = 0.25 * capacity
+
+            # Gaussian variation ±10% around the base inflow
+            std_inflow = 0.10 * base_inflow
+            inflow_profile = np.random.normal(loc=base_inflow, scale=std_inflow, size=n_snapshots)
+
+            # Assign inflow profile to storage_units_t.inflow
+            self.n.storage_units_t.inflow[unit] = inflow_profile
+
+            LOGGER.info(
+                "Hydro inflow initialized for StorageUnit '%s' with mean %.3f and std %.3f per snapshot.",
+                unit,
+                base_inflow,
+                std_inflow,
+            )
+
                 
         
         
