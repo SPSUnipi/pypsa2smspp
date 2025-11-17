@@ -313,6 +313,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     """
     
     number_merged_links = dimensions['NetworkBlock']['Links'] - len(links_merged_df)
+    number_ext_merg_links = dimensions['NetworkBlock']['merged_links_ext']
     
     # Reduce the number of lines depending on the merged links
     dimensions['NetworkBlock']['Links'] -= number_merged_links
@@ -320,13 +321,11 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     dimensions['UCBlock']['NumberLines'] -= number_merged_links
     
     if expansion_ucblock:
-       dimensions['InvestmentBlock']['NumberDesignLines'] -= number_merged_links
-       if dimensions['InvestmentBlock']['NumberDesignLines'] < 0:
-          dimensions['InvestmentBlock']['NumberDesignLines'] = 0 
+       dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links 
        if dimensions['InvestmentBlock']['NumberDesignLines'] > 0:
            dimensions['UCBlock']['NumberNetworks'] = 1
     else:
-       dimensions['InvestmentBlock']['NumAssets'] -= number_merged_links
+       dimensions['InvestmentBlock']['NumAssets'] -= number_ext_merg_links
     
     if "NumberBranches" in dimensions['NetworkBlock']:
         dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links
@@ -419,20 +418,13 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         - p_nom_extendable = common value (assert both equal)
         - name includes both original names for traceability
 
-    store_link_map : dict
-        Mapping with all info needed for inverse reconstruction:
-        {store_name: {
-            'bus_elec': str,
-            'bus_store': str,
-            'name_link_ch': str or None,
-            'name_link_dis': str or None,
-            'eta_ch': float,
-            'eta_dis': float,
-            'p_nom_ch': float, 'p_nom_dis': float,
-            'p_nom_extendable': bool,
-            'capex_ch': float, 'capex_dis': float,
-            'merged_name': str
-        }}
+    merge_dim : dict
+        Small dimension-like dict to track extendable links:
+        {
+            'extendable_links_initial': int,
+            'extendable_links_final': int,
+            'extendable_links_lost': int  # initial - final
+        }
 
     Notes
     -----
@@ -445,17 +437,30 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
       This avoids over-stating capability if data are slightly inconsistent.
     """
 
+    def _count_extendable(df):
+        """Count number of links with p_nom_extendable == True."""
+        if df.empty or "p_nom_extendable" not in df.columns:
+            return 0
+        return int(df["p_nom_extendable"].fillna(False).astype(bool).sum())
+
     stores_df = n.stores.copy()
     links_merged_df = n.links.copy()
 
     # Add the two new columns with safe defaults
-    for col in ["efficiency_store", "efficiency_dispatch"]: # Serve questo passaggio?
+    for col in ["efficiency_store", "efficiency_dispatch"]:
         if col not in stores_df.columns:
             stores_df[col] = 1.0
 
+    # Count extendable links before any merging
+    extendable_initial = _count_extendable(links_merged_df)
 
     if not merge_links or links_merged_df.empty or stores_df.empty:
-        return stores_df, links_merged_df
+        merge_dim = {
+            "extendable_links_initial": extendable_initial,
+            "extendable_links_final": extendable_initial,
+            "extendable_links_lost": 0,
+        }
+        return stores_df, links_merged_df, merge_dim
 
     # We will collect rows to drop and rows to append
     rows_to_drop = []
@@ -465,7 +470,6 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     PNOM_TOL = 1e-6
 
     # Build a fast index by bus to find links connected to a given store bus
-    # We'll just filter per store; clarity over micro-optimization.
     for store_name, srow in stores_df.iterrows():
         bus_store = srow["bus"]
         # Heuristic: the links are the ones connected to the bus
@@ -474,43 +478,52 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         if cand.empty:
             # No links connected to this store -> nothing to merge
             continue
-        
-        charge_row = cand[cand['bus1'] == bus_store].iloc[0]
-        discharge_row = cand[cand['bus0'] == bus_store].iloc[0]
-        bus_elec = charge_row['bus0'] if charge_row['bus0'] == discharge_row['bus1'] else None
 
+        # NOTE: this assumes there is at most one charge and one discharge per store
+        charge_rows = cand[cand["bus1"] == bus_store]
+        discharge_rows = cand[cand["bus0"] == bus_store]
+
+        if charge_rows.empty or discharge_rows.empty:
+            # We don't have a proper pair -> skip merging this store
+            continue
+
+        charge_row = charge_rows.iloc[0]
+        discharge_row = discharge_rows.iloc[0]
+
+        bus_elec = charge_row["bus0"] if charge_row["bus0"] == discharge_row["bus1"] else None
         if bus_elec is None:
             # Could not determine the paired electrical bus; skip merge
             continue
 
         # Extract params with defaults
-        # Charge (elec -> store
+        # Charge (elec -> store)
         eta_ch = charge_row.efficiency
         p_nom_ch = charge_row.p_nom
         capex_ch = charge_row.capital_cost
-        ext_ch = charge_row.p_nom_extendable
+        ext_ch = bool(charge_row.p_nom_extendable)
         name_ch = charge_row.name
-
 
         # Discharge (store -> elec)
         eta_dis = discharge_row.efficiency
         p_nom_dis = discharge_row.p_nom
         capex_dis = discharge_row.capital_cost
-        ext_dis = discharge_row.p_nom_extendable
+        ext_dis = bool(discharge_row.p_nom_extendable)
         name_dis = discharge_row.name
-
 
         # Extendability must match (as per your assumption)
         if ext_ch != ext_dis:
-            logger(f"[merge] Warning: extendability mismatch for store '{store_name}' "
-                   f"(charge={ext_ch}, discharge={ext_dis}). Using logical AND.")
+            logger(
+                f"[merge] Warning: extendability mismatch for store '{store_name}' "
+                f"(charge={ext_ch}, discharge={ext_dis}). Using logical AND."
+            )
         pnom_extendable = bool(ext_ch and ext_dis)
 
         # Choose p_nom for the merged link
-        # In PyPSA-Eur they should be equal; we assert/clip to min to be safe.
         if abs(p_nom_ch - p_nom_dis) > PNOM_TOL:
-            logger(f"[merge] Warning: p_nom mismatch for store '{store_name}' "
-                   f"(ch={p_nom_ch}, dis={p_nom_dis}). Using min().")
+            logger(
+                f"[merge] Warning: p_nom mismatch for store '{store_name}' "
+                f"(ch={p_nom_ch}, dis={p_nom_dis}). Using min()."
+            )
         p_nom_merged = float(min(p_nom_ch, p_nom_dis))
 
         # Capital cost is the SUM (two converters of same size)
@@ -523,6 +536,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         # Prepare merged link row:
         # We clone one of the originals to inherit optional columns, then override.
         new_row = charge_row if charge_row is not None else discharge_row
+        new_row = new_row.copy()  # avoid SettingWithCopy issues
 
         merged_name = f"{name_ch or 'NA'}__{name_dis or 'NA'}"
 
@@ -535,9 +549,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         new_row["capital_cost"] = capex_merged
         new_row["p_nom"] = p_nom_merged
         new_row["p_nom_extendable"] = pnom_extendable
-        new_row["p_min_pu"] = -eta_dis # Correction to account limit of perspective
-        # If you don't add this, the store is gonna produce too much (to have -1, they can discharge 1/eta_dis)
-        # To correct if there are problems with sector coupling
+        new_row["p_min_pu"] = -eta_dis  # account for discharge limit perspective
 
         # If there are p_nom_min/max columns, keep them consistent (safe defaults)
         for col in ["p_nom_min", "p_nom_max"]:
@@ -552,6 +564,23 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
             rows_to_drop.append(name_dis)
 
         rows_to_append.append(new_row)
+
+    # Apply drops/appends
+    if rows_to_drop:
+        links_merged_df = links_merged_df.drop(
+            index=[r for r in rows_to_drop if r in links_merged_df.index]
+        )
+    if rows_to_append:
+        links_merged_df = pd.concat(
+            [links_merged_df, pd.DataFrame(rows_to_append)], axis=0
+        )
+
+    # Count extendable links after merging
+    extendable_final = _count_extendable(links_merged_df)
+    merge_dim = extendable_initial - extendable_final
+
+    return stores_df, links_merged_df, merge_dim
+
 
 
     # Apply drops/appends
