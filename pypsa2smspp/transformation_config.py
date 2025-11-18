@@ -27,11 +27,11 @@ class TransformationConfig:
     def reset(self):
         # Parameters for intermittent units
         self.IntermittentUnitBlock_parameters = {
-            "Gamma": 0.0,
-            "Kappa": 1.0,
+            # "Gamma": 0.0,
+            # "Kappa": 1.0,
             "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
-            "InertiaPower": 1.0,
+            # "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
         }
 

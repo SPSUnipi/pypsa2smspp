@@ -289,9 +289,9 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
             carrier="slack",
             bus=bus,
             p_nom=max_total_demand,
-            p_max_pu=1,
-            p_min_pu=0,
-            marginal_cost=100000,
+            p_max_pu=1 if max_total_demand > 0 else 0,
+            p_min_pu=0 if max_total_demand > 0 else -1,
+            marginal_cost=100000 if max_total_demand > 0 else -10000,
             capital_cost=0,
             p_nom_extendable=False,
         )

@@ -59,6 +59,8 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
+name = 'design_network_block'
+
 #%% Network definition with PyPSA
 config = TestConfig()
 if "sector" in config.input_name_components:
@@ -75,12 +77,12 @@ if "sector" not in config.input_name_components:
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
 
-# network.export_to_netcdf("test_pypsa.nc")
+network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
-network.model.to_file(fn = "pypsa.lp")
+network.model.to_file(fn = f"output/pypsa_{name}.lp")
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network, merge_links=True, expansion_ucblock=True)
+transformation = Transformation(network, merge_links=False, expansion_ucblock=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 
@@ -90,9 +92,9 @@ tran = transformation.convert_to_blocks()
 if transformation.expansion_ucblock or transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
     ### UCBlock configuration ###
     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig_grb")  # load a default config file [highs solver]
-    temporary_smspp_file = "output/network_designnetworkblock.nc"  # path to temporary SMS++ file
-    output_file = "output/temp_log_file.txt"  # path to the output file (optional)
-    solution_file = "output/solution_designnetworkblock.nc"
+    temporary_smspp_file = f"output/network_{name}.nc"  # path to temporary SMS++ file
+    output_file = f"output/log_{name}.txt"  # path to the output file (optional)
+    solution_file = f"output/solution_{name}.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):
@@ -128,9 +130,9 @@ if transformation.expansion_ucblock or transformation.dimensions['InvestmentBloc
 else:
     ### InvestmentBlock configuration ###
     configfile = pysmspp.SMSConfig(template="InvestmentBlock/BSPar.txt")
-    temporary_smspp_file = "output/temp_network_investment_daily.nc"
-    output_file = "output/temp_log_file_investment.txt"  # path to the output file (optional)
-    solution_file = "output/temp_solution_file_investment.nc"
+    temporary_smspp_file = f"output/inv_network_{name}.nc"  # path to temporary SMS++ file
+    output_file = f"output/inv_log_{name}.txt"  # path to the output file (optional)
+    solution_file = f"output/inv_solution_{name}.nc"
     
     # Check if the file exists
     if os.path.exists(solution_file):

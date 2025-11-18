@@ -180,14 +180,10 @@ class Transformation:
         self._dc_names = []
         self._dc_types = []
     
-        if getattr(self, "merge_links", False):
-            stores_df, links_merged_df, self.dimensions['NetworkBlock']['merged_links_ext'] = build_store_and_merged_links(
-                n, merge_links=self.merge_links, logger=logger)
-            correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
-        else:
-            stores_df, links_merged_df = build_store_and_merged_links(
-                n, merge_links=False, logger=logger) 
         
+        stores_df, links_merged_df, self.dimensions['NetworkBlock']['merged_links_ext'] = build_store_and_merged_links(
+            n, merge_links=self.merge_links, logger=logger)
+        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
         
         links_before = links_merged_df.copy()
         

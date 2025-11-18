@@ -455,11 +455,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     extendable_initial = _count_extendable(links_merged_df)
 
     if not merge_links or links_merged_df.empty or stores_df.empty:
-        merge_dim = {
-            "extendable_links_initial": extendable_initial,
-            "extendable_links_final": extendable_initial,
-            "extendable_links_lost": 0,
-        }
+        merge_dim = 0
         return stores_df, links_merged_df, merge_dim
 
     # We will collect rows to drop and rows to append
@@ -580,16 +576,6 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     merge_dim = extendable_initial - extendable_final
 
     return stores_df, links_merged_df, merge_dim
-
-
-
-    # Apply drops/appends
-    if rows_to_drop:
-        links_merged_df = links_merged_df.drop(index=[r for r in rows_to_drop if r in links_merged_df.index])
-    if rows_to_append:
-        links_merged_df = pd.concat([links_merged_df, pd.DataFrame(rows_to_append)], axis=0)
-
-    return stores_df, links_merged_df
 
 
 def explode_multilinks_into_branches(
