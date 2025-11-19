@@ -82,7 +82,7 @@ network.export_to_netcdf(f"output/pypsa_{name}.nc")
 network.model.to_file(fn = f"output/pypsa_{name}.lp")
 #%% Transformation class
 then = datetime.now()
-transformation = Transformation(network, merge_links=False, expansion_ucblock=True)
+transformation = Transformation(network, merge_links=True, expansion_ucblock=True)
 print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
 

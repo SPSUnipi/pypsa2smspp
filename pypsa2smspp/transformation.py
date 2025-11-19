@@ -558,13 +558,17 @@ class Transformation:
         shape (time, element).
         """
     
-        vars_of_interest = ("DualCost", "FlowValue", "NodeInjection")
+        vars_of_interest = ("FlowValue", "NodeInjection")
     
         blocks = solution_0.blocks
     
         # --- Case 1: new format, single aggregated block -------------------------
         if "NetworkBlock" in blocks:
             block = blocks["NetworkBlock"]
+            
+            if "DesignNetworkBlock_0" in block.blocks:
+                block = block.blocks["DesignNetworkBlock_0"]
+                vars_of_interest = vars_of_interest + ("DesignValue",)
     
             for var in vars_of_interest:
                 if var not in block.variables:
@@ -751,7 +755,7 @@ class Transformation:
         prepare_solution(n, self.ds)
         
         n.optimize.assign_solution()
-        # assign_duals(n) # Still doesn't work
+        # n.optimize.assign_duals(n) # Still doesn't work
         
         n._multi_invest = False
         n.optimize.post_processing()

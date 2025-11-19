@@ -57,7 +57,7 @@ class TransformationConfig:
         }
 
         self.BatteryUnitBlock_parameters = {
-            "Kappa": 1.0,
+            # "Kappa": 1.0,
             "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "DeltaRampUp": np.nan,
@@ -185,16 +185,16 @@ class TransformationConfig:
         self.DCNetworkBlock_lines_inverse = {
             "p0": lambda flowvalue: flowvalue,
             "p1": lambda flowvalue: -flowvalue,
-            "mu_lower": lambda dualcost: dualcost,
-            "mu_upper": lambda dualcost: dualcost,
+            # "mu_lower": lambda dualcost: dualcost,
+            # "mu_upper": lambda dualcost: dualcost,
             "s_nom": lambda designvariable: designvariable,
             }
         
         self.DCNetworkBlock_links_inverse = {
             "p0": lambda flowvalue: flowvalue,
             "p1": lambda flowvalue, efficiency: -flowvalue * efficiency,
-            "mu_lower": lambda dualcost: dualcost,
-            "mu_upper": lambda dualcost: dualcost,
+            # "mu_lower": lambda dualcost: dualcost,
+            # "mu_upper": lambda dualcost: dualcost,
             "p_nom": lambda designvariable: designvariable,
             }
         
