@@ -186,7 +186,7 @@ class Transformation:
         
         links_before = links_merged_df.copy()
         
-        if bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any()):
+        if "bus2" in n.links.columns and bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any()):
             # hyper alle linee
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
             links_after, self.networkblock['efficiencies'], self.dimensions['NetworkBlock']['NumberBranches'], self.dimensions['NetworkBlock']['NumberBranches_ext'] = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
