@@ -508,7 +508,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
 
         # Extendability must match (as per your assumption)
         if ext_ch != ext_dis:
-            logger(
+            logger.warning(
                 f"[merge] Warning: extendability mismatch for store '{store_name}' "
                 f"(charge={ext_ch}, discharge={ext_dis}). Using logical AND."
             )
@@ -516,7 +516,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
 
         # Choose p_nom for the merged link
         if abs(p_nom_ch - p_nom_dis) > PNOM_TOL:
-            logger(
+            logger.warning(
                 f"[merge] Warning: p_nom mismatch for store '{store_name}' "
                 f"(ch={p_nom_ch}, dis={p_nom_dis}). Using min()."
             )

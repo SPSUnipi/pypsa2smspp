@@ -7,19 +7,23 @@ Exposes high-level transformation and network correction utilities.
 
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("pypsa2smspp")
 logger.setLevel(logging.INFO)
 
-# console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
+if not logger.handlers:  # 👈 evita di aggiungere più handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
 
-# formatter
-formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(name)s - %(message)s')
-console_handler.setFormatter(formatter)
+    formatter = logging.Formatter(
+        '[%(asctime)s] %(levelname)s - %(name)s - %(message)s'
+    )
+    console_handler.setFormatter(formatter)
 
-# attach
-logger.addHandler(console_handler)
+    logger.addHandler(console_handler)
+
+# opzionale ma consigliato in una libreria:
+logger.propagate = False
+
 
 
 # Transformation logic (PyPSA ↔ SMS++)
