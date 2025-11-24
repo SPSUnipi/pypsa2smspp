@@ -245,31 +245,30 @@ def networkblock_dimensions(n):
     links_count = len(getattr(n, "links", []))
     combined_count = lines_count + links_count
 
-    # --- detect extra outputs from multi-links to build branches ---
-    extra_outputs = 0
-    if links_count > 0:
-        link_df = n.links
-        # iterate bus2, bus3, ... only while column exists
-        k = 2
-        while f"bus{k}" in link_df.columns:
-            s = link_df[f"bus{k}"]
-            # count non-empty entries: notna and not just whitespace
-            valid = s.notna() & (s.astype(str).str.strip() != "")
-            extra_outputs += int(valid.sum())
-            k += 1
+    # # --- detect extra outputs from multi-links to build branches ---
+    # extra_outputs = 0
+    # if links_count > 0:
+    #     link_df = n.links
+    #     # iterate bus2, bus3, ... only while column exists
+    #     k = 2
+    #     while f"bus{k}" in link_df.columns:
+    #         s = link_df[f"bus{k}"]
+    #         # count non-empty entries: notna and not just whitespace
+    #         valid = s.notna() & (s.astype(str).str.strip() != "")
+    #         extra_outputs += int(valid.sum())
+    #         k += 1
 
-    # For branches: each physical line contributes 1 branch.
-    # Each physical link contributes 1 branch for bus1 (the first output),
-    # plus one branch for every additional non-empty bus{k>=2}.
-    number_lines = combined_count
-    number_branches = lines_count + links_count + extra_outputs
+    # # For branches: each physical line contributes 1 branch.
+    # # Each physical link contributes 1 branch for bus1 (the first output),
+    # # plus one branch for every additional non-empty bus{k>=2}.
+    # number_lines = combined_count
+    # number_branches = lines_count + links_count + extra_outputs
 
     return {
         "Lines": lines_count,
         "Links": links_count,
         "combined": combined_count,
-        "NumberLines": number_lines,
-        "NumberBranches": number_branches,
+        "NumberLines": combined_count,
     }
 
 
@@ -330,6 +329,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     if "NumberBranches" in dimensions['NetworkBlock']:
         dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links
         dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
+        dimensions['InvestmentBlock']['NumberDesignLines'] = dimensions['NetworkBlock']['NumberBranches_ext']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
 
 
@@ -685,15 +685,29 @@ def explode_multilinks_into_branches(
                     or (c.startswith("efficiency") and c != "efficiency")]
     exploded = exploded.drop(columns=cols_to_drop, errors="ignore")
 
+    # ---- QUI il conteggio dei branches espandibili (poche righe) ----
+    n_phys = len(df)
+    number_branches = len(exploded)
+
+    if "p_nom_extendable" in exploded.columns:
+        number_branches_expandable = int(
+            exploded["p_nom_extendable"].fillna(False).astype(bool).sum()
+        )
+    else:
+        number_branches_expandable = 0
+
+    extra = number_branches - n_phys
     if callable(logger):
-        n_phys = len(df)
-        number_branches = len(exploded)
-        extra = number_branches - n_phys
-        logger(f"[multilink] Exploded {n_phys} physical links into {number_branches} branches (+{extra}).")
+        logger(
+            f"[multilink] Exploded {n_phys} physical links into "
+            f"{number_branches} branches (+{extra}). "
+            f"Expandable branches: {number_branches_expandable}."
+        )
 
     if return_efficiencies:
-        return exploded, efficiencies_dict
-    return exploded
+        return exploded, efficiencies_dict, number_branches, number_branches_expandable
+    return exploded, number_branches, number_branches_expandable
+
 
 
 

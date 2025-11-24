@@ -183,14 +183,13 @@ class Transformation:
         
         stores_df, links_merged_df, self.dimensions['NetworkBlock']['merged_links_ext'] = build_store_and_merged_links(
             n, merge_links=self.merge_links, logger=logger)
-        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
         
         links_before = links_merged_df.copy()
         
-        if self.dimensions["NetworkBlock"]["NumberBranches"] > self.dimensions["NetworkBlock"]["NumberLines"]:
+        if bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any()):
             # hyper alle linee
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
-            links_after, self.networkblock['efficiencies'] = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
+            links_after, self.networkblock['efficiencies'], self.dimensions['NetworkBlock']['NumberBranches'], self.dimensions['NetworkBlock']['NumberBranches_ext'] = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
             self.networkblock["max_eff_len"] = max((len(v) for v in self.networkblock['efficiencies'].values()), default=1)
             add_sectorcoupled_parameters(self.config.Lines_parameters, self.config.Links_parameters, self.config.DCNetworkBlock_links_inverse, self.networkblock['max_eff_len'])
         else:
@@ -201,6 +200,7 @@ class Transformation:
             if "is_primary_branch" not in links_after.columns:
                 links_after["is_primary_branch"] = True
         
+        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
         
         self._dc_index = build_dc_index(n, links_before, links_after)
         
@@ -654,10 +654,10 @@ class Transformation:
             If array dimensions are inconsistent.
         """
         flow_matrix = self.networkblock['Lines']['FlowValue']
-        dual_matrix = self.networkblock['Lines']['DualCost']
-    
-        if flow_matrix.shape != dual_matrix.shape:
-            raise ValueError("Shape mismatch between FlowValue and DualCost")
+        if 'DesignValue' in self.networkblock['Lines'].keys():
+           design_matrix = self.networkblock['Lines']['DesignValue'] 
+        else:
+           design_matrix = 0
     
         names, types = self.prepare_dc_unitblock_info(n)
         
@@ -681,8 +681,8 @@ class Transformation:
                 "block": block_label,
                 "name": names[i],
                 "FlowValue": flow_matrix[:, i],
-                "DualCost": dual_matrix[:, i],
-                "DesignVariable": self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i],
+                # "DualCost": dual_matrix[:, i],
+                "DesignVariable": design_matrix[:, i] if isinstance(design_matrix, np.ndarray) else self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i],
             }
             
             if block_type == "link":
