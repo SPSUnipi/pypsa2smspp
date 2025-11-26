@@ -87,8 +87,7 @@ def run_dispatch(xlsx_path: Path,
                     solver_name: str = "highs",
                     uc_template: str = "UCBlock/uc_solverconfig",
                     inv_template: str = "InvestmentBlock/BSPar.txt",
-                    merge_links: bool = True,
-                    expansion_ucblock: bool = True) -> dict:
+                    merge_links: bool = True) -> dict:
     
     summary = create_summary_dict(xlsx_path)
     case_name = summary["case"]  # e.g., "components_caseA"
@@ -199,8 +198,7 @@ def run_investment(xlsx_path: Path,
                     solver_name: str = "highs",
                     uc_template: str = "UCBlock/uc_solverconfig",
                     inv_template: str = "InvestmentBlock/BSPar.txt",
-                    merge_links: bool = True,
-                    expansion_ucblock: bool = True) -> dict:
+                    merge_links: bool = True) -> dict:
     
     summary = create_summary_dict(xlsx_path)
     case_name = summary["case"]  # e.g., "components_caseA"
@@ -325,4 +323,4 @@ def test_investment(test_case_xlsx):
     run_investment(test_case_xlsx)
 
 if __name__ == "__main__":
-    run_investment(test_cases[7])
+    run_investment(test_cases[5])
