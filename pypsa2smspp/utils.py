@@ -1230,13 +1230,13 @@ def determine_size_type(
             shape = args.shape if isinstance(args, np.ndarray) else (len(args),)
     
             for size_expr in size_arr:
-                if size_expr == '1' and shape == (1,):
+                if size_expr == '-' and shape == (1,):
                     variable_size = ()
                     break
                 size_components = size_expr.split(",")
                 try:
                     expected_shape = tuple(
-                        dim_map[conversion_dict[s]]
+                        dim_map[s]
                         for s in size_components
                     )
                 except KeyError:
@@ -1244,10 +1244,10 @@ def determine_size_type(
     
                 if shape == expected_shape:
                     if len(size_components) == 1 or "1" in size_components:
-                        variable_size = (conversion_dict[size_components[0]],)
+                        variable_size = (size_components[0],)
                     else:
                         variable_size = tuple(
-                            conversion_dict[dim]
+                            dim
                             for dim in size_components
                         )
                     break

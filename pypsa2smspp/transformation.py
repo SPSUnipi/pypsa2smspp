@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 import os
 from pypsa2smspp.transformation_config import TransformationConfig
-from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
+from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig, blocks
 from pypsa2smspp import logger
 from copy import deepcopy
 
@@ -62,9 +62,6 @@ from .io_parser import (
 
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
-
-DIR = os.path.dirname(os.path.abspath(__file__))
-FP_PARAMS = os.path.join(DIR, "data", "smspp_parameters.xlsx")
 
 
 class Transformation:
@@ -139,7 +136,7 @@ class Transformation:
         
     
     ### 1 ###
-    def read_excel_components(self, fp=FP_PARAMS):
+    def read_excel_components(self, data=None):
         """
         Reads Excel file for size and type of SMS++ parameters. Each sheet includes a class of components
 
@@ -149,7 +146,10 @@ class Transformation:
             Dictionary where keys are sheet names and values are DataFrames containing 
             data for each UnitBlock type (or lines).
         """
-        self.smspp_parameters = pd.read_excel(fp, sheet_name=None, index_col=0)
+        if data is not None:
+            self.smspp_parameters = data
+        else:
+            self.smspp_parameters = blocks
     
  
     ### 2 ###          
