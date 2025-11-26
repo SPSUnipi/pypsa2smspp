@@ -306,46 +306,15 @@ def run_investment(xlsx_path: Path,
     print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
 
 
-# def main():
-#     # Discover inputs
-#     inputs_dir = HERE / "configs" / "data" / "test"
-#     xlsx_files = sorted(inputs_dir.glob("*.xlsx"))
-
-#     if not xlsx_files:
-#         print(f"Nessun .xlsx trovato in {inputs_dir}")
-#         return
-
-#     rows = []
-#     for x in xlsx_files:
-#         expansion_ucblock = False if "inv" in x.name else True
-#         row = run_single_case(x, expansion_ucblock=expansion_ucblock)
-#         rows.append(row)
-
-#     # Build DataFrame and save CSV
-#     df = pd.DataFrame(rows)
-#     csv_path = OUT_TEST / "bench_summary.csv"
-#     df.to_csv(csv_path, index=False)
-#     print(f"\n>>> Summary written to: {csv_path}")
-#     # Optional: pretty print
-#     try:
-#         # Simple terminal preview
-#         with pd.option_context('display.max_columns', None, 'display.width', 140):
-#             print(df)
-#     except Exception:
-#         pass
-
-def get_test_cases():
-    inputs_dir = HERE / "configs" / "data" / "test"
+def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
+    """
+    Get all test case Excel files and their names for parametrization.
+    """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return files, names
 
 test_cases, test_names = get_test_cases()
-
-# def pytest_generate_tests(metafunc):
-#     if "test_case_xlsx" in metafunc.fixturenames:
-#         # use the filename as ID for better test names
-#         metafunc.parametrize("test_case_xlsx", test_cases)
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)
 def test_dispatch(test_case_xlsx):
