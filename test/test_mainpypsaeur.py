@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Nov 12 14:41:15 2025
+Created on Tue Nov 25 12:23:55 2025
 
 @author: aless
 """
 
 # -*- coding: utf-8 -*-
 """
-Batch SMS++ benchmark runner over multiple Excel inputs.
+Batch SMS++ benchmark runner over multiple PyPSA networks (.nc).
 
-Scans data/test/*.xlsx and runs the full pipeline:
+Scans networks/bench/*.nc and runs the full pipeline:
 PyPSA optimization -> Transformation -> SMS++ solve -> inverse transform,
 measuring timings and collecting objective gap vs PyPSA.
 
 Outputs:
 - Per-case artifacts in output/test/
-- CSV summary at output/test/bench_summary.csv
+- CSV summary at output/test/bench_summary_nc.csv
 
 Author: aless (adapted)
 """
@@ -42,12 +42,10 @@ if str(SCRIPTS) not in sys.path:
 # Safe output dirs
 OUT = HERE / "output"
 OUT.mkdir(parents=True, exist_ok=True)
-OUT_TEST = OUT / "test"
+OUT_TEST = OUT / "test_pypsaeur"
 OUT_TEST.mkdir(parents=True, exist_ok=True)
 
 # --- Domain imports (after PYTHONPATH is set) ---
-from configs.test_config import TestConfig
-from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 
 from pypsa2smspp.network_correction import (
@@ -57,7 +55,9 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     parse_txt_file,
     add_slack_unit,
-    compare_networks,  # optional: not used in timings but kept for debugging
+    # clean_storage_units,  # add if you want
+    # reduce_snapshots_and_scale_costs,
+    # compare_networks,
 )
 
 # ---------- Utilities ----------
@@ -77,25 +77,26 @@ def safe_remove(p: Path):
     except Exception:
         pass
 
-# ---------- Core runner for a single Excel input ----------
-def run_single_case(xlsx_path: Path,
-                    solver_name: str = "gurobi",
-                    uc_template: str = "UCBlock/uc_solverconfig_grb",
-                    inv_template: str = "InvestmentBlock/BSPar.txt",
-                    merge_links: bool = True,
-                    expansion_ucblock: bool = True) -> dict:
+
+# ---------- Core runner for a single .nc network ----------
+def run_single_nc(nc_path: Path,
+                  solver_name: str = "gurobi",
+                  uc_template: str = "UCBlock/uc_solverconfig",       # adjust to *_grb if you want
+                  inv_template: str = "InvestmentBlock/BSPar.txt",
+                  merge_links: bool = True,
+                  expansion_ucblock: bool = True) -> dict:
     """
-    Run the full flow for a given Excel components file.
+    Run the full flow for a given PyPSA network (.nc file).
 
     Returns a dict with timings, status, and metrics to be appended to summary CSV.
     """
-    case_name = xlsx_path.stem  # e.g., "components_caseA"
-    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
+    case_name = nc_path.stem   # e.g., base_s_5_elec_1h
+    print(f"\n=== Running NC case: {case_name} ({nc_path.name}) ===")
 
     # Build per-case output paths
     prefix = f"{case_name}"
-    network_nc = OUT_TEST / f"network_{prefix}.nc"
-    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"            # temp write during optimize
+    network_nc = OUT_TEST / f"network_{prefix}.nc"       # PyPSA network after optimization
+    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"   # temp write during optimize
     smspp_solution_nc = OUT_TEST / f"solution_{prefix}.nc"
     smspp_log_txt = OUT_TEST / f"log_{prefix}.txt"
     pypsa_lp = OUT_TEST / f"pypsa_{prefix}.lp"
@@ -106,17 +107,17 @@ def run_single_case(xlsx_path: Path,
 
     summary = {
         "case": case_name,
-        "input_file": str(xlsx_path),
+        "input_file": str(nc_path),
         "status": "OK",
         "error_msg": "",
         "PyPSA_opt_s": None,
-        "SMSpp_total_s": None,
         "Transform_direct_s": None,
         "PySMSpp_convert_s": None,
         "SMSpp_solver_write_s": None,
         "SMSpp_solver_s": None,
         "SMSpp_write_s": None,
         "Inverse_transform_s": None,
+        "SMSpp_total_s": None,
         "Obj_PyPSA": None,
         "Obj_SMSpp": None,
         "Obj_rel_error_pct": None,
@@ -125,26 +126,14 @@ def run_single_case(xlsx_path: Path,
     }
 
     try:
-        # ---- Build config overriding parser to point at this Excel ----
-        # We "monkey-patch" the parser fields so NetworkDefinition reads from our file.
-        parser = TestConfig()
-        parser.input_data_path = str(xlsx_path.parent)       # folder of the excel
-        parser.input_name_components = xlsx_path.name        # excel filename
+        # -------- Load network --------
+        n_smspp = pypsa.Network(str(nc_path))
 
-        if "sector" in xlsx_path.name:
-            parser.load_sign = -1
-        # ---- Build network from Excel via your NetworkDefinition pipeline ----
-        nd = NetworkDefinition(parser)
-
-        # Optional: clean-ups consistent with your other scripts
-        n = nd.n
-        n = clean_ciclicity_storage(n)
-        if "sector" not in xlsx_path.name:
-            n = add_slack_unit(n)
-        
+        # Optional cleanups (adapt as in your old script)
+        n_smspp = clean_ciclicity_storage(n_smspp)
 
         # Keep a working copy for PyPSA optimization (do not mutate original)
-        network = n.copy()
+        network = n_smspp.copy()
 
         # ---- (1) PyPSA optimization ----
         t0 = t_now()
@@ -169,7 +158,7 @@ def run_single_case(xlsx_path: Path,
         tran = transformation.convert_to_blocks()
         summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
 
-        # Determine which block to run
+        # Determine which block to run (same logic as Excel batch)
         is_investment = (not transformation.expansion_ucblock) and \
                         (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
         summary["Investment_mode"] = bool(is_investment)
@@ -178,7 +167,6 @@ def run_single_case(xlsx_path: Path,
         if not is_investment:
             # UCBlock configuration
             configfile = pysmspp.SMSConfig(template=uc_template)
-            # The temporary eBlock file to write/solve
             tmp_nc = str(smspp_tmp_nc)
             out_txt = str(smspp_log_txt)
             sol_nc = str(smspp_solution_nc)
@@ -195,16 +183,13 @@ def run_single_case(xlsx_path: Path,
                 summary["SMSpp_solver_s"] = round(solver_s, 6)
                 summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
             except Exception:
-                # Fallback if parsing fails
                 summary["SMSpp_solver_s"] = None
                 summary["SMSpp_write_s"] = None
 
-            # ---- Objective & error ----
+            # Objectives & error
             try:
-                # PyPSA objective
                 obj_pypsa = float(network.objective + network.objective_constant)
             except Exception:
-                # In some versions, objective_constant may be zero or missing
                 obj_pypsa = float(network.objective)
 
             obj_smspp = float(result.objective_value)
@@ -213,10 +198,10 @@ def run_single_case(xlsx_path: Path,
             if obj_pypsa != 0.0:
                 summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
 
-            # ---- (5) Parse solution & inverse transform ----
+            # Inverse transform
             t0 = t_now()
-            _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-            transformation.inverse_transformation(n)
+            _ = transformation.parse_solution_to_unitblocks(result.solution, n_smspp)
+            transformation.inverse_transformation(n_smspp)
             summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
         else:
@@ -233,7 +218,7 @@ def run_single_case(xlsx_path: Path,
             total_smspp = delta_s(t0)
             summary["SMSpp_solver_write_s"] = round(total_smspp, 6)
 
-            # No robust solver-time split here (template dependent), but try:
+            # Try to split solver vs writing from log
             try:
                 d = parse_txt_file(out_txt)
                 solver_s = float(d.get("elapsed_time", 0.0))
@@ -242,66 +227,72 @@ def run_single_case(xlsx_path: Path,
             except Exception:
                 pass
 
-            # Objectives
-            obj_pypsa = float(network.objective)  # often objective_constant already included or 0
+            obj_pypsa = float(network.objective)   # objective_constant usually 0 here
             obj_smspp = float(result.objective_value)
             summary["Obj_PyPSA"] = obj_pypsa
             summary["Obj_SMSpp"] = obj_smspp
             if obj_pypsa != 0.0:
                 summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
 
-            # Inverse
+            # Inverse transform
             t0 = t_now()
-            _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-            transformation.inverse_transformation(n)
+            _ = transformation.parse_solution_to_unitblocks(result.solution, n_smspp)
+            transformation.inverse_transformation(n_smspp)
             summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
-        # ---- (6) Save final networks if needed ----
+        # ---- (5) Save PyPSA network after optimization ----
         try:
-            # PyPSA network after optimization
             network.export_to_netcdf(str(network_nc))
-            # The inverse-transformed network n could be exported similarly:
-            # (Uncomment if you want a dedicated file)
-            # (OUT_TEST / f"network_smspp_{prefix}.nc")
         except Exception:
             pass
-        
-        
-        summary["SMSpp_total_s"] = summary["Transform_direct_s"] + summary["PySMSpp_convert_s"] + summary["SMSpp_solver_write_s"] + summary["Inverse_transform_s"]
-        print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
+
+        # Compute total SMS++ pipeline time (excluding PyPSA)
+        if summary["Transform_direct_s"] is not None and \
+           summary["PySMSpp_convert_s"] is not None and \
+           summary["SMSpp_solver_write_s"] is not None and \
+           summary["Inverse_transform_s"] is not None:
+            summary["SMSpp_total_s"] = round(
+                summary["Transform_direct_s"]
+                + summary["PySMSpp_convert_s"]
+                + summary["SMSpp_solver_write_s"]
+                + summary["Inverse_transform_s"],
+                6,
+            )
+
+        print(f"=== Done NC: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
         return summary
 
     except Exception as e:
         summary["status"] = "FAIL"
         summary["error_msg"] = f"{type(e).__name__}: {e}"
-        print(f"!!! FAILED {case_name}: {summary['error_msg']}")
+        print(f"!!! FAILED NC {case_name}: {summary['error_msg']}")
         traceback.print_exc()
         return summary
 
 
 def main():
-    # Discover inputs
-    inputs_dir = HERE / "configs" / "data" / "test"
-    xlsx_files = sorted(inputs_dir.glob("*.xlsx"))
+    # Discover inputs (.nc networks)
+    # You can change this folder as you like, e.g. HERE / "networks"
+    inputs_dir = HERE / "networks"
+    nc_files = sorted(inputs_dir.glob("*.nc"))
 
-    if not xlsx_files:
-        print(f"Nessun .xlsx trovato in {inputs_dir}")
+    if not nc_files:
+        print(f"No .nc file in {inputs_dir}")
         return
 
     rows = []
-    for x in xlsx_files:
-        expansion_ucblock = False if "inv" in x.name else True
-        row = run_single_case(x, expansion_ucblock=expansion_ucblock)
+    for nc in nc_files:
+        # Same logic as Excel script: filenames containing "inv" are investment cases
+        expansion_ucblock = False if "inv" in nc.name else True
+        row = run_single_nc(nc, expansion_ucblock=expansion_ucblock)
         rows.append(row)
 
     # Build DataFrame and save CSV
     df = pd.DataFrame(rows)
-    csv_path = OUT_TEST / "bench_summary.csv"
+    csv_path = OUT_TEST / "bench_summary_pypsaeur.csv"
     df.to_csv(csv_path, index=False)
-    print(f"\n>>> Summary written to: {csv_path}")
-    # Optional: pretty print
+    print(f"\n>>> Summary (NC) written to: {csv_path}")
     try:
-        # Simple terminal preview
         with pd.option_context('display.max_columns', None, 'display.width', 140):
             print(df)
     except Exception:

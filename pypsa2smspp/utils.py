@@ -364,7 +364,7 @@ def get_attr_name(component_type: str, carrier: str | None = None, renewable_car
     if component_type == "Generator":
         if carrier in renewable_carriers:
             return "IntermittentUnitBlock_parameters"
-        elif carrier == "slack":
+        elif carrier in ["slack", "load_shedding", "load shedding"]:
             return "SlackUnitBlock_parameters"
         else:
             return "IntermittentUnitBlock_parameters"

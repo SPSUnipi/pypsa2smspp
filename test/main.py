@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'multi-link_dispatch'
+name = 'negative_slack'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -70,9 +70,9 @@ nd = NetworkDefinition(config)
 
 nd.n = clean_ciclicity_storage(nd.n)
 
-if "sector" not in config.input_name_components:
-    nd.n = add_slack_unit(nd.n)
-
+# if "sector" not in config.input_name_components:
+#     nd.n = add_slack_unit(nd.n)
+nd.n = add_slack_unit(nd.n)
 
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
