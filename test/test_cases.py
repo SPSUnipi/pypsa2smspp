@@ -37,13 +37,6 @@ from pypsa2smspp.network_correction import (
 )
 
 # ---------- Utilities ----------
-def t_now() -> float:
-    """High-resolution time in seconds."""
-    return time.perf_counter()
-
-def delta_s(start: float) -> float:
-    """Seconds elapsed since start() using perf_counter."""
-    return time.perf_counter() - start
 
 def safe_remove(p: Path):
     """Remove path if exists."""
@@ -62,39 +55,15 @@ def create_test_config(xlsx_path: Path) -> TestConfig:
         parser.load_sign = -1
     return parser
 
-def create_summary_dict(xlsx_path: Path) -> dict:
-    """Create an empty summary dict for the given case."""
-    return {
-        "case": xlsx_path.stem,
-        "input_file": str(xlsx_path),
-        "status": "OK",
-        "error_msg": "",
-        "PyPSA_opt_s": None,
-        "Transform_direct_s": None,
-        "PySMSpp_convert_s": None,
-        "SMSpp_total_s": None,
-        "SMSpp_solver_s": None,
-        "SMSpp_write_s": None,
-        "Inverse_transform_s": None,
-        "Obj_PyPSA": None,
-        "Obj_SMSpp": None,
-        "Obj_rel_error_pct": None,
-        "Investment_mode": None,
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-    }
-
 def run_dispatch(xlsx_path: Path,
                     solver_name: str = "highs",
                     uc_template: str = "UCBlock/uc_solverconfig",
                     inv_template: str = "InvestmentBlock/BSPar.txt",
                     merge_links: bool = True) -> dict:
     
-    summary = create_summary_dict(xlsx_path)
-    case_name = summary["case"]  # e.g., "components_caseA"
+    case_name = xlsx_path.name  # e.g., "components_caseA"
 
     expansion_ucblock = False if "inv" in xlsx_path.name else True
-
-    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
 
     # Build per-case output paths
     prefix = f"{case_name}"
@@ -123,29 +92,22 @@ def run_dispatch(xlsx_path: Path,
     network = n.copy()
 
     # ---- (1) PyPSA optimization ----
-    t0 = t_now()
     network.optimize(solver_name=solver_name)
-    summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
 
     # Export LP for debugging
     network.model.to_file(fn=str(pypsa_lp))
 
     # ---- (2) Direct transformation ----
-    t0 = t_now()
     transformation = Transformation(network,
                                     merge_links=merge_links,
                                     expansion_ucblock=expansion_ucblock)
-    summary["Transform_direct_s"] = round(delta_s(t0), 6)
 
     # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
-    t0 = t_now()
     tran = transformation.convert_to_blocks()
-    summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
 
     # Determine which block to run
     is_investment = (not transformation.expansion_ucblock) and \
                     (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
-    summary["Investment_mode"] = bool(is_investment)
 
     # Skip for investment mode (not implemented here)
     if is_investment:
@@ -159,16 +121,10 @@ def run_dispatch(xlsx_path: Path,
     out_txt = str(smspp_log_txt)
     sol_nc = str(smspp_solution_nc)
 
-    t0 = t_now()
     result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc, log_executable_call=True)
-    total_smspp = delta_s(t0)
-    summary["SMSpp_total_s"] = round(total_smspp, 6)
 
     # Parse solver time from log (if available)
     d = parse_txt_file(out_txt)
-    solver_s = float(d.get("elapsed_time", 0.0))
-    summary["SMSpp_solver_s"] = round(solver_s, 6)
-    summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
 
     # ---- Objective & error ----
     try:
@@ -177,22 +133,14 @@ def run_dispatch(xlsx_path: Path,
         obj_pypsa = float(network.objective)
 
     obj_smspp = float(result.objective_value)
-    summary["Obj_PyPSA"] = obj_pypsa
-    summary["Obj_SMSpp"] = obj_smspp
-    if obj_pypsa != 0.0:
-        summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
     
     assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
     # ---- (5) Parse solution & inverse transform ----
-    t0 = t_now()
     _ = transformation.parse_solution_to_unitblocks(result.solution, n)
     transformation.inverse_transformation(n)
-    summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
     network.export_to_netcdf(str(network_nc))
-
-    print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
 
 def run_investment(xlsx_path: Path,
                     solver_name: str = "highs",
@@ -200,12 +148,9 @@ def run_investment(xlsx_path: Path,
                     inv_template: str = "InvestmentBlock/BSPar.txt",
                     merge_links: bool = True) -> dict:
     
-    summary = create_summary_dict(xlsx_path)
-    case_name = summary["case"]  # e.g., "components_caseA"
+    case_name = xlsx_path.name  # e.g., "components_caseA"
 
     expansion_ucblock = False if "inv" in xlsx_path.name else True
-
-    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
 
     # Build per-case output paths
     prefix = f"{case_name}"
@@ -234,29 +179,22 @@ def run_investment(xlsx_path: Path,
     network = n.copy()
 
     # ---- (1) PyPSA optimization ----
-    t0 = t_now()
     network.optimize(solver_name=solver_name)
-    summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
 
     # Export LP for debugging
     network.model.to_file(fn=str(pypsa_lp))
 
     # ---- (2) Direct transformation ----
-    t0 = t_now()
     transformation = Transformation(network,
                                     merge_links=merge_links,
                                     expansion_ucblock=expansion_ucblock)
-    summary["Transform_direct_s"] = round(delta_s(t0), 6)
 
     # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
-    t0 = t_now()
     tran = transformation.convert_to_blocks()
-    summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
 
     # Determine which block to run
     is_investment = (not transformation.expansion_ucblock) and \
                     (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
-    summary["Investment_mode"] = bool(is_investment)
 
     # Skip for dispatch mode (not implemented here)
     if not is_investment:
@@ -269,41 +207,27 @@ def run_investment(xlsx_path: Path,
     out_txt = str(smspp_log_txt)
     sol_nc = str(smspp_solution_nc)
 
-    t0 = t_now()
     result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc,
                             inner_block_name='InvestmentBlock',
                             log_executable_call=True)
-    total_smspp = delta_s(t0)
-    summary["SMSpp_total_s"] = round(total_smspp, 6)
 
     # No robust solver-time split here (template dependent), but try:
     try:
         d = parse_txt_file(out_txt)
-        solver_s = float(d.get("elapsed_time", 0.0))
-        summary["SMSpp_solver_s"] = round(solver_s, 6)
-        summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
     except Exception:
         pass
 
     # Objectives
     obj_pypsa = float(network.objective)  # often objective_constant already included or 0
     obj_smspp = float(result.objective_value)
-    summary["Obj_PyPSA"] = obj_pypsa
-    summary["Obj_SMSpp"] = obj_smspp
-    if obj_pypsa != 0.0:
-        summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
     
     assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
     # Inverse
-    t0 = t_now()
     _ = transformation.parse_solution_to_unitblocks(result.solution, n)
     transformation.inverse_transformation(n)
-    summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
     network.export_to_netcdf(str(network_nc))
-
-    print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
 
 
 def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
