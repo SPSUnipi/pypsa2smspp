@@ -71,7 +71,9 @@ def remove_zero_p_nom_opt_components(n, nominal_attrs):
     # Lista dei componenti che hanno l'attributo p_nom_opt
     components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
     
-    for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
+    for components in n.components[["Line", "Generator", "Link", "Store", "StorageUnit"]]:
+        if components.emtpy:
+            continue
         components_df = components.static
         components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
         setattr(n, components.list_name, components_df)
@@ -1137,7 +1139,7 @@ def resolve_param_value(
     """
 
     block_class = attr_name.split("_")[0]
-    size = smspp_parameters[block_class]['Size'][key]
+    size = smspp_parameters[block_class]['dimension'][key]
 
     if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]']:
         weight = param in [
@@ -1233,7 +1235,7 @@ def determine_size_type(
                 if size_expr == '-' and shape == (1,):
                     variable_size = ()
                     break
-                size_components = size_expr.split(",")
+                size_components = size_expr.split("-")
                 try:
                     expected_shape = tuple(
                         dim_map[s]
@@ -1243,7 +1245,7 @@ def determine_size_type(
                     continue
     
                 if shape == expected_shape:
-                    if len(size_components) == 1 or "1" in size_components:
+                    if len(size_components) == 1 or "-" in size_components:
                         variable_size = (size_components[0],)
                     else:
                         variable_size = tuple(
