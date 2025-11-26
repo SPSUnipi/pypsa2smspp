@@ -272,7 +272,8 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     """
     # Compute the maximum total demand over all time steps
     max_total_demand = n.loads_t.p_set.sum(axis=1).max()
-
+    min_total_demand = n.loads_t.p_set.sum(axis=1).min()
+    
     # Helper to decide if a bus should be excluded
     def _is_excluded(bus_name: str) -> bool:
         bn = str(bus_name).strip().lower()
@@ -288,7 +289,7 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
             name=f"slack_unit {bus}",
             carrier="slack",
             bus=bus,
-            p_nom=max_total_demand,
+            p_nom=max_total_demand if max_total_demand > 0 else -min_total_demand,
             p_max_pu=1 if max_total_demand > 0 else 0,
             p_min_pu=0 if max_total_demand > 0 else -1,
             marginal_cost=100000 if max_total_demand > 0 else -10000,
