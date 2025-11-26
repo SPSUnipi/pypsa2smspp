@@ -215,6 +215,9 @@ class Transformation:
         
         # Iterate in the same order as before
         for components in n.components[["Generator", "Store", "StorageUnit", "Line", "Link"]]:
+
+            if components.empty:
+                continue
     
             # --- CHANGED: pick the right dataframe per component ---
             # TODO build a proper definition to define the DataFrame
