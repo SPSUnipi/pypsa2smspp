@@ -292,6 +292,8 @@ def run_investment(xlsx_path: Path,
     summary["Obj_SMSpp"] = obj_smspp
     if obj_pypsa != 0.0:
         summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
+    
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
     # Inverse
     t0 = t_now()
