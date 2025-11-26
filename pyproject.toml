@@ -21,12 +21,12 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 dependencies = [
     "numpy",
     "pandas>=0.24",
-    "pypsa",
+    "pypsa>=1",
     "xarray",
     "openpyxl",
     "pysmspp@git+https://github.com/SPSUnipi/pySMSpp",

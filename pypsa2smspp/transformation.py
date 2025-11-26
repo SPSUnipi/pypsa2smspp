@@ -9,7 +9,6 @@ import pandas as pd
 import pypsa
 import numpy as np
 from datetime import datetime 
-from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 import re
 import numpy as np
 import xarray as xr
@@ -215,7 +214,7 @@ class Transformation:
         # ------------- Main loop over components ----------------
         
         # Iterate in the same order as before
-        for components in n.iterate_components(["Generator", "Store", "StorageUnit", "Line", "Link"]):
+        for components in n.components[["Generator", "Store", "StorageUnit", "Line", "Link"]]:
     
             # --- CHANGED: pick the right dataframe per component ---
             # TODO build a proper definition to define the DataFrame
@@ -226,7 +225,7 @@ class Transformation:
                 components_df = links_after
                 components_t = components.dynamic
             else:
-                components_df = components.df
+                components_df = components.static
                 components_t = components.dynamic
     
             components_type = components.list_name
