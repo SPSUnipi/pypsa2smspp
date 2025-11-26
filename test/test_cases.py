@@ -84,8 +84,8 @@ def create_summary_dict(xlsx_path: Path) -> dict:
     }
 
 def run_dispatch(xlsx_path: Path,
-                    solver_name: str = "gurobi",
-                    uc_template: str = "UCBlock/uc_solverconfig_grb",
+                    solver_name: str = "highs",
+                    uc_template: str = "UCBlock/uc_solverconfig",
                     inv_template: str = "InvestmentBlock/BSPar.txt",
                     merge_links: bool = True,
                     expansion_ucblock: bool = True) -> dict:
@@ -195,6 +195,116 @@ def run_dispatch(xlsx_path: Path,
 
     print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
 
+def run_investment(xlsx_path: Path,
+                    solver_name: str = "highs",
+                    uc_template: str = "UCBlock/uc_solverconfig",
+                    inv_template: str = "InvestmentBlock/BSPar.txt",
+                    merge_links: bool = True,
+                    expansion_ucblock: bool = True) -> dict:
+    
+    summary = create_summary_dict(xlsx_path)
+    case_name = summary["case"]  # e.g., "components_caseA"
+
+    expansion_ucblock = False if "inv" in xlsx_path.name else True
+
+    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
+
+    # Build per-case output paths
+    prefix = f"{case_name}"
+    network_nc = OUT_TEST / f"network_{prefix}.nc"
+    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"            # temp write during optimize
+    smspp_solution_nc = OUT_TEST / f"solution_{prefix}.nc"
+    smspp_log_txt = OUT_TEST / f"log_{prefix}.txt"
+    pypsa_lp = OUT_TEST / f"pypsa_{prefix}.lp"
+
+    # Clean any stale files
+    for p in (network_nc, smspp_tmp_nc, smspp_solution_nc, smspp_log_txt, pypsa_lp):
+        safe_remove(p)
+
+    parser = create_test_config(xlsx_path)
+
+    # ---- Build network from Excel via your NetworkDefinition pipeline ----
+    nd = NetworkDefinition(parser)
+
+    # Optional: clean-ups consistent with your other scripts
+    n = nd.n
+    n = clean_ciclicity_storage(n)
+    if "sector" not in xlsx_path.name:
+        n = add_slack_unit(n)
+
+    # Keep a working copy for PyPSA optimization (do not mutate original)
+    network = n.copy()
+
+    # ---- (1) PyPSA optimization ----
+    t0 = t_now()
+    network.optimize(solver_name=solver_name)
+    summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
+
+    # Export LP for debugging
+    network.model.to_file(fn=str(pypsa_lp))
+
+    # ---- (2) Direct transformation ----
+    t0 = t_now()
+    transformation = Transformation(network,
+                                    merge_links=merge_links,
+                                    expansion_ucblock=expansion_ucblock)
+    summary["Transform_direct_s"] = round(delta_s(t0), 6)
+
+    # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
+    t0 = t_now()
+    tran = transformation.convert_to_blocks()
+    summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
+
+    # Determine which block to run
+    is_investment = (not transformation.expansion_ucblock) and \
+                    (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
+    summary["Investment_mode"] = bool(is_investment)
+
+    # Skip for dispatch mode (not implemented here)
+    if not is_investment:
+        pytest.skip("Dispatch mode not implemented in this test.")
+
+    # ---- (4) SMS++ optimization ----
+    # InvestmentBlock configuration
+    configfile = pysmspp.SMSConfig(template=inv_template)
+    tmp_nc = str(smspp_tmp_nc)
+    out_txt = str(smspp_log_txt)
+    sol_nc = str(smspp_solution_nc)
+
+    t0 = t_now()
+    result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc,
+                            inner_block_name='InvestmentBlock',
+                            log_executable_call=True)
+    total_smspp = delta_s(t0)
+    summary["SMSpp_total_s"] = round(total_smspp, 6)
+
+    # No robust solver-time split here (template dependent), but try:
+    try:
+        d = parse_txt_file(out_txt)
+        solver_s = float(d.get("elapsed_time", 0.0))
+        summary["SMSpp_solver_s"] = round(solver_s, 6)
+        summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
+    except Exception:
+        pass
+
+    # Objectives
+    obj_pypsa = float(network.objective)  # often objective_constant already included or 0
+    obj_smspp = float(result.objective_value)
+    summary["Obj_PyPSA"] = obj_pypsa
+    summary["Obj_SMSpp"] = obj_smspp
+    if obj_pypsa != 0.0:
+        summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
+
+    # Inverse
+    t0 = t_now()
+    _ = transformation.parse_solution_to_unitblocks(result.solution, n)
+    transformation.inverse_transformation(n)
+    summary["Inverse_transform_s"] = round(delta_s(t0), 6)
+
+    network.export_to_netcdf(str(network_nc))
+
+    print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
+
 
 # def main():
 #     # Discover inputs
@@ -241,5 +351,9 @@ test_cases, test_names = get_test_cases()
 def test_dispatch(test_case_xlsx):
     run_dispatch(test_case_xlsx)
 
+@pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)
+def test_investment(test_case_xlsx):
+    run_investment(test_case_xlsx)
+
 if __name__ == "__main__":
-    test_dispatch(test_case_xlsx=test_cases[0])
+    run_investment(test_cases[7])
