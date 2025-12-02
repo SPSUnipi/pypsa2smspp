@@ -18,7 +18,6 @@ They are typically imported and used within the Transformation class.
 
 import numpy as np
 import pandas as pd
-from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 import re
 from pypsa2smspp import logger
 
@@ -58,8 +57,8 @@ def get_param_as_dense(n, component, field, weights=True):
     else:
         weighting = weighting.loc[sns]
 
-    if field in n.static(component).columns:
-        field_val = get_as_dense(n, component, field, sns)
+    if field in n.components[component].static.columns:
+        field_val = n.get_switchable_as_dense(component, field, sns)
     else:
         field_val = n.dynamic(component)[field]
 
@@ -72,8 +71,10 @@ def remove_zero_p_nom_opt_components(n, nominal_attrs):
     # Lista dei componenti che hanno l'attributo p_nom_opt
     components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
     
-    for components in n.iterate_components(["Line", "Generator", "Link", "Store", "StorageUnit"]):
-        components_df = components.df
+    for components in n.components[["Line", "Generator", "Link", "Store", "StorageUnit"]]:
+        if components.empty:
+            continue
+        components_df = components.static
         components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
         setattr(n, components.list_name, components_df)
 

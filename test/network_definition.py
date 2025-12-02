@@ -147,8 +147,10 @@ class NetworkDefinition:
         file_path = f"{self.parser.input_data_path}/{self.parser.input_name_costs}"
         costs = pd.read_excel(file_path, index_col=0)
         
-        for components in self.n.iterate_components(["Generator", "StorageUnit", "Link", "Store"]): 
-            components_df = components.df
+        for components in self.n.components[["Generator", "StorageUnit", "Link", "Store"]]:
+            if components.empty:
+                continue
+            components_df = components.static
             for component in components_df.index:
                 components_df.loc[component, 'capital_cost'] = costs.at[component.split(" ")[0], 'Capital cost [€/MW]']
                 components_df.loc[component, 'marginal_cost'] = costs.at[component.split(" ")[0], 'Marginal cost [€/MWh]']
