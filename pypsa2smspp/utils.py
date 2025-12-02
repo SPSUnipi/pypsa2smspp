@@ -402,6 +402,14 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     a single merged link with eta=1 and summed capital_cost). Keeps a mapping
     for perfect inverse transformation.
 
+    IMPORTANT
+    ---------
+    Merging is only performed for specific technologies that PyPSA-Eur
+    constrains to have tied charger/discharger (or forward/backward) capacities:
+    - TES (heat) stores
+    - Battery stores
+    - Hydrogen "inverse" (reversed/forward) links
+
     Returns
     -------
     stores_df : pd.DataFrame
@@ -419,13 +427,9 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         - p_nom_extendable = common value (assert both equal)
         - name includes both original names for traceability
 
-    merge_dim : dict
-        Small dimension-like dict to track extendable links:
-        {
-            'extendable_links_initial': int,
-            'extendable_links_final': int,
-            'extendable_links_lost': int  # initial - final
-        }
+    merge_dim : int
+        Number of extendable links "lost" by merging:
+        extendable_links_initial - extendable_links_final
 
     Notes
     -----
@@ -455,9 +459,62 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     # Count extendable links before any merging
     extendable_initial = _count_extendable(links_merged_df)
 
+    # If merging is disabled or network is trivial, exit early
     if not merge_links or links_merged_df.empty or stores_df.empty:
         merge_dim = 0
         return stores_df, links_merged_df, merge_dim
+
+    # ------------------------------------------------------------------
+    # Detect technologies for which merge is allowed (TES, batteries, H2)
+    # ------------------------------------------------------------------
+
+    # TES: detect heat buses similar to PyPSA-Eur extra functionalities
+    tes_bus_mask = n.buses.index.to_series().str.contains(
+        r"urban central heat|urban decentral heat|rural heat",
+        case=False,
+        na=False,
+    )
+    tes_buses = set(n.buses.index[tes_bus_mask])
+
+    # Batteries: detect charger/discharger extendable links as in PyPSA-Eur
+    link_index_series = n.links.index.to_series()
+    charger_bool = link_index_series.str.contains(
+        "battery charger", case=False, na=False
+    )
+    discharger_bool = link_index_series.str.contains(
+        "battery discharger", case=False, na=False
+    )
+
+    battery_chargers_ext = set(
+        n.links.loc[
+            charger_bool & n.links["p_nom_extendable"].fillna(False)
+        ].index
+    )
+    battery_dischargers_ext = set(
+        n.links.loc[
+            discharger_bool & n.links["p_nom_extendable"].fillna(False)
+        ].index
+    )
+
+    # Hydrogen reversed: detect forward/backward pairs as in extra functionalities
+    h2_backwards = set()
+    h2_forwards = set()
+    if "reversed" in n.links.columns:
+        # carriers of reversed links
+        carriers_rev = (
+            n.links.loc[n.links["reversed"].fillna(False), "carrier"]
+            .dropna()
+            .unique()
+        )
+        if len(carriers_rev) > 0:
+            mask_back = (
+                n.links["carrier"].isin(carriers_rev)
+                & n.links["p_nom_extendable"].fillna(False)
+                & n.links["reversed"].fillna(False)
+            )
+            h2_backwards = set(n.links.index[mask_back])
+            # forward link names obtained by removing "-reversed"
+            h2_forwards = set(idx.replace("-reversed", "") for idx in h2_backwards)
 
     # We will collect rows to drop and rows to append
     rows_to_drop = []
@@ -466,17 +523,20 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     # Tolerance for p_nom equality check
     PNOM_TOL = 1e-6
 
-    # Build a fast index by bus to find links connected to a given store bus
+    # Loop over stores and merge only if they belong to TES/battery/H2 logic
     for store_name, srow in stores_df.iterrows():
         bus_store = srow["bus"]
-        # Heuristic: the links are the ones connected to the bus
-        mask_ch = (links_merged_df["bus0"] == bus_store) | (links_merged_df["bus1"] == bus_store)
+
+        # Heuristic: the links are the ones connected to the store bus
+        mask_ch = (links_merged_df["bus0"] == bus_store) | (
+            links_merged_df["bus1"] == bus_store
+        )
         cand = links_merged_df[mask_ch]
         if cand.empty:
             # No links connected to this store -> nothing to merge
             continue
 
-        # NOTE: this assumes there is at most one charge and one discharge per store
+        # We assume at most one charge and one discharge per store
         charge_rows = cand[cand["bus1"] == bus_store]
         discharge_rows = cand[cand["bus0"] == bus_store]
 
@@ -487,10 +547,44 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         charge_row = charge_rows.iloc[0]
         discharge_row = discharge_rows.iloc[0]
 
-        bus_elec = charge_row["bus0"] if charge_row["bus0"] == discharge_row["bus1"] else None
+        idx_ch = charge_row.name
+        idx_dis = discharge_row.name
+
+        bus_elec = (
+            charge_row["bus0"]
+            if charge_row["bus0"] == discharge_row["bus1"]
+            else None
+        )
         if bus_elec is None:
             # Could not determine the paired electrical bus; skip merge
             continue
+
+        # --------------------------------------------------------------
+        # Check if this store/link pair belongs to allowed technologies
+        # --------------------------------------------------------------
+
+        # TES: store bus is one of the heat buses
+        is_tes = bus_store in tes_buses
+
+        # Battery: names follow "battery charger/discharger" pattern
+        is_battery_pair = (
+            (idx_ch in battery_chargers_ext and idx_dis in battery_dischargers_ext)
+            or (idx_dis in battery_chargers_ext and idx_ch in battery_dischargers_ext)
+        )
+
+        # Hydrogen "inverse": forward/backward pair identified by reversed flag
+        is_h2_inv_pair = (
+            (idx_ch in h2_backwards and idx_dis in h2_forwards)
+            or (idx_dis in h2_backwards and idx_ch in h2_forwards)
+        )
+
+        # If none of the above holds, do NOT merge this store
+        if not (is_tes or is_battery_pair or is_h2_inv_pair):
+            continue
+
+        # --------------------------------------------------------------
+        # From here on, do the actual merge as before
+        # --------------------------------------------------------------
 
         # Extract params with defaults
         # Charge (elec -> store)
@@ -577,6 +671,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     merge_dim = extendable_initial - extendable_final
 
     return stores_df, links_merged_df, merge_dim
+
 
 
 def explode_multilinks_into_branches(
