@@ -158,7 +158,7 @@ class Transformation:
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
         """
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
-        self.dimensions['NetworkBlock'] = networkblock_dimensions(n)
+        self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.expansion_ucblock)
         self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.expansion_ucblock, nominal_attrs)
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
         
@@ -366,7 +366,10 @@ class Transformation:
                 key,
                 value
             )
-    
+            
+            if variable_size in [('NumberDesignLines_lines',), ('NumberDesignLines_links',)]:
+                variable_size = ('NumberDesignLines',)
+            
             self.investmentblock.setdefault(
                 key,
                 {"value": np.array([]), "type": variable_type, "size": variable_size}
@@ -671,12 +674,20 @@ class Transformation:
     
         current_index = len(self.unitblocks)
         n_elements = flow_matrix.shape[1]
+        designlines = self.networkblock['Design']['DesignLines']['value']
+        i_ext = 0
     
         for i in range(n_elements):
             block_index = current_index + i
             unitblock_name = f"DCNetworkBlock_{block_index}"
             block_type = types[i]
             block_label = "DCNetworkBlock_links" if block_type == "link" else "DCNetworkBlock_lines"
+            
+            if i in designlines:
+                designvariable = design_matrix[:, i_ext] if isinstance(design_matrix, np.ndarray) else self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
+                i_ext += 1
+            else:
+                designvariable = self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
 
             entry = {
                 "enumerate": f"UnitBlock_{block_index}",
@@ -684,7 +695,7 @@ class Transformation:
                 "name": names[i],
                 "FlowValue": flow_matrix[:, i],
                 # "DualCost": dual_matrix[:, i],
-                "DesignVariable": design_matrix[:, i] if isinstance(design_matrix, np.ndarray) else self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i],
+                "DesignVariable": designvariable,
             }
             
             if block_type == "link":

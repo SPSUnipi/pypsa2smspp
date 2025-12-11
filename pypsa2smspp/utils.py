@@ -230,7 +230,7 @@ def ucblock_dimensions(n):
     return dimensions
 
 
-def networkblock_dimensions(n):
+def networkblock_dimensions(n, expansion_ucblock):
     """
     Computes NetworkBlock dimensions from a PyPSA network `n`.
     Returns a dict with:
@@ -245,6 +245,39 @@ def networkblock_dimensions(n):
     lines_count = len(getattr(n, "lines", []))
     links_count = len(getattr(n, "links", []))
     combined_count = lines_count + links_count
+    
+    if expansion_ucblock:
+        # count extendable AC lines (s_nom_extendable == True)
+        if hasattr(n, "lines") and "s_nom_extendable" in n.lines:
+            num_design_lines = int(
+                n.lines["s_nom_extendable"]
+                .fillna(False)
+                .astype(bool)
+                .sum()
+            )
+        else:
+            num_design_lines = 0
+    
+        # count extendable links (p_nom_extendable == True)
+        if hasattr(n, "links") and "p_nom_extendable" in n.links:
+            num_design_links = int(
+                n.links["p_nom_extendable"]
+                .fillna(False)
+                .astype(bool)
+                .sum()
+            )
+        else:
+            num_design_links = 0
+
+        
+        return {
+            "Lines": lines_count,
+            "Links": links_count,
+            "combined": combined_count,
+            "NumberLines": combined_count,
+            "NumberDesignLines_lines": num_design_lines,
+            "NumberDesignLines_links": num_design_links
+        }
 
     # # --- detect extra outputs from multi-links to build branches ---
     # extra_outputs = 0
@@ -322,6 +355,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     
     if expansion_ucblock:
        dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links 
+       dimensions['NetworkBlock']['NumberDesignLines_links'] -= number_ext_merg_links 
        if dimensions['InvestmentBlock']['NumberDesignLines'] > 0:
            dimensions['UCBlock']['NumberNetworks'] = 1
     else:
@@ -1076,31 +1110,38 @@ def process_dcnetworkblock(
         Current block index.
     df_investment : pd.DataFrame
         The investment dataframe for the component.
-    renewable_carriers : list
-        Renewable carriers list.
     nominal_attrs : dict
         Nominal attributes dictionary.
 
     Returns
     -------
-    next_index : int
+    unitblock_index : int
         Updated block index after processing.
+    lines_index : int
+        Updated line index after processing.
     """
 
     extendable_mask = is_extendable(components_df, components_name, nominal_attrs)
+    # extendable_mask is assumed to be a 1D boolean array-like aligned with components_df.index
 
-    for idx in components_df[extendable_mask].index:
-        investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
-        investment_meta["index_extendable"].append(lines_index)  
-        investment_meta["design_lines"].append(lines_index)
+    # Loop over ALL components, advancing indices always
+    for idx, is_ext in zip(components_df.index, extendable_mask):
+        if is_ext:
+            # Only for extendable components we register investment metadata
+            investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
+            investment_meta["index_extendable"].append(lines_index)
+            investment_meta["design_lines"].append(lines_index)
+
+        # Indices are advanced in any case
         lines_index += 1
         unitblock_index += 1
-    
 
+    # asset_type: one entry per investment row (unchanged logic)
     investment_meta["asset_type"].extend([1] * len(df_investment))
-    
 
     return unitblock_index, lines_index
+
+
 
 
 def parse_unitblock_parameters(

@@ -30,6 +30,8 @@ conversion_dict = {
     "Nass": "NumAssets",
     "NB": "NumberBranches",
     "NDL": "NumberDesignLines",
+    "NDLL": "NumberDesignLines_lines",
+    "NDLLi": "NumberDesignLines_links",
     "1": 1
 }
 
