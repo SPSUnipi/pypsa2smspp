@@ -27,6 +27,7 @@ import time
 import pandas as pd
 import pypsa
 import pysmspp
+import re
 
 # --- Force working directory to this file's folder and build robust paths ---
 HERE = Path(__file__).resolve().parent            # .../pypsa2smspp/test
@@ -81,7 +82,7 @@ def safe_remove(p: Path):
 # ---------- Core runner for a single .nc network ----------
 def run_single_nc(nc_path: Path,
                   solver_name: str = "gurobi",
-                  uc_template: str = "UCBlock/uc_solverconfig",       # adjust to *_grb if you want
+                  uc_template: str = "UCBlock/uc_solverconfig_grb",       # adjust to *_grb if you want
                   inv_template: str = "InvestmentBlock/BSPar.txt",
                   merge_links: bool = True,
                   expansion_ucblock: bool = True) -> dict:
@@ -214,7 +215,8 @@ def run_single_nc(nc_path: Path,
             t0 = t_now()
             result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc,
                                    inner_block_name='InvestmentBlock',
-                                   log_executable_call=True)
+                                   log_executable_call=True,
+                                   logging=False)
             total_smspp = delta_s(t0)
             summary["SMSpp_solver_write_s"] = round(total_smspp, 6)
 
@@ -273,8 +275,20 @@ def run_single_nc(nc_path: Path,
 def main():
     # Discover inputs (.nc networks)
     # You can change this folder as you like, e.g. HERE / "networks"
-    inputs_dir = HERE / "networks"
-    nc_files = sorted(inputs_dir.glob("*.nc"))
+    inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
+    # nc_files = sorted(inputs_dir.glob("*h*.nc"))
+
+    # Regex per catturare il numero dopo s_
+    pattern = re.compile(r"s_(\d+)")
+
+    def extract_cluster_number(path):
+        m = pattern.search(path.name)
+        return int(m.group(1)) if m else float("inf")  # se manca, mettilo in fondo
+
+    nc_files = sorted(
+        inputs_dir.glob("*h*.nc"),
+        key=extract_cluster_number
+    )
 
     if not nc_files:
         print(f"No .nc file in {inputs_dir}")
