@@ -275,20 +275,21 @@ def run_single_nc(nc_path: Path,
 def main():
     # Discover inputs (.nc networks)
     # You can change this folder as you like, e.g. HERE / "networks"
-    inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
-    # nc_files = sorted(inputs_dir.glob("*h*.nc"))
+    # inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
+    inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks")
+    nc_files = sorted(inputs_dir.glob("*h*.nc"))
 
     # Regex per catturare il numero dopo s_
-    pattern = re.compile(r"s_(\d+)")
+    #pattern = re.compile(r"s_(\d+)")
 
-    def extract_cluster_number(path):
-        m = pattern.search(path.name)
-        return int(m.group(1)) if m else float("inf")  # se manca, mettilo in fondo
+    #def extract_cluster_number(path):
+    #    m = pattern.search(path.name)
+    #    return int(m.group(1)) if m else float("inf")  # se manca, mettilo in fondo
 
-    nc_files = sorted(
-        inputs_dir.glob("*h*.nc"),
-        key=extract_cluster_number
-    )
+    #nc_files = sorted(
+    #    inputs_dir.glob("*h*.nc"),
+    #    key=extract_cluster_number
+    #)
 
     if not nc_files:
         print(f"No .nc file in {inputs_dir}")
