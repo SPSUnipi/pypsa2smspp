@@ -750,7 +750,7 @@ class Transformation:
 ###########################################################################################
    
     
-    def inverse_transformation(self, n):
+    def inverse_transformation(self, objective_smspp, n):
         '''
         Performs the inverse transformation from the SMS++ blocks to xarray object.
         The xarray wll be converted in a solution type Linopy file to get n.optimize()
@@ -759,13 +759,15 @@ class Transformation:
     
         Parameters
         ----------
+        ojective_smspp: float
+            The objective function of the smspp problem
         n : pypsa.Network
             A PyPSA network instance from which the data will be extracted.
         '''
         all_dataarrays = self.iterate_blocks(n)
         self.ds = xr.Dataset(all_dataarrays)
         
-        prepare_solution(n, self.ds)
+        prepare_solution(n, self.ds, objective_smspp)
         
         n.optimize.assign_solution()
         # n.optimize.assign_duals(n) # Still doesn't work
@@ -773,6 +775,7 @@ class Transformation:
         n._multi_invest = False
         n.calculate_dependent_values()
         n.optimize.post_processing()
+        n._objective_constant = 0
         
         
     

@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'pypsa-it_capacity_expansion'
+name = 'multi-link_expansion'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -122,7 +122,7 @@ if transformation.expansion_ucblock or transformation.dimensions['InvestmentBloc
     
     solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
     # transformation.parse_txt_to_unitblocks(output_file)
-    transformation.inverse_transformation(nd.n)
+    transformation.inverse_transformation(result.objective_value, nd.n)
 
     differences = compare_networks(network, nd.n)
     statistics_smspp = nd.n.statistics()
@@ -150,7 +150,7 @@ else:
     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
 
     solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
-    transformation.inverse_transformation(nd.n)
+    transformation.inverse_transformation(result.objective_value, nd.n)
     
     statistics = network.statistics()
     statistics_smspp = nd.n.statistics()

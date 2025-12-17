@@ -205,7 +205,7 @@ class FakeVariable:
         self.solution = solution
 
 
-def prepare_solution(n, ds: xr.Dataset) -> None:
+def prepare_solution(n, ds: xr.Dataset, objective_smspp: float) -> None:
     """
     Prepares a fake PyPSA model that wraps the xarray Dataset as a PyPSA-compatible solution.
 
@@ -230,4 +230,4 @@ def prepare_solution(n, ds: xr.Dataset) -> None:
     n._model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
 
     n._model.objective = type("FakeObjective", (), {})()
-    n._model.objective.value = 10000  # arbitrary
+    n._model.objective.value = objective_smspp
