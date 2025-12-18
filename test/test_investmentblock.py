@@ -105,7 +105,7 @@ def run_investment_block(xlsx_path: Path,
 
     # Inverse
     _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-    transformation.inverse_transformation(n)
+    transformation.inverse_transformation(result.objective_value, n)
 
     network.export_to_netcdf(str(network_nc))
 
