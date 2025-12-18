@@ -125,9 +125,62 @@ def filter_extendable_components(components_df, component_type, nominal_attrs):
         return components_df
 
     extendable_attr = f"{attr}_extendable"
-    if extendable_attr in components_df.columns:
-        return components_df[components_df[extendable_attr]]
-    return components_df
+    if extendable_attr not in components_df.columns:
+        return components_df
+
+    df = components_df[components_df[extendable_attr]]
+
+    # Special handling for exploded Links
+    if component_type == "Link" and df.index.str.contains("__").any():
+        df = filter_primary_extendable_links(df)
+
+    return df
+
+
+
+def filter_primary_extendable_links(links_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    From an exploded Link DataFrame, keep only one extendable link per
+    original physical link (i.e. before '__').
+
+    Priority:
+      1) is_primary_branch == True (if column exists)
+      2) first occurrence (stable)
+
+    Parameters
+    ----------
+    links_df : pd.DataFrame
+        DataFrame of PyPSA links (possibly exploded into branches).
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered DataFrame with only one extendable link per physical link.
+    """
+    if links_df.empty:
+        return links_df
+
+    df = links_df.copy()
+
+    # Extract physical link name (before '__')
+    physical_name = df.index.to_series().str.split("__", n=1).str[0]
+    df["_physical_name"] = physical_name.values
+
+    selected = []
+
+    for _, group in df.groupby("_physical_name", sort=False):
+        if "is_primary_branch" in group.columns:
+            primary = group[group["is_primary_branch"]]
+            if not primary.empty:
+                selected.append(primary.iloc[0])
+                continue
+
+        # Fallback: keep first row
+        selected.append(group.iloc[0])
+
+    out = pd.DataFrame(selected)
+    return out.drop(columns="_physical_name")
+
 
 
 def get_bus_idx(n, components_df, bus_series, column_name, dtype="uint32"):
@@ -364,7 +417,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     if "NumberBranches" in dimensions['NetworkBlock']:
         dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links
         dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
-        dimensions['InvestmentBlock']['NumberDesignLines'] = dimensions['NetworkBlock']['NumberBranches_ext']
+        # dimensions['InvestmentBlock']['NumberDesignLines'] = dimensions['NetworkBlock']['NumberBranches_ext']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
 
 
@@ -1098,41 +1151,26 @@ def process_dcnetworkblock(
     """
     Updates investment_meta for lines or links after adding the unit block.
 
-    Parameters
-    ----------
-    components_df : pd.DataFrame
-        DataFrame of the components (lines or links).
-    components_name : str
-        Component name, e.g., 'Line' or 'Link'.
-    investment_meta : dict
-        Shared investment metadata dictionary to update.
-    unitblock_index : int
-        Current block index.
-    df_investment : pd.DataFrame
-        The investment dataframe for the component.
-    nominal_attrs : dict
-        Nominal attributes dictionary.
-
-    Returns
-    -------
-    unitblock_index : int
-        Updated block index after processing.
-    lines_index : int
-        Updated line index after processing.
+    Notes
+    -----
+    - Indices (unitblock_index, lines_index) are always advanced for each row in components_df.
+    - Investment metadata is registered only for extendable components.
+    - For Links, extendable components are additionally collapsed to one per physical asset
+      when exploded branches are detected (handled by filter_extendable_components).
     """
+    # Get only extendable components (and for Links also collapse exploded branches)
+    extendable_df = filter_extendable_components(components_df, components_name, nominal_attrs)
 
-    extendable_mask = is_extendable(components_df, components_name, nominal_attrs)
-    # extendable_mask is assumed to be a 1D boolean array-like aligned with components_df.index
+    # Fast membership test on index
+    extendable_idx = set(extendable_df.index)
 
     # Loop over ALL components, advancing indices always
-    for idx, is_ext in zip(components_df.index, extendable_mask):
-        if is_ext:
-            # Only for extendable components we register investment metadata
+    for idx in components_df.index:
+        if idx in extendable_idx:
             investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
             investment_meta["index_extendable"].append(lines_index)
             investment_meta["design_lines"].append(lines_index)
 
-        # Indices are advanced in any case
         lines_index += 1
         unitblock_index += 1
 
@@ -1140,7 +1178,6 @@ def process_dcnetworkblock(
     investment_meta["asset_type"].extend([1] * len(df_investment))
 
     return unitblock_index, lines_index
-
 
 
 

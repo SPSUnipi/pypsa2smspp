@@ -100,83 +100,9 @@ network_stoch_load.export_to_netcdf("output/pypsa_stoch_load.nc")
 network_stoch_price.export_to_netcdf("output/pypsa_stoch_price.nc")
 
 
-# network.model.to_file(fn = f"output/pypsa_{name}.lp")
-
 statistics = nd.n.statistics()
 statistics_stoch_load = network_stoch_load.statistics()
 statistics_stoch_price = network_stoch_price.statistics()
 
-#%% Transformation class
-# then = datetime.now()
-# transformation = Transformation(network, merge_links=True, expansion_ucblock=True)
-# print(f"La classe di trasformazione ci mette {datetime.now() - then} secondi")
 
-
-# tran = transformation.convert_to_blocks()
-
-
-# if transformation.expansion_ucblock or transformation.dimensions['InvestmentBlock']['NumAssets'] == 0:
-#     ### UCBlock configuration ###
-#     configfile = pysmspp.SMSConfig(template="UCBlock/uc_solverconfig_grb")  # load a default config file [highs solver]
-#     temporary_smspp_file = f"output/network_{name}.nc"  # path to temporary SMS++ file
-#     output_file = f"output/log_{name}.txt"  # path to the output file (optional)
-#     solution_file = f"output/solution_{name}.nc"
-    
-#     # Check if the file exists
-#     if os.path.exists(solution_file):
-#         os.remove(solution_file)
-    
-#     result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, log_executable_call=True)
-    
-#     statistics = network.statistics()
-#     operational_cost = statistics['Operational Expenditure'].sum()
-#     # error = (operational_cost - result.objective_value) / operational_cost * 100
-
-#     objective_pypsa = network.objective + network.objective_constant
-#     objective_smspp = result.objective_value
-#     error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
-    
-#     print(f"Error PyPSA-SMS++ of {error}%")
-    
-#     # Esegui la funzione sul file di testo
-#     data_dict = parse_txt_file(output_file)
-
-#     print(f"Il solver ci ha messo {data_dict['elapsed_time']}s")
-#     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
-
-    
-#     solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
-#     # transformation.parse_txt_to_unitblocks(output_file)
-#     transformation.inverse_transformation(nd.n)
-
-#     differences = compare_networks(network, nd.n)
-#     statistics_smspp = nd.n.statistics()
-    
-
-# else:
-#     ### InvestmentBlock configuration ###
-#     configfile = pysmspp.SMSConfig(template="InvestmentBlock/BSPar.txt")
-#     temporary_smspp_file = f"output/inv_network_{name}.nc"  # path to temporary SMS++ file
-#     output_file = f"output/inv_log_{name}.txt"  # path to the output file (optional)
-#     solution_file = f"output/inv_solution_{name}.nc"
-    
-#     # Check if the file exists
-#     if os.path.exists(solution_file):
-#         os.remove(solution_file)
-    
-#     result = tran.optimize(configfile, temporary_smspp_file, output_file, solution_file, inner_block_name='InvestmentBlock', log_executable_call=True)
-    
-    
-#     objective_pypsa = network.objective + network.objective_constant
-#     objective_smspp = result.objective_value
-#     error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
-    
-#     print(f"Error PyPSA-SMS++ of {error}%")
-#     print(f"Il tempo totale (trasformazione+pysmspp+ottimizzazione smspp) è {datetime.now() - then}")
-
-#     solution = transformation.parse_solution_to_unitblocks(result.solution, nd.n)
-#     transformation.inverse_transformation(nd.n)
-    
-#     statistics = network.statistics()
-#     statistics_smspp = nd.n.statistics()
 
