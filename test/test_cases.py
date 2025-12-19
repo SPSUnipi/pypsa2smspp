@@ -195,7 +195,7 @@ def run_dispatch(xlsx_path: Path,
     # ---- (5) Parse solution & inverse transform ----
     t0 = t_now()
     _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-    transformation.inverse_transformation(n)
+    transformation.inverse_transformation(result.objective_value, n)
     summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
     network.export_to_netcdf(str(network_nc))
@@ -305,7 +305,7 @@ def run_investment(xlsx_path: Path,
     # Inverse
     t0 = t_now()
     _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-    transformation.inverse_transformation(n)
+    transformation.inverse_transformation(result.objective_value,n)
     summary["Inverse_transform_s"] = round(delta_s(t0), 6)
 
     network.export_to_netcdf(str(network_nc))

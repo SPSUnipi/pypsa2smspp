@@ -280,9 +280,37 @@ def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
         times["parse_solution_to_unitblocks"] = dt(t0)
 
         t0 = t_now()
-        transformation.inverse_transformation(n_smspp)
+        transformation.inverse_transformation(result.objective_value,n_smspp)
         times["Inverse transformation"] = dt(t0)
 
+        # ---- Quick sanity checks before exporting ----
+        print("\n[DEBUG] Network sizes before export:")
+        print("  buses:", len(getattr(n_smspp, "buses", [])))
+        print("  generators:", len(getattr(n_smspp, "generators", [])))
+        print("  loads:", len(getattr(n_smspp, "loads", [])))
+        print("  lines:", len(getattr(n_smspp, "lines", [])))
+        print("  links:", len(getattr(n_smspp, "links", [])))
+        print("  stores:", len(getattr(n_smspp, "stores", [])))
+        print("  storage_units:", len(getattr(n_smspp, "storage_units", [])))
+
+        # ---- Export statistics to CSV (easy to inspect) ----
+        try:
+            stats_pypsa = network.statistics()
+            # statistics() often returns a Series; make it a 1-column DataFrame
+            if hasattr(stats_pypsa, "to_frame"):
+                stats_pypsa = stats_pypsa.to_frame(name="value")
+            stats_pypsa.to_csv(case_dir / f"stats_pypsa_{cfg.case_name}.csv")
+        except Exception as e:
+            print("[WARN] Could not export PyPSA statistics:", e)
+
+        try:
+            stats_smspp = n_smspp.statistics()
+            if hasattr(stats_smspp, "to_frame"):
+                stats_smspp = stats_smspp.to_frame(name="value")
+            stats_smspp.to_csv(case_dir / f"stats_smspp_{cfg.case_name}.csv")
+        except Exception as e:
+            print("[WARN] Could not export SMS++-repopulated statistics:", e)
+            
         if cfg.export_pypsa_smspp_nc:
             try:
                 n_smspp.export_to_netcdf(str(pypsa_smspp_nc))
