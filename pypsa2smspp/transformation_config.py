@@ -104,7 +104,7 @@ class TransformationConfig:
             "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "LineSusceptance": lambda s_nom: np.zeros_like(s_nom),
             "Efficiency": lambda s_nom: np.ones_like(s_nom),
-            "NetworkCost": lambda marginal_cost: marginal_cost.values
+            "NetworkCost": lambda s_nom: np.zeros_like(s_nom),
             }
 
         self.Links_parameters = {
