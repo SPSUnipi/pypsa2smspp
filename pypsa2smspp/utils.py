@@ -932,7 +932,9 @@ def add_sectorcoupled_parameters(
                 ~p_nom_extendable[is_primary_branch], p_min_pu[is_primary_branch]
             ).values,
         "LineSusceptance": lambda p_nom, is_primary_branch:
-            np.zeros_like(p_nom[is_primary_branch].values)
+            np.zeros_like(p_nom[is_primary_branch].values),
+        "NetworkCost": lambda marginal_cost, is_primary_branch:
+            (marginal_cost[is_primary_branch].values)
     })
 
     # --- NEW: patch inverse_dict (in place, no return) -------------------------

@@ -104,6 +104,7 @@ class TransformationConfig:
             "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "LineSusceptance": lambda s_nom: np.zeros_like(s_nom),
             "Efficiency": lambda s_nom: np.ones_like(s_nom),
+            "NetworkCost": lambda marginal_cost: marginal_cost.values
             }
 
         self.Links_parameters = {
@@ -113,6 +114,7 @@ class TransformationConfig:
             "MinPowerFlow": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "LineSusceptance": lambda p_nom: np.zeros_like(p_nom),
             "Efficiency": lambda efficiency: efficiency,
+            "NetworkCost": lambda marginal_cost: marginal_cost.values
             }
 
         self.HydroUnitBlock_parameters = {
