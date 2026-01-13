@@ -10,14 +10,13 @@ import pypsa
 import numpy as np
 from datetime import datetime 
 import re
-import numpy as np
 import xarray as xr
 import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 from pypsa2smspp import logger
 from copy import deepcopy
-
+import pysmspp
 
 from .constants import conversion_dict, nominal_attrs, renewable_carriers
 from .utils import (
@@ -44,8 +43,18 @@ from .utils import (
     explode_multilinks_into_branches,
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
-    build_dc_index
+    build_dc_index,
 )
+
+from .pip_utils import (
+    select_block_mode,
+    _build_smspp_paths,
+    build_optimize_call_from_cfg,
+    load_yaml_config,
+    StepTimer,
+    step
+)
+
 from .inverse import (
     component_definition,
     block_to_dataarrays,
@@ -89,7 +98,7 @@ class Transformation:
         Parameters for a ThermalUnitBlock
     """
 
-    def __init__(self, n, merge_links=False, expansion_ucblock: bool = False, config: "TransformationConfig | None" = None):
+    def __init__(self, path):
         """
         Initializes the Transformation class.
 
@@ -98,19 +107,20 @@ class Transformation:
         
         n : PyPSA Network
             PyPSA energy network object containing components such as generators and storage units.
-        max_hours_stores: int
-            Max hours parameter for stores, default is 10h. Stores do not have this parameter, but it is required to model them as BatteryUnitBlocks
-        
+
         Methods:
         ----------
         init : Start the workflow of the class
         
         """
         
-        if config is None:
-            config = TransformationConfig()
+        # Class with conversion dicts for PyPSA-SMS++
+        config_conv = TransformationConfig()
         # Work on a private copy so we can safely mutate dicts
-        self.config = deepcopy(config)
+        self.config = deepcopy(config_conv)
+        
+        # Config file
+        self.cfg = load_yaml_config(path)
 
         
         # Attribute for unit blocks
@@ -118,25 +128,61 @@ class Transformation:
         self.networkblock = dict()
         self.investmentblock = {'Blocks': list()}
         
+        
         self.dimensions = dict()
-        
-        self.merge_links = merge_links
-        self.expansion_ucblock = expansion_ucblock
-        
-        n.stores["max_hours"] = config.max_hours_stores
-        
-        # Direct transformation - called with __init__
-        # remove_zero_p_nom_opt_components(n, nominal_attrs)
-        self.read_excel_components() # 1
-        self.add_dimensions(n) # 2
-        self.iterate_components(n) # 3
-        self.add_demand(n) # 6
-        self.lines_links() # 7
 
         # SMS
         self.sms_network = None
         self.result = None
+ 
         
+##################################################################################################
+####################### Pipeline #################################################################
+##################################################################################################
+    
+    def run(self, n, verbose: bool = True):
+        # Keep timings accessible after the run
+        self.timer = StepTimer()
+    
+        with step(self.timer, "direct", verbose=verbose):
+            self.direct(n)
+    
+        with step(self.timer, "convert_to_blocks", verbose=verbose):
+            self.sms_network = self.convert_to_blocks()
+    
+        with step(self.timer, "optimize", verbose=verbose, extra={"mode": "auto"}):
+            self.optimize()
+    
+        with step(self.timer, "parse_solution_to_unitblocks", verbose=verbose):
+            self.parse_solution_to_unitblocks(self.result.solution, n)
+    
+        with step(self.timer, "inverse_transformation", verbose=verbose):
+            self.inverse_transformation(self.result.objective_value, n)
+    
+        if verbose:
+            self.timer.print_summary()
+    
+        return n
+    
+    
+    def direct(self, n):
+        """
+        Direct transformation PyPSA -> internal unitblocks.
+        """
+    
+        # Explicit network patching
+        max_hours = self.cfg["transformation"].get("max_hours_stores", None)
+        if max_hours is not None and "stores" in dir(n):
+            n.stores["max_hours"] = max_hours
+    
+        # --- your existing logic ---
+        self.read_excel_components() # 1
+        self.add_dimensions(n) # 2
+        self.iterate_components(n) # 3
+        self.add_demand(n) # 4
+        self.lines_links() # 5
+
+
     
     ### 1 ###
     def read_excel_components(self, fp=FP_PARAMS):
@@ -158,8 +204,8 @@ class Transformation:
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
         """
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
-        self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.expansion_ucblock)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.expansion_ucblock, nominal_attrs)
+        self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.cfg.transformation.expansion_ucblock)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.cfg.transformation.expansion_ucblock, nominal_attrs)
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
         
         
@@ -181,7 +227,7 @@ class Transformation:
     
         
         stores_df, links_merged_df, self.dimensions['NetworkBlock']['merged_links_ext'] = build_store_and_merged_links(
-            n, merge_links=self.merge_links, logger=logger)
+            n, merge_links=self.cfg.transformation.merge_links, logger=logger)
         
         links_before = links_merged_df.copy()
         
@@ -199,7 +245,7 @@ class Transformation:
             if "is_primary_branch" not in links_after.columns:
                 links_after["is_primary_branch"] = True
         
-        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
+        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.cfg.transformation.expansion_ucblock)
         
         self._dc_index = build_dc_index(n, links_before, links_after)
         
@@ -208,7 +254,7 @@ class Transformation:
         self._dc_types  = list(self._dc_index['physical']['types'])
 
 
-        if getattr(self, "expansion_ucblock", False):
+        if self.cfg.transformation.get("expansion_ucblock", False):
             apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse, self.config.InvestmentBlock_parameters)
         
         # ------------- Main loop over components ----------------
@@ -234,7 +280,7 @@ class Transformation:
             components_type = components.list_name
     
             use_investmentblock = (
-                not getattr(self, "expansion_ucblock", False)
+                not self.cfg.transformation.get("expansion_ucblock", False)
                 or components_type in ["lines", "links"]
             )
 
@@ -434,7 +480,7 @@ class Transformation:
             nom = nominal_attrs[components_type]
             ext = components_df[f"{nom}_extendable"].iloc[0]
             design_key = (
-                "DesignVariable" if not self.expansion_ucblock else
+                "DesignVariable" if not self.cfg.transformation.expansion_ucblock else
                 ("IntermittentDesign" if "IntermittentUnitBlock" in name else
                 "BatteryDesign" if "BatteryUnitBlock" in name else
                 "DesignVariable")   # fallback
@@ -845,7 +891,7 @@ class Transformation:
         # -----------------
         # Check if investment problem
         # -----------------
-        if (not self.expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
+        if (not self.cfg.transformation.expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
              name_id = 'InvestmentBlock'
              sn = self.convert_to_investmentblock(master, index_id, name_id)
     
@@ -1094,28 +1140,43 @@ class Transformation:
 
 
     
-    def optimize(self, configfile, *args, **kwargs):
-        """
-        Optimizes the UCBlock using the SMS++ solver.
-
-        Parameters
-        ----------
-        configfile : str
-            Path to the configuration file for the SMS++ solver.
-        *args, **kwargs : additional arguments
-        
-        Returns
-        --------
-        result : dict
-            The optimization result, including status and objective value.
-        """
+    def optimize(self):
         if self.sms_network is None:
             raise ValueError("SMSNetwork not initialized.")
     
-        self.result = self.sms_network.optimize(configfile, *args, **kwargs)
-        
-        return self.result
+        # Decide mode based on cfg + dimensions
+        mode = select_block_mode(self.cfg, self.dimensions)  # "ucblock" or "investmentblock"
     
+        mode_cfg = getattr(self.cfg.smspp, mode)  # cfg.smspp.ucblock / investmentblock
+    
+        # Build configfile from template
+        configfile = pysmspp.SMSConfig(template=mode_cfg.template)
+    
+        # Build output paths
+        temporary_smspp_file, output_file, solution_file = _build_smspp_paths(self.cfg, mode_cfg.output_prefix)
+    
+        # Overwrite policy (optional)
+        if getattr(self.cfg.io, "overwrite", True) and os.path.exists(solution_file):
+            os.remove(solution_file)
+    
+        # Build args/kwargs automatically from cfg.smspp.<mode>
+        args, kwargs = build_optimize_call_from_cfg(
+            self.cfg,
+            mode=mode,
+            configfile=configfile,
+            temporary_smspp_file=temporary_smspp_file,
+            output_file=output_file,
+            solution_file=solution_file,
+        )
+    
+        # Call the flexible pass-through optimize() you already have,
+        # but careful: this is inside optimize() itself, so call sms_network directly here.
+        self.result = self.sms_network.optimize(configfile, *args, **kwargs)
+        return self.result
+
+    
+
+
 #############################################################################################
 ############################## Backup #######################################################
 #############################################################################################
