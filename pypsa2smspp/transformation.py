@@ -818,7 +818,7 @@ class Transformation:
         n.optimize.assign_solution()
         # n.optimize.assign_duals(n) # Still doesn't work
         
-        n._multi_invest = False
+        n._multi_invest = 0
         n.calculate_dependent_values()
         n.optimize.post_processing()
         n._objective_constant = 0

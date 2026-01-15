@@ -194,10 +194,11 @@ def main():
         return
 
     # YAML config used for all runs
-    config_yaml = REPO_ROOT / "pypsa2smspp" / "data" / "config_default.yaml"
+    
 
     rows = []
     for xlsx in xlsx_files:
+        config_yaml = REPO_ROOT / "pypsa2smspp" / "data" / "config_test_investment.yaml" if "inv" in xlsx._str else REPO_ROOT / "pypsa2smspp" / "data" / "config_default.yaml"
         row = run_single_case(xlsx, config_yaml)
         rows.append(row)
 
