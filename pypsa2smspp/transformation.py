@@ -1092,7 +1092,7 @@ class Transformation:
         """
     
         # Condition: only in expansion-ucblock mode AND if we actually have design lines
-        if not getattr(self, "expansion_ucblock", False):
+        if not self.cfg.transformation.get("expansion_ucblock", False):
             return
     
         num_design_lines = (
