@@ -243,7 +243,7 @@ def run_single_case(xlsx_path: Path,
                 pass
 
             # Objectives
-            obj_pypsa = float(network.objective)  # often objective_constant already included or 0
+            obj_pypsa = float(network.objective + network.objective_constant)  # often objective_constant already included or 0
             obj_smspp = float(result.objective_value)
             summary["Obj_PyPSA"] = obj_pypsa
             summary["Obj_SMSpp"] = obj_smspp

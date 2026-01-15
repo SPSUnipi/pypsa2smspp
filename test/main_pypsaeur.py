@@ -23,7 +23,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import pandas as pd
 import pypsa
@@ -84,17 +84,17 @@ def print_kv(d: Dict[str, Any], title: str = "") -> None:
 @dataclass
 class DebugRunConfig:
     # Input
-    network_nc: Path = Path("networks/base_s_5_elec_1h.nc")
+    network_nc: Path = Path("networks/base_s_20_elec_1h.nc")
 
     # Solve / mode
     solver_name: str = "gurobi"
 
     # pypsa2smspp options
     expansion_ucblock: bool = True          # True -> UCBlock path preferred
-    merge_links: bool = True
+    merge_links: bool = False
 
     # Templates
-    uc_template: str = "UCBlock/uc_solverconfig"        # or UCBlock/uc_solverconfig_grb
+    uc_template: str = "UCBlock/uc_solverconfig_grb"        # or UCBlock/uc_solverconfig_grb
     inv_template: str = "InvestmentBlock/BSPar.txt"
 
     # Cleaning toggles
@@ -114,7 +114,7 @@ class DebugRunConfig:
     case_name: Optional[str] = None  # if None -> derived from network_nc.stem
 
 
-def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
+def run_debug(cfg: DebugRunConfig) -> Tuple[pd.DataFrame, pypsa.Network, pypsa.Network]:
     """
     Run a single debug pipeline and return a DataFrame with timings/metrics.
 
@@ -353,15 +353,15 @@ def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
     # Save a per-case CSV snapshot (handy for quick comparisons)
     df.to_csv(case_dir / "debug_summary_row.csv", index=False)
 
-    return df
+    return df, n_smspp, network
 
 
 def main():
     # ---- Edit these defaults for quick debugging ----
     cfg = DebugRunConfig(
-        network_nc=Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks/base_s_20_elec_1h.nc"),
+        network_nc=Path("networks/base_s_20_elec_1h.nc"),
         solver_name="gurobi",
-        merge_links=True,
+        merge_links=False,
         # If your file name contains "inv" you can flip this quickly:
         expansion_ucblock=True,
         uc_template="UCBlock/uc_solverconfig_grb",   # or "UCBlock/uc_solverconfig_grb"
@@ -377,10 +377,11 @@ def main():
         out_root=Path("output/debug"),
     )
 
-    df = run_debug(cfg)
+    df, n_smspp, network = run_debug(cfg)
     print("\n>>> Wrote per-case artifacts to:", (cfg.out_root / (cfg.case_name or cfg.network_nc.stem)))
-
+    return df, n_smspp, network
+    
 
 if __name__ == "__main__":
-    main()
+    df, n_smspp,network = main()
 
