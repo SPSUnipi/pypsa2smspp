@@ -1,41 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov 25 12:23:55 2025
-
-@author: aless
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Batch SMS++ benchmark runner over multiple PyPSA networks (.nc).
 
-Scans networks/bench/*.nc and runs the full pipeline:
-PyPSA optimization -> Transformation -> SMS++ solve -> inverse transform,
-measuring timings and collecting objective gap vs PyPSA.
+New style:
+- PyPSA optimize (reference)
+- SMS++ pipeline with ONE call: Transformation(cfg).run(network)
+- Timings are taken from Transformation.timer
 
 Outputs:
-- Per-case artifacts in output/test/
-- CSV summary at output/test/bench_summary_nc.csv
-
-Author: aless (adapted)
+- Per-case artifacts in output/test_pypsaeur/
+- CSV summary at output/test_pypsaeur/bench_summary_pypsaeur.csv
 """
 
-import os, sys, traceback
+import os
+import sys
+import traceback
 from pathlib import Path
 from datetime import datetime
-import time
-import pandas as pd
-import pypsa
-import pysmspp
 import re
 
+import pandas as pd
+import pypsa
+
 # --- Force working directory to this file's folder and build robust paths ---
-HERE = Path(__file__).resolve().parent            # .../pypsa2smspp/test
-os.chdir(HERE)                                    # force CWD regardless of VSCode
+HERE = Path(__file__).resolve().parent
+os.chdir(HERE)
 print(">>> FORCED CWD:", Path.cwd())
 
 # Ensure PYTHONPATH for imports from repo root (e.g., scripts/)
-REPO_ROOT = HERE.parent                           # .../pypsa2smspp
+REPO_ROOT = HERE.parent
 SCRIPTS = (REPO_ROOT / "scripts").resolve()
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -48,30 +41,19 @@ OUT_TEST.mkdir(parents=True, exist_ok=True)
 
 # --- Domain imports (after PYTHONPATH is set) ---
 from pypsa2smspp.transformation import Transformation
+from pypsa2smspp.pip_utils import load_yaml_config  # to override io.name per case
 
 from pypsa2smspp.network_correction import (
-    clean_global_constraints,
-    clean_e_sum,
     clean_ciclicity_storage,
-    clean_stores,
-    parse_txt_file,
-    add_slack_unit,
-    # clean_storage_units,  # add if you want
-    # reduce_snapshots_and_scale_costs,
-    # compare_networks,
+    # clean_e_sum,
+    # add_slack_unit,
+    # clean_stores,
 )
 
 # ---------- Utilities ----------
-def t_now() -> float:
-    """High-resolution time in seconds."""
-    return time.perf_counter()
 
-def delta_s(start: float) -> float:
-    """Seconds elapsed since start() using perf_counter."""
-    return time.perf_counter() - start
-
-def safe_remove(p: Path):
-    """Remove path if exists."""
+def safe_remove(p: Path) -> None:
+    """Remove file if it exists."""
     try:
         if p.exists():
             p.unlink()
@@ -79,189 +61,143 @@ def safe_remove(p: Path):
         pass
 
 
+def pypsa_reference_objective(network: "pypsa.Network") -> float:
+    """Robust reference objective extraction."""
+    try:
+        return float(network.objective + getattr(network, "objective_constant", 0.0))
+    except Exception:
+        return float(network.objective)
+
+
+def make_case_cfg(config_yaml: Path, case_name: str):
+    """
+    Load YAML config and override io.name so each case writes unique artifacts.
+    Prevents collisions in batch runs.
+    """
+    cfg = load_yaml_config(config_yaml)
+    if not hasattr(cfg, "io"):
+        cfg.io = {}
+    cfg.io.name = f"bench_{case_name}"
+    return cfg
+
+
 # ---------- Core runner for a single .nc network ----------
-def run_single_nc(nc_path: Path,
-                  solver_name: str = "gurobi",
-                  uc_template: str = "UCBlock/uc_solverconfig_grb",       # adjust to *_grb if you want
-                  inv_template: str = "InvestmentBlock/BSPar.txt",
-                  merge_links: bool = True,
-                  expansion_ucblock: bool = True) -> dict:
+
+def run_single_nc(
+    nc_path: Path,
+    *,
+    config_yaml: Path,
+    solver_name: str = "gurobi",
+    do_clean_ciclicity_storage: bool = True,
+    export_pypsa_lp: bool = True,
+    export_pypsa_nc: bool = True,
+    export_smspp_repopulated_nc: bool = True,
+    verbose: bool = False,
+) -> dict:
     """
     Run the full flow for a given PyPSA network (.nc file).
 
     Returns a dict with timings, status, and metrics to be appended to summary CSV.
     """
-    case_name = nc_path.stem   # e.g., base_s_5_elec_1h
+    case_name = nc_path.stem
     print(f"\n=== Running NC case: {case_name} ({nc_path.name}) ===")
 
-    # Build per-case output paths
-    prefix = f"{case_name}"
-    network_nc = OUT_TEST / f"network_{prefix}.nc"       # PyPSA network after optimization
-    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"   # temp write during optimize
-    smspp_solution_nc = OUT_TEST / f"solution_{prefix}.nc"
-    smspp_log_txt = OUT_TEST / f"log_{prefix}.txt"
-    pypsa_lp = OUT_TEST / f"pypsa_{prefix}.lp"
+    # Per-case artifacts (PyPSA-side)
+    pypsa_lp = OUT_TEST / f"pypsa_{case_name}.lp"
+    pypsa_out_nc = OUT_TEST / f"network_pypsa_{case_name}.nc"
+    smspp_repop_nc = OUT_TEST / f"network_smspp_{case_name}.nc"
+    timings_csv = OUT_TEST / f"timings_{case_name}.csv"
 
-    # Clean any stale files
-    for p in (network_nc, smspp_tmp_nc, smspp_solution_nc, smspp_log_txt, pypsa_lp):
+    for p in (pypsa_lp, pypsa_out_nc, smspp_repop_nc, timings_csv):
         safe_remove(p)
 
     summary = {
         "case": case_name,
         "input_file": str(nc_path),
+        "config_yaml": str(config_yaml),
         "status": "OK",
         "error_msg": "",
-        "PyPSA_opt_s": None,
-        "SMSpp_total_s": None,
-        "Transform_direct_s": None,
-        "PySMSpp_convert_s": None,
-        "SMSpp_solver_write_s": None,
-        "SMSpp_solver_s": None,
-        "SMSpp_write_s": None,
-        "Inverse_transform_s": None,
+        "PyPSA_opt_s": None,          # NOTE: we do not time PyPSA via StepTimer; do it manually if needed
+        "SMSpp_total_s": None,        # from Transformation.timer
         "Obj_PyPSA": None,
         "Obj_SMSpp": None,
         "Obj_rel_error_pct": None,
-        "Investment_mode": None,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
 
     try:
         # -------- Load network --------
-        n_smspp = pypsa.Network(str(nc_path))
+        n_raw = pypsa.Network(str(nc_path))
 
-        # Optional cleanups (adapt as in your old script)
-        n_smspp = clean_ciclicity_storage(n_smspp)
+        # -------- Optional cleanups --------
+        n_clean = n_raw
+        if do_clean_ciclicity_storage:
+            n_clean = clean_ciclicity_storage(n_clean)
 
-        # Keep a working copy for PyPSA optimization (do not mutate original)
-        network = n_smspp.copy()
+        # -------- PyPSA optimization (reference) --------
+        network = n_clean.copy()
 
-        # ---- (1) PyPSA optimization ----
-        t0 = t_now()
+        # Time PyPSA optimize (optional manual timing)
+        t0 = pd.Timestamp.now()
         network.optimize(solver_name=solver_name)
-        summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
+        summary["PyPSA_opt_s"] = float((pd.Timestamp.now() - t0).total_seconds())
 
-        # Optional: export LP for debugging
-        try:
-            network.model.to_file(fn=str(pypsa_lp))
-        except Exception:
-            pass
-
-        # ---- (2) Direct transformation ----
-        t0 = t_now()
-        transformation = Transformation(network,
-                                        merge_links=merge_links,
-                                        expansion_ucblock=expansion_ucblock)
-        summary["Transform_direct_s"] = round(delta_s(t0), 6)
-
-        # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
-        t0 = t_now()
-        tran = transformation.convert_to_blocks()
-        summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
-
-        # Determine which block to run (same logic as Excel batch)
-        is_investment = (not transformation.expansion_ucblock) and \
-                        (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
-        summary["Investment_mode"] = bool(is_investment)
-
-        # ---- (4) SMS++ optimization ----
-        if not is_investment:
-            # UCBlock configuration
-            configfile = pysmspp.SMSConfig(template=uc_template)
-            tmp_nc = str(smspp_tmp_nc)
-            out_txt = str(smspp_log_txt)
-            sol_nc = str(smspp_solution_nc)
-
-            t0 = t_now()
-            result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc, log_executable_call=True)
-            total_smspp = delta_s(t0)
-            summary["SMSpp_solver_write_s"] = round(total_smspp, 6)
-
-            # Parse solver time from log (if available)
+        # Export LP for debugging (best effort)
+        if export_pypsa_lp:
             try:
-                d = parse_txt_file(out_txt)
-                solver_s = float(d.get("elapsed_time", 0.0))
-                summary["SMSpp_solver_s"] = round(solver_s, 6)
-                summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
-            except Exception:
-                summary["SMSpp_solver_s"] = None
-                summary["SMSpp_write_s"] = None
-
-            # Objectives & error
-            try:
-                obj_pypsa = float(network.objective + network.objective_constant)
-            except Exception:
-                obj_pypsa = float(network.objective)
-
-            obj_smspp = float(result.objective_value)
-            summary["Obj_PyPSA"] = obj_pypsa
-            summary["Obj_SMSpp"] = obj_smspp
-            if obj_pypsa != 0.0:
-                summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
-
-            # Inverse transform
-            t0 = t_now()
-            _ = transformation.parse_solution_to_unitblocks(result.solution, n_smspp)
-            transformation.inverse_transformation(result.objective_value, n_smspp)
-            summary["Inverse_transform_s"] = round(delta_s(t0), 6)
-
-        else:
-            # InvestmentBlock configuration
-            configfile = pysmspp.SMSConfig(template=inv_template)
-            tmp_nc = str(smspp_tmp_nc)
-            out_txt = str(smspp_log_txt)
-            sol_nc = str(smspp_solution_nc)
-
-            t0 = t_now()
-            result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc,
-                                   inner_block_name='InvestmentBlock',
-                                   log_executable_call=True,
-                                   logging=False)
-            total_smspp = delta_s(t0)
-            summary["SMSpp_solver_write_s"] = round(total_smspp, 6)
-
-            # Try to split solver vs writing from log
-            try:
-                d = parse_txt_file(out_txt)
-                solver_s = float(d.get("elapsed_time", 0.0))
-                summary["SMSpp_solver_s"] = round(solver_s, 6)
-                summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
+                network.model.to_file(fn=str(pypsa_lp))
             except Exception:
                 pass
 
-            obj_pypsa = float(network.objective)   # objective_constant usually 0 here
-            obj_smspp = float(result.objective_value)
-            summary["Obj_PyPSA"] = obj_pypsa
-            summary["Obj_SMSpp"] = obj_smspp
-            if obj_pypsa != 0.0:
-                summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
+        # Export optimized PyPSA network
+        if export_pypsa_nc:
+            try:
+                network.export_to_netcdf(str(pypsa_out_nc))
+            except Exception:
+                pass
 
-            # Inverse transform
-            t0 = t_now()
-            _ = transformation.parse_solution_to_unitblocks(result.solution, n_smspp)
-            transformation.inverse_transformation(result.objective_value, n_smspp)
-            summary["Inverse_transform_s"] = round(delta_s(t0), 6)
+        obj_pypsa = pypsa_reference_objective(network)
+        summary["Obj_PyPSA"] = obj_pypsa
 
-        # ---- (5) Save PyPSA network after optimization ----
-        try:
-            network.export_to_netcdf(str(network_nc))
-        except Exception:
-            pass
+        # -------- SMS++ pipeline (ONE CALL) --------
+        cfg = make_case_cfg(config_yaml, case_name)
+        transformation = Transformation(cfg)  # requires Transformation to accept dict/AttrDict
+        n_smspp = transformation.run(network, verbose=verbose)
 
-        # Compute total SMS++ pipeline time (excluding PyPSA)
-        if summary["Transform_direct_s"] is not None and \
-           summary["PySMSpp_convert_s"] is not None and \
-           summary["SMSpp_solver_write_s"] is not None and \
-           summary["Inverse_transform_s"] is not None:
-            summary["SMSpp_total_s"] = round(
-                summary["Transform_direct_s"]
-                + summary["PySMSpp_convert_s"]
-                + summary["SMSpp_solver_write_s"]
-                + summary["Inverse_transform_s"],
-                6,
+        obj_smspp = float(transformation.result.objective_value)
+        summary["Obj_SMSpp"] = obj_smspp
+        if obj_pypsa != 0.0:
+            summary["Obj_rel_error_pct"] = (obj_pypsa - obj_smspp) / obj_pypsa * 100.0
+
+        # -------- Timings from Transformation.timer --------
+        timer_rows = getattr(getattr(transformation, "timer", None), "rows", None) or []
+        if timer_rows:
+            # Save long-format timings table
+            try:
+                pd.DataFrame(timer_rows).to_csv(timings_csv, index=False)
+            except Exception:
+                pass
+
+            # Add wide-format columns to summary
+            for r in timer_rows:
+                step_name = r.get("step", "unknown")
+                summary[f"time__{step_name}"] = r.get("elapsed_s", None)
+
+            summary["SMSpp_total_s"] = sum(
+                float(r.get("elapsed_s", 0.0)) for r in timer_rows if r.get("elapsed_s") is not None
             )
 
-        print(f"=== Done NC: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
+        # -------- Export repopulated network (after inverse) --------
+        if export_smspp_repopulated_nc:
+            try:
+                n_smspp.export_to_netcdf(str(smspp_repop_nc))
+            except Exception:
+                pass
+
+        print(
+            f"=== Done NC: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} "
+            f"| SMS++ total s: {summary['SMSpp_total_s']} ==="
+        )
         return summary
 
     except Exception as e:
@@ -273,23 +209,23 @@ def run_single_nc(nc_path: Path,
 
 
 def main():
-    # Discover inputs (.nc networks)
-    # You can change this folder as you like, e.g. HERE / "networks"
-    inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
-    # inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks")
-    # nc_files = sorted(inputs_dir.glob("*h*.nc"))
+    # ---- Choose your config YAML ----
+    # Use a benchmark-specific YAML if you want, otherwise default is fine.
+    config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_default.yaml"
+    if not config_yaml.exists():
+        raise FileNotFoundError(config_yaml)
 
-    # Regex per catturare il numero dopo s_
+    # ---- Discover inputs (.nc networks) ----
+    inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
+
+    # Sort by cluster number after s_ (optional)
     pattern = re.compile(r"s_(\d+)")
 
-    def extract_cluster_number(path):
+    def extract_cluster_number(path: Path):
         m = pattern.search(path.name)
-        return int(m.group(1)) if m else float("inf")  # se manca, mettilo in fondo
+        return int(m.group(1)) if m else float("inf")
 
-    nc_files = sorted(
-        inputs_dir.glob("*h*.nc"),
-        key=extract_cluster_number
-    )
+    nc_files = sorted(inputs_dir.glob("*h*.nc"), key=extract_cluster_number)
 
     if not nc_files:
         print(f"No .nc file in {inputs_dir}")
@@ -297,18 +233,25 @@ def main():
 
     rows = []
     for nc in nc_files:
-        # Same logic as Excel script: filenames containing "inv" are investment cases
-        expansion_ucblock = False if "inv" in nc.name else True
-        row = run_single_nc(nc, expansion_ucblock=expansion_ucblock, merge_links=False)
+        row = run_single_nc(
+            nc,
+            config_yaml=config_yaml,
+            solver_name="gurobi",
+            do_clean_ciclicity_storage=True,
+            export_pypsa_lp=True,
+            export_pypsa_nc=True,
+            export_smspp_repopulated_nc=True,
+            verbose=False,
+        )
         rows.append(row)
 
-    # Build DataFrame and save CSV
     df = pd.DataFrame(rows)
     csv_path = OUT_TEST / "bench_summary_pypsaeur.csv"
     df.to_csv(csv_path, index=False)
+
     print(f"\n>>> Summary (NC) written to: {csv_path}")
     try:
-        with pd.option_context('display.max_columns', None, 'display.width', 140):
+        with pd.option_context("display.max_columns", None, "display.width", 160):
             print(df)
     except Exception:
         pass

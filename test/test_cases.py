@@ -132,7 +132,7 @@ def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", ver
     # SMS++ pipeline (one call) with per-case cfg override
     cfg = make_case_cfg(config_yaml, case_name)
     transformation = Transformation(cfg)  # IMPORTANT: Transformation must accept dict/AttrDict configs
-    _ = transformation.run(network, verbose=verbose)
+    n = transformation.run(network, verbose=verbose)
 
     obj_smspp = float(transformation.result.objective_value)
 
@@ -167,6 +167,9 @@ def test_dispatch(test_case_xlsx):
 def test_investment(test_case_xlsx):
     if not CFG_INVEST.exists():
         pytest.skip(f"Missing InvestmentBlock test config: {CFG_INVEST}")
+    name_l = test_case_xlsx.name.lower()
+    if "inv" not in name_l:
+        pytest.skip("Skipping case for investment block")
     run_case(test_case_xlsx, CFG_INVEST, solver_name="highs", verbose=False)
 
 

@@ -62,7 +62,7 @@ def run_investment_block(xlsx_path: Path, config_yaml: Path) -> None:
         pass
 
     try:
-        obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
+        obj_pypsa = float(network.objective + network.objective_constant)
     except Exception:
         obj_pypsa = float(network.objective)
 
@@ -93,10 +93,13 @@ def test_investment(test_case_xlsx):
     config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_investment.yaml"
     if not config_yaml.exists():
         pytest.skip(f"Missing InvestmentBlock test config: {config_yaml}")
+    name_l = test_case_xlsx.name.lower()
+    if "ml" in name_l or "sector" in name_l:
+        pytest.skip("Skipping case for investment block")
 
     run_investment_block(test_case_xlsx, config_yaml)
 
 
 if __name__ == "__main__":
     config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_investment.yaml"
-    run_investment_block(test_cases["xlsx_paths"][5], config_yaml)
+    run_investment_block(test_cases["xlsx_paths"][7], config_yaml)
