@@ -17,6 +17,8 @@ from pysmspp import SMSNetwork, SMSFileType, Variable, Block, SMSConfig
 from pypsa2smspp import logger
 from copy import deepcopy
 import pysmspp
+from pathlib import Path
+from typing import Union, Mapping, Any
 
 from .constants import conversion_dict, nominal_attrs, renewable_carriers
 from .utils import (
@@ -52,7 +54,8 @@ from .pip_utils import (
     build_optimize_call_from_cfg,
     load_yaml_config,
     StepTimer,
-    step
+    step,
+    AttrDict
 )
 
 from .inverse import (
@@ -98,7 +101,7 @@ class Transformation:
         Parameters for a ThermalUnitBlock
     """
 
-    def __init__(self, path):
+    def __init__(self, config: Union[str, Path, Mapping[str, Any], AttrDict]):
         """
         Initializes the Transformation class.
 
@@ -120,7 +123,16 @@ class Transformation:
         self.config = deepcopy(config_conv)
         
         # Config file
-        self.cfg = load_yaml_config(path)
+        if isinstance(config, (str, Path)):
+            self.cfg = load_yaml_config(config, as_attrdict=True)
+        elif isinstance(config, Mapping):
+            # Accept dict/AttrDict directly
+            self.cfg = config if isinstance(config, AttrDict) else AttrDict(config)
+        else:
+            raise TypeError(
+                "config must be a path (str/Path) or a mapping (dict/AttrDict); "
+                f"got {type(config).__name__}"
+            )
 
         
         # Attribute for unit blocks
@@ -901,6 +913,7 @@ class Transformation:
              index_id += 1
         else:
             name_id = 'Block_0'
+            self.cfg.run.mode = 'ucblock'
         
         # name_id = 'Block_0'
     

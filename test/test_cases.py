@@ -4,21 +4,18 @@ Unified pytest runner for dispatch (UCBlock) and investment (InvestmentBlock).
 
 New style:
 - No pysmspp usage here
-- Single-call pipeline via Transformation(config_yaml).run(network)
+- Single-call pipeline via Transformation(cfg).run(network)
 - Timings are handled inside Transformation (transformation.timer)
 
 Author: aless (refactored)
 """
 
 from pathlib import Path
-from datetime import datetime
 import pytest
 import pypsa
 
-# pytest -p no:warnings
-
-REL_TOL = 1e-5   # relative tolerance for objective comparison
-ABS_TOL = 1e-3   # absolute tolerance for objective comparison
+REL_TOL = 1e-5
+ABS_TOL = 1e-3
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,6 +31,9 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+
+# NEW: load YAML as AttrDict so we can override io.name per case
+from pypsa2smspp.pip_utils import load_yaml_config
 
 # ---------------------------------------------------------------------
 # Utilities
@@ -86,23 +86,29 @@ def get_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
     return files, names
 
 
+def make_case_cfg(config_yaml: Path, case_name: str):
+    """
+    Load YAML config and override io.name so each pytest case writes unique artifacts.
+    This prevents cross-test collisions in output/test/.
+    """
+    cfg = load_yaml_config(config_yaml)
+    # ensure nested keys exist
+    if not hasattr(cfg, "io"):
+        cfg.io = {}
+    cfg.io.name = f"pytest_{case_name}"
+    # keep workdir from YAML (or default)
+    return cfg
+
+
 # ---------------------------------------------------------------------
 # Core runners
 # ---------------------------------------------------------------------
 
 def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", verbose: bool = False) -> None:
-    """
-    Generic case runner:
-    - build network
-    - solve PyPSA reference
-    - run Transformation pipeline (one call)
-    - compare objectives
-    """
-
     case_name = xlsx_path.stem
     prefix = case_name
 
-    # Optional artifacts
+    # Optional artifacts (PyPSA-side)
     network_nc = OUT / f"network_{prefix}.nc"
     pypsa_lp = OUT / f"pypsa_{prefix}.lp"
     safe_remove(network_nc)
@@ -123,12 +129,14 @@ def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", ver
 
     obj_pypsa = pypsa_reference_objective(network)
 
-    # SMS++ pipeline (one call)
-    transformation = Transformation(str(config_yaml))
-    n = transformation.run(network, verbose=verbose)
+    # SMS++ pipeline (one call) with per-case cfg override
+    cfg = make_case_cfg(config_yaml, case_name)
+    transformation = Transformation(cfg)  # IMPORTANT: Transformation must accept dict/AttrDict configs
+    _ = transformation.run(network, verbose=verbose)
 
     obj_smspp = float(transformation.result.objective_value)
 
+    # If this still fails sometimes, consider relaxing rel tol to 1e-4 for investment tests.
     assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
     # Optional export
@@ -163,7 +171,8 @@ def test_investment(test_case_xlsx):
 
 
 if __name__ == "__main__":
-    # Example manual run
     if not CFG_INVEST.exists():
         raise FileNotFoundError(CFG_INVEST)
-    run_case(test_cases[7], CFG_INVEST, solver_name="highs", verbose=True)
+    if not CFG_UCBLOCK.exists():
+        raise FileNotFoundError(CFG_UCBLOCK)
+    run_case(test_cases[5], CFG_INVEST, solver_name="highs", verbose=True)

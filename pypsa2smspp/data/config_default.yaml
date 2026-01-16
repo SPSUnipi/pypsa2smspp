@@ -1,10 +1,10 @@
 transformation:
     merge_links: true
-    expansion_ucblock: true
+    expansion_ucblock: false # To include with investmentblock... Collect everything with mode
     max_hours_stores: 1
 
 run:
-    mode: ucblock  # ucblock | investmentblock
+    mode: investmentblock  # ucblock | investmentblock
 
 smspp:
     ucblock:
