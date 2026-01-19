@@ -1,335 +1,178 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Nov 26 12:05:12 2025
+Unified pytest runner for dispatch (UCBlock) and investment (InvestmentBlock).
 
-@author: aless
+New style:
+- No pysmspp usage here
+- Single-call pipeline via Transformation(cfg).run(network)
+- Timings are handled inside Transformation (transformation.timer)
+
+Author: aless (refactored)
 """
 
-import os, sys, traceback
 from pathlib import Path
-from datetime import datetime
-import time
-import pandas as pd
-import pypsa
-import pysmspp
 import pytest
+import pypsa
 
-# pytest -p no:warnings
+REL_TOL = 1e-5
+ABS_TOL = 1e-3
 
-REL_TOL = 1e-5   # relative tolerance for objective comparison
-ABS_TOL = 1e-3   # absolute tolerance for objective comparison
+HERE = Path(__file__).resolve().parent
 
-# --- Force working directory to this file's folder and build robust paths ---
-HERE = Path(__file__).resolve().parent            # .../pypsa2smspp/test
-
-# Safe output dirs
-OUT = HERE / "output"
+OUT = HERE / "output" / "test"
 OUT.mkdir(parents=True, exist_ok=True)
-OUT_TEST = OUT / "test"
-OUT_TEST.mkdir(parents=True, exist_ok=True)
 
-# --- Domain imports (after PYTHONPATH is set) ---
+# --- Domain imports ---
 from configs.test_config import TestConfig
 from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 
 from pypsa2smspp.network_correction import (
-    clean_global_constraints,
-    clean_e_sum,
     clean_ciclicity_storage,
-    clean_stores,
-    parse_txt_file,
     add_slack_unit,
-    compare_networks,  # optional: not used in timings but kept for debugging
 )
 
-# ---------- Utilities ----------
-def t_now() -> float:
-    """High-resolution time in seconds."""
-    return time.perf_counter()
+# NEW: load YAML as AttrDict so we can override io.name per case
+from pypsa2smspp.pip_utils import load_yaml_config
 
-def delta_s(start: float) -> float:
-    """Seconds elapsed since start() using perf_counter."""
-    return time.perf_counter() - start
+# ---------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------
 
-def safe_remove(p: Path):
-    """Remove path if exists."""
+def safe_remove(p: Path) -> None:
+    """Remove a file if it exists."""
     try:
         if p.exists():
             p.unlink()
     except Exception:
         pass
 
+
 def create_test_config(xlsx_path: Path) -> TestConfig:
     """Create a TestConfig object pointing to the given Excel file."""
     parser = TestConfig()
-    parser.input_data_path = str(xlsx_path.parent)       # folder of the excel
-    parser.input_name_components = xlsx_path.name        # excel filename
+    parser.input_data_path = str(xlsx_path.parent)
+    parser.input_name_components = xlsx_path.name
     if "sector" in xlsx_path.name:
         parser.load_sign = -1
     return parser
 
-def create_summary_dict(xlsx_path: Path) -> dict:
-    """Create an empty summary dict for the given case."""
-    return {
-        "case": xlsx_path.stem,
-        "input_file": str(xlsx_path),
-        "status": "OK",
-        "error_msg": "",
-        "PyPSA_opt_s": None,
-        "Transform_direct_s": None,
-        "PySMSpp_convert_s": None,
-        "SMSpp_total_s": None,
-        "SMSpp_solver_s": None,
-        "SMSpp_write_s": None,
-        "Inverse_transform_s": None,
-        "Obj_PyPSA": None,
-        "Obj_SMSpp": None,
-        "Obj_rel_error_pct": None,
-        "Investment_mode": None,
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-    }
 
-def run_dispatch(xlsx_path: Path,
-                    solver_name: str = "highs",
-                    uc_template: str = "UCBlock/uc_solverconfig",
-                    inv_template: str = "InvestmentBlock/BSPar.txt",
-                    merge_links: bool = True,
-                    expansion_ucblock: bool = True) -> dict:
-    
-    summary = create_summary_dict(xlsx_path)
-    case_name = summary["case"]  # e.g., "components_caseA"
-
-    expansion_ucblock = False if "inv" in xlsx_path.name else True
-
-    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
-
-    # Build per-case output paths
-    prefix = f"{case_name}"
-    network_nc = OUT_TEST / f"network_{prefix}.nc"
-    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"            # temp write during optimize
-    smspp_solution_nc = OUT_TEST / f"solution_{prefix}.nc"
-    smspp_log_txt = OUT_TEST / f"log_{prefix}.txt"
-    pypsa_lp = OUT_TEST / f"pypsa_{prefix}.lp"
-
-    # Clean any stale files
-    for p in (network_nc, smspp_tmp_nc, smspp_solution_nc, smspp_log_txt, pypsa_lp):
-        safe_remove(p)
-
+def build_network_from_excel(xlsx_path: Path):
+    """Build and clean a PyPSA network from a single Excel input."""
     parser = create_test_config(xlsx_path)
-
-    # ---- Build network from Excel via your NetworkDefinition pipeline ----
     nd = NetworkDefinition(parser)
 
-    # Optional: clean-ups consistent with your other scripts
     n = nd.n
     n = clean_ciclicity_storage(n)
     if "sector" not in xlsx_path.name:
         n = add_slack_unit(n)
 
-    # Keep a working copy for PyPSA optimization (do not mutate original)
+    return n, parser
+
+
+def pypsa_reference_objective(network: "pypsa.Network") -> float:
+    """Robust reference objective extraction."""
+    try:
+        return float(network.objective + getattr(network, "objective_constant", 0.0))
+    except Exception:
+        return float(network.objective)
+
+
+def get_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
+    """Get all test case Excel files and their names for parametrization."""
+    files = list(sorted(inputs_dir.glob("*.xlsx")))
+    names = [f"{i}: {f.name}" for (i, f) in enumerate(files)]
+    return files, names
+
+
+def make_case_cfg(config_yaml: Path, case_name: str):
+    """
+    Load YAML config and override io.name so each pytest case writes unique artifacts.
+    This prevents cross-test collisions in output/test/.
+    """
+    cfg = load_yaml_config(config_yaml)
+    # ensure nested keys exist
+    if not hasattr(cfg, "io"):
+        cfg.io = {}
+    cfg.io.name = f"pytest_{case_name}"
+    # keep workdir from YAML (or default)
+    return cfg
+
+
+# ---------------------------------------------------------------------
+# Core runners
+# ---------------------------------------------------------------------
+
+def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", verbose: bool = False) -> None:
+    case_name = xlsx_path.stem
+    prefix = case_name
+
+    # Optional artifacts (PyPSA-side)
+    network_nc = OUT / f"network_{prefix}.nc"
+    pypsa_lp = OUT / f"pypsa_{prefix}.lp"
+    safe_remove(network_nc)
+    safe_remove(pypsa_lp)
+
+    # Build + clean
+    n, _parser = build_network_from_excel(xlsx_path)
+
+    # Reference solve
     network = n.copy()
-
-    # ---- (1) PyPSA optimization ----
-    t0 = t_now()
     network.optimize(solver_name=solver_name)
-    summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
 
-    # Export LP for debugging
+    # Export LP for debugging (best effort)
     network.model.to_file(fn=str(pypsa_lp))
 
-    # ---- (2) Direct transformation ----
-    t0 = t_now()
-    transformation = Transformation(network,
-                                    merge_links=merge_links,
-                                    expansion_ucblock=expansion_ucblock)
-    summary["Transform_direct_s"] = round(delta_s(t0), 6)
+    obj_pypsa = pypsa_reference_objective(network)
 
-    # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
-    t0 = t_now()
-    tran = transformation.convert_to_blocks()
-    summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
+    # SMS++ pipeline (one call) with per-case cfg override
+    cfg = make_case_cfg(config_yaml, case_name)
+    transformation = Transformation(cfg)  # IMPORTANT: Transformation must accept dict/AttrDict configs
+    n = transformation.run(network, verbose=verbose)
 
-    # Determine which block to run
-    is_investment = (not transformation.expansion_ucblock) and \
-                    (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
-    summary["Investment_mode"] = bool(is_investment)
+    obj_smspp = float(transformation.result.objective_value)
 
-    # Skip for investment mode (not implemented here)
-    if is_investment:
-        pytest.skip("Investment mode not implemented in this test.")
-
-    # ---- (4) SMS++ optimization ----
-    # UCBlock configuration
-    configfile = pysmspp.SMSConfig(template=uc_template)
-    # The temporary eBlock file to write/solve
-    tmp_nc = str(smspp_tmp_nc)
-    out_txt = str(smspp_log_txt)
-    sol_nc = str(smspp_solution_nc)
-
-    t0 = t_now()
-    result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc, log_executable_call=True)
-    total_smspp = delta_s(t0)
-    summary["SMSpp_total_s"] = round(total_smspp, 6)
-
-    # Parse solver time from log (if available)
-    d = parse_txt_file(out_txt)
-    solver_s = float(d.get("elapsed_time", 0.0))
-    summary["SMSpp_solver_s"] = round(solver_s, 6)
-    summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
-
-    # ---- Objective & error ----
-    try:
-        obj_pypsa = float(network.objective + network.objective_constant)
-    except Exception:
-        obj_pypsa = float(network.objective)
-
-    obj_smspp = float(result.objective_value)
-    summary["Obj_PyPSA"] = obj_pypsa
-    summary["Obj_SMSpp"] = obj_smspp
-    if obj_pypsa != 0.0:
-        summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
-    
+    # If this still fails sometimes, consider relaxing rel tol to 1e-4 for investment tests.
     assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
-    # ---- (5) Parse solution & inverse transform ----
-    t0 = t_now()
-    _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-    transformation.inverse_transformation(result.objective_value, n)
-    summary["Inverse_transform_s"] = round(delta_s(t0), 6)
-
-    network.export_to_netcdf(str(network_nc))
-
-    print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
-
-def run_investment(xlsx_path: Path,
-                    solver_name: str = "highs",
-                    uc_template: str = "UCBlock/uc_solverconfig",
-                    inv_template: str = "InvestmentBlock/BSPar.txt",
-                    merge_links: bool = True,
-                    expansion_ucblock: bool = True) -> dict:
-    
-    summary = create_summary_dict(xlsx_path)
-    case_name = summary["case"]  # e.g., "components_caseA"
-
-    expansion_ucblock = False if "inv" in xlsx_path.name else True
-
-    print(f"\n=== Running case: {case_name} ({xlsx_path.name}) ===")
-
-    # Build per-case output paths
-    prefix = f"{case_name}"
-    network_nc = OUT_TEST / f"network_{prefix}.nc"
-    smspp_tmp_nc = OUT_TEST / f"tmp_smspp_{prefix}.nc"            # temp write during optimize
-    smspp_solution_nc = OUT_TEST / f"solution_{prefix}.nc"
-    smspp_log_txt = OUT_TEST / f"log_{prefix}.txt"
-    pypsa_lp = OUT_TEST / f"pypsa_{prefix}.lp"
-
-    # Clean any stale files
-    for p in (network_nc, smspp_tmp_nc, smspp_solution_nc, smspp_log_txt, pypsa_lp):
-        safe_remove(p)
-
-    parser = create_test_config(xlsx_path)
-
-    # ---- Build network from Excel via your NetworkDefinition pipeline ----
-    nd = NetworkDefinition(parser)
-
-    # Optional: clean-ups consistent with your other scripts
-    n = nd.n
-    n = clean_ciclicity_storage(n)
-    if "sector" not in xlsx_path.name:
-        n = add_slack_unit(n)
-
-    # Keep a working copy for PyPSA optimization (do not mutate original)
-    network = n.copy()
-
-    # ---- (1) PyPSA optimization ----
-    t0 = t_now()
-    network.optimize(solver_name=solver_name)
-    summary["PyPSA_opt_s"] = round(delta_s(t0), 6)
-
-    # Export LP for debugging
-    network.model.to_file(fn=str(pypsa_lp))
-
-    # ---- (2) Direct transformation ----
-    t0 = t_now()
-    transformation = Transformation(network,
-                                    merge_links=merge_links,
-                                    expansion_ucblock=expansion_ucblock)
-    summary["Transform_direct_s"] = round(delta_s(t0), 6)
-
-    # ---- (3) Conversion to SMS++ blocks (PySMSpp object graph) ----
-    t0 = t_now()
-    tran = transformation.convert_to_blocks()
-    summary["PySMSpp_convert_s"] = round(delta_s(t0), 6)
-
-    # Determine which block to run
-    is_investment = (not transformation.expansion_ucblock) and \
-                    (transformation.dimensions['InvestmentBlock']['NumAssets'] > 0)
-    summary["Investment_mode"] = bool(is_investment)
-
-    # Skip for dispatch mode (not implemented here)
-    if not is_investment:
-        pytest.skip("Dispatch mode not implemented in this test.")
-
-    # ---- (4) SMS++ optimization ----
-    # InvestmentBlock configuration
-    configfile = pysmspp.SMSConfig(template=inv_template)
-    tmp_nc = str(smspp_tmp_nc)
-    out_txt = str(smspp_log_txt)
-    sol_nc = str(smspp_solution_nc)
-
-    t0 = t_now()
-    result = tran.optimize(configfile, tmp_nc, out_txt, sol_nc,
-                            inner_block_name='InvestmentBlock',
-                            log_executable_call=True)
-    total_smspp = delta_s(t0)
-    summary["SMSpp_total_s"] = round(total_smspp, 6)
-
-    # No robust solver-time split here (template dependent), but try:
+    # Optional export
     try:
-        d = parse_txt_file(out_txt)
-        solver_s = float(d.get("elapsed_time", 0.0))
-        summary["SMSpp_solver_s"] = round(solver_s, 6)
-        summary["SMSpp_write_s"] = round(total_smspp - solver_s, 6)
+        network.export_to_netcdf(str(network_nc))
     except Exception:
         pass
 
-    # Objectives
-    obj_pypsa = float(network.objective)  # often objective_constant already included or 0
-    obj_smspp = float(result.objective_value)
-    summary["Obj_PyPSA"] = obj_pypsa
-    summary["Obj_SMSpp"] = obj_smspp
-    if obj_pypsa != 0.0:
-        summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
 
-    # Inverse
-    t0 = t_now()
-    _ = transformation.parse_solution_to_unitblocks(result.solution, n)
-    transformation.inverse_transformation(result.objective_value,n)
-    summary["Inverse_transform_s"] = round(delta_s(t0), 6)
-
-    network.export_to_netcdf(str(network_nc))
-
-    print(f"=== Done: {case_name} | Obj_err%: {summary['Obj_rel_error_pct']} | SMS++ total s: {summary['SMSpp_total_s']} ===")
-
-
-def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
-    """
-    Get all test case Excel files and their names for parametrization.
-    """
-    files = list(sorted(inputs_dir.glob("*.xlsx")))
-    names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
-    return files, names
+# ---------------------------------------------------------------------
+# Pytest parametrization
+# ---------------------------------------------------------------------
 
 test_cases, test_names = get_test_cases()
 
+CFG_UCBLOCK = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_ucblock.yaml"
+CFG_INVEST = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_investment.yaml"
+
+
 @pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)
 def test_dispatch(test_case_xlsx):
-    run_dispatch(test_case_xlsx)
+    if not CFG_UCBLOCK.exists():
+        pytest.skip(f"Missing UCBlock test config: {CFG_UCBLOCK}")
+    run_case(test_case_xlsx, CFG_UCBLOCK, solver_name="highs", verbose=False)
+
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)
 def test_investment(test_case_xlsx):
-    run_investment(test_case_xlsx)
+    if not CFG_INVEST.exists():
+        pytest.skip(f"Missing InvestmentBlock test config: {CFG_INVEST}")
+    name_l = test_case_xlsx.name.lower()
+    if "inv" not in name_l:
+        pytest.skip("Skipping case for investment block")
+    run_case(test_case_xlsx, CFG_INVEST, solver_name="highs", verbose=False)
+
 
 if __name__ == "__main__":
-    run_investment(test_cases[7])
+    if not CFG_INVEST.exists():
+        raise FileNotFoundError(CFG_INVEST)
+    if not CFG_UCBLOCK.exists():
+        raise FileNotFoundError(CFG_UCBLOCK)
+    run_case(test_cases[5], CFG_INVEST, solver_name="highs", verbose=True)

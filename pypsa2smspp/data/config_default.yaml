@@ -1,0 +1,22 @@
+transformation:
+    merge_links: true
+    expansion_ucblock: false # To include with investmentblock... Collect everything with mode
+    max_hours_stores: 1
+
+run:
+    mode: investmentblock  # ucblock | investmentblock
+
+smspp:
+    ucblock:
+        output_prefix: uc
+        template: UCBlock/uc_solverconfig_grb
+    investmentblock:
+        output_prefix: inv
+        template: InvestmentBlock/BSPar.txt
+        inner_block_name: InvestmentBlock
+    log_executable_call: true
+
+io:
+    workdir: output
+    name: test_case
+    overwrite: true

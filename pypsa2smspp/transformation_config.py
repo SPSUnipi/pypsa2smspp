@@ -215,4 +215,3 @@ class TransformationConfig:
             "Bus": "buses"
         }
 
-        self.max_hours_stores = 1
