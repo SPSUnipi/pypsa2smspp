@@ -149,8 +149,8 @@ def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", ver
 
 test_cases, test_names = get_test_cases()
 
-CFG_UCBLOCK = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_ucblock.yaml"
-CFG_INVEST = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_investment.yaml"
+CFG_UCBLOCK = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_ucblock.yaml"
+CFG_INVEST = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_investment.yaml"
 
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)

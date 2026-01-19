@@ -87,7 +87,7 @@ def test_investment(test_case_xlsx):
     """
     Uses a dedicated YAML config that forces InvestmentBlock mode (recommended).
     """
-    config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_investment.yaml"
+    config_yaml = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_investment.yaml"
     if not config_yaml.exists():
         pytest.skip(f"Missing InvestmentBlock test config: {config_yaml}")
     name_l = test_case_xlsx.name.lower()

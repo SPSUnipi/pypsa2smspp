@@ -91,7 +91,7 @@ def test_ucblock(test_case_xlsx):
     """
     # Put a test YAML here (recommended):
     # pypsa2smspp/data/config_test_ucblock.yaml
-    config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_ucblock.yaml"
+    config_yaml = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_ucblock.yaml"
     if not config_yaml.exists():
         pytest.skip(f"Missing UCBlock test config: {config_yaml}")
 
