@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'multi-link_expansion'
+name = 'test_statistics'
 
 #%% Network definition with PyPSA
 config = TestConfig()

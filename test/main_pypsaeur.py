@@ -16,7 +16,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import pandas as pd
 import pypsa
@@ -101,7 +101,7 @@ class DebugRunConfig:
     verbose: bool = True
 
 
-def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
+def run_debug(cfg: DebugRunConfig) -> Tuple[pd.DataFrame, pypsa.Network, pypsa.Network]:
     """
     Run a single debug pipeline and return a 1-row DataFrame with timings/metrics.
     Writes artifacts under cfg.out_root/case_name/.
@@ -283,7 +283,7 @@ def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
     except Exception:
         pass
 
-    return df
+    return df, n_smspp, network
 
 
 def main():
@@ -307,9 +307,11 @@ def main():
         verbose=True,
     )
 
-    df = run_debug(cfg)
+    df, n_smspp, network = run_debug(cfg)
     print("\n>>> Wrote per-case artifacts to:", (cfg.out_root / (cfg.case_name or cfg.network_nc.stem)))
-
+    return df, n_smspp, network
+    
 
 if __name__ == "__main__":
-    main()
+    df, n_smspp,network = main()
+
