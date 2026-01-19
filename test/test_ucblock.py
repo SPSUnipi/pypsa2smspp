@@ -55,10 +55,7 @@ def run_ucblock(xlsx_path: Path, config_yaml: Path) -> None:
     network.optimize(solver_name=solver_name)
 
     # Export LP for debugging (best effort)
-    try:
-        network.model.to_file(fn=str(pypsa_lp))
-    except Exception:
-        pass
+    network.model.to_file(fn=str(pypsa_lp))
 
     try:
         obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
@@ -102,5 +99,5 @@ def test_ucblock(test_case_xlsx):
 
 
 if __name__ == "__main__":
-    config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_test_ucblock.yaml"
+    config_yaml = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_ucblock.yaml"
     run_ucblock(test_cases["xlsx_paths"][5], config_yaml)

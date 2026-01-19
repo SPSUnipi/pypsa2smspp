@@ -122,10 +122,7 @@ def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", ver
     network.optimize(solver_name=solver_name)
 
     # Export LP for debugging (best effort)
-    try:
-        network.model.to_file(fn=str(pypsa_lp))
-    except Exception:
-        pass
+    network.model.to_file(fn=str(pypsa_lp))
 
     obj_pypsa = pypsa_reference_objective(network)
 

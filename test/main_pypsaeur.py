@@ -170,10 +170,7 @@ def run_debug(cfg: DebugRunConfig) -> pd.DataFrame:
 
         # Export LP (debug)
         if cfg.export_pypsa_lp:
-            try:
-                network.model.to_file(fn=str(pypsa_lp))
-            except Exception:
-                pass
+            network.model.to_file(fn=str(pypsa_lp))
 
         # Export optimized PyPSA network
         if cfg.export_pypsa_nc:
