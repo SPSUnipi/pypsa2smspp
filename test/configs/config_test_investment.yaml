@@ -9,7 +9,7 @@ run:
 smspp:
     ucblock:
         output_prefix: uc
-        template: UCBlock/uc_solverconfig_grb
+        template: UCBlock/uc_solverconfig
     investmentblock:
         output_prefix: inv
         template: InvestmentBlock/BSPar.txt
