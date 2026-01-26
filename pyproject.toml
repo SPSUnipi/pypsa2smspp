@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypsa2smspp"
-version = "0.0.1"
+version = "0.0.2"
 authors = [
   { name="Alessandro Pampado", email="alessandro.pampado@ing.unipi.it"},
   { name="Davide Fioriti", email="davide.fioriti@unipi.it" },
