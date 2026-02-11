@@ -7,10 +7,15 @@ YAML-driven, single-call pipeline:
 
 All timings are collected internally by Transformation (StepTimer).
 
-Outputs:
-- CSV summary at output/test/bench_summary.csv
+Outputs (per case, in output/test/):
+- pypsa_<case>.nc
+- pypsa_<case>.lp
+- smspp_<case>_trm.nc
+- smspp_<case>_solution.nc
+- smspp_<case>_log.txt
+- smspp_<case>_network.nc
 
-Author: aless (refactored)
+Author: aless
 """
 
 import os
@@ -20,6 +25,8 @@ from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import pypsa
+import shutil
+import time
 
 # ---------------------------------------------------------------------
 # Paths & environment
@@ -47,19 +54,41 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+from pypsa2smspp.pip_utils import load_yaml_config
 
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
 
 def extract_step_time(timer_rows, step_name):
-    """
-    Extract elapsed time for a given step from StepTimer rows.
-    """
     for r in timer_rows:
         if r["step"] == step_name:
             return round(r["elapsed_s"], 6)
     return None
+
+
+def copy_if_exists(src: Path, dst: Path):
+    try:
+        if src.exists():
+            shutil.copy(src, dst)
+    except Exception:
+        pass
+    
+
+def make_case_cfg(config_yaml: Path, case_name: str, out_dir: Path):
+    """
+    Load YAML config and override io.name so all outputs are unique
+    but written into the same directory.
+    """
+    cfg = load_yaml_config(config_yaml)
+
+    if not hasattr(cfg, "io"):
+        cfg.io = {}
+
+    cfg.io.workdir = str(out_dir)   # output/test
+    cfg.io.name = case_name         # UNIQUE PER NETWORK
+
+    return cfg
 
 
 # ---------------------------------------------------------------------
@@ -69,6 +98,22 @@ def extract_step_time(timer_rows, step_name):
 def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
     case_name = xlsx_path.stem
     print(f"\n=== Running case: {case_name} ===")
+    
+    cfg = make_case_cfg(
+        config_yaml=config_yaml,
+        case_name=case_name,
+        out_dir=OUT,
+    )
+
+    # ---------------- Paths ----------------
+
+    pypsa_nc = OUT / f"pypsa_{case_name}.nc"
+    pypsa_lp = OUT / f"pypsa_{case_name}.lp"
+
+    smspp_trm_nc = OUT / f"smspp_{case_name}_trm.nc"
+    smspp_solution_nc = OUT / f"smspp_{case_name}_solution.nc"
+    smspp_log_txt = OUT / f"smspp_{case_name}_log.txt"
+    smspp_network_nc = OUT / f"smspp_{case_name}_network.nc"
 
     summary = {
         "case": case_name,
@@ -113,7 +158,10 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
         # --------------------------------------------------------------
 
         network = n.copy()
+
+        t0 = time.perf_counter()
         network.optimize(solver_name="gurobi")
+        summary["PyPSA_opt_s"] = round(time.perf_counter() - t0, 6)
 
         try:
             obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
@@ -122,12 +170,44 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
 
         summary["Obj_PyPSA"] = obj_pypsa
 
+        # Save PyPSA artifacts
+        try:
+            network.export_to_netcdf(pypsa_nc)
+        except Exception:
+            pass
+
+        try:
+            network.model.to_file(fn=str(pypsa_lp))
+        except Exception:
+            pass
+
         # --------------------------------------------------------------
         # SMS++ pipeline (ONE CALL)
         # --------------------------------------------------------------
 
-        transformation = Transformation(config_yaml)
+        transformation = Transformation(cfg)
         nd.n = transformation.run(network, verbose=True)
+
+        # --------------------------------------------------------------
+        # Save SMS++ artifacts
+        # --------------------------------------------------------------
+
+        # transformed network (TRM)
+        try:
+            transformation.sms_network.export_to_netcdf(smspp_trm_nc)
+        except Exception:
+            pass
+
+        workdir = Path(transformation.cfg.io.workdir)
+
+        copy_if_exists(workdir / "solution.nc", smspp_solution_nc)
+        copy_if_exists(workdir / "log.txt", smspp_log_txt)
+
+        # final PyPSA network after inverse
+        try:
+            nd.n.export_to_netcdf(smspp_network_nc)
+        except Exception:
+            pass
 
         # --------------------------------------------------------------
         # Objectives
@@ -193,14 +273,14 @@ def main():
         print(f"Nessun .xlsx trovato in {inputs_dir}")
         return
 
-    # YAML config used for all runs
-    
-
     rows = []
     for xlsx in xlsx_files:
-        config_yaml = REPO_ROOT / "pypsa2smspp" / "data" / "config_test_investment.yaml" if "inv" in xlsx._str else REPO_ROOT / "pypsa2smspp" / "data" / "config_default.yaml"
-        row = run_single_case(xlsx, config_yaml)
-        rows.append(row)
+        if "inv" in xlsx.name:
+            cfg = REPO_ROOT / "test" / "configs" / "config_test_investment.yaml"
+        else:
+            cfg = REPO_ROOT / "pypsa2smspp" / "data" / "config_default.yaml"
+
+        rows.append(run_single_case(xlsx, cfg))
 
     df = pd.DataFrame(rows)
     csv_path = OUT / "bench_summary.csv"

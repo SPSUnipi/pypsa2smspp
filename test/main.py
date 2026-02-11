@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'test_statistics'
+name = 'test_pypsaeur'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -85,6 +85,11 @@ network.model.to_file(fn = f"output/pypsa_{name}.lp")
 
 transformation = Transformation("..\\pypsa2smspp\\data\\config_default.yaml")
 nd.n = transformation.run(nd.n)
+
+# cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
+# cfg_path = cfg_path.resolve()
+
+# nd.n = nd.n.smspp(config=str(cfg_path), verbose=True)
 
 objective_pypsa = network.objective + network.objective_constant
 objective_smspp = nd.n.objective

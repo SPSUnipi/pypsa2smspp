@@ -155,10 +155,14 @@ class Transformation:
     def run(self, n, verbose: bool = True):
         # Keep timings accessible after the run
         self.timer = StepTimer()
+        n.calculate_dependent_values()
+        
+        with step(self.timer, "consistency_check", verbose=verbose):
+            self.consistency_check(n)
     
         with step(self.timer, "direct", verbose=verbose):
             self.direct(n)
-    
+        
         with step(self.timer, "convert_to_blocks", verbose=verbose):
             self.sms_network = self.convert_to_blocks()
     
@@ -216,8 +220,8 @@ class Transformation:
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
         """
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
-        self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.cfg.transformation.expansion_ucblock)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.cfg.transformation.expansion_ucblock, nominal_attrs)
+        self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.expansion_ucblock)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.expansion_ucblock, nominal_attrs)
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
         
         
@@ -239,7 +243,7 @@ class Transformation:
     
         
         stores_df, links_merged_df, self.dimensions['NetworkBlock']['merged_links_ext'] = build_store_and_merged_links(
-            n, merge_links=self.cfg.transformation.merge_links, logger=logger)
+            n, merge_links=self.merge_links, logger=logger)
         
         links_before = links_merged_df.copy()
         
@@ -257,7 +261,7 @@ class Transformation:
             if "is_primary_branch" not in links_after.columns:
                 links_after["is_primary_branch"] = True
         
-        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.cfg.transformation.expansion_ucblock)
+        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.expansion_ucblock)
         
         self._dc_index = build_dc_index(n, links_before, links_after)
         
@@ -266,7 +270,7 @@ class Transformation:
         self._dc_types  = list(self._dc_index['physical']['types'])
 
 
-        if self.cfg.transformation.get("expansion_ucblock", False):
+        if self.expansion_ucblock:
             apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse, self.config.InvestmentBlock_parameters)
         
         # ------------- Main loop over components ----------------
@@ -292,7 +296,7 @@ class Transformation:
             components_type = components.list_name
     
             use_investmentblock = (
-                not self.cfg.transformation.get("expansion_ucblock", False)
+                not self.expansion_ucblock
                 or components_type in ["lines", "links"]
             )
 
@@ -492,7 +496,7 @@ class Transformation:
             nom = nominal_attrs[components_type]
             ext = components_df[f"{nom}_extendable"].iloc[0]
             design_key = (
-                "DesignVariable" if not self.cfg.transformation.expansion_ucblock else
+                "DesignVariable" if not self.expansion_ucblock else
                 ("IntermittentDesign" if "IntermittentUnitBlock" in name else
                 "BatteryDesign" if "BatteryUnitBlock" in name else
                 "DesignVariable")   # fallback
@@ -831,7 +835,6 @@ class Transformation:
         # n.optimize.assign_duals(n) # Still doesn't work
         
         n._multi_invest = 0
-        n.calculate_dependent_values()
         n.optimize.post_processing()
         n._objective_constant = 0
         
@@ -903,7 +906,7 @@ class Transformation:
         # -----------------
         # Check if investment problem
         # -----------------
-        if (not self.cfg.transformation.expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
+        if (not self.expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
              name_id = 'InvestmentBlock'
              sn = self.convert_to_investmentblock(master, index_id, name_id)
     
@@ -1105,7 +1108,7 @@ class Transformation:
         """
     
         # Condition: only in expansion-ucblock mode AND if we actually have design lines
-        if not self.cfg.transformation.get("expansion_ucblock", False):
+        if not self.expansion_ucblock:
             return
     
         num_design_lines = (
@@ -1187,7 +1190,56 @@ class Transformation:
         self.result = self.sms_network.optimize(configfile, *args, **kwargs)
         return self.result
 
+
+#############################################################################################
+################################ Consistency check ##########################################
+#############################################################################################
+
+    def consistency_check(self, n):
+        """
+        Validate configuration + network compatibility before running the pipeline.
     
+        Notes
+        -----
+        Keep this cheap and deterministic. Fail fast with clear error messages.
+        """
+        # ---- Freeze frequently used flags (avoid repeated AttrDict lookups) ----
+        try:
+            merge_links = bool(self.cfg.transformation.merge_links)
+            expansion_ucblock = bool(self.cfg.transformation.expansion_ucblock)
+        except Exception as e:
+            raise ValueError(
+                "Missing required config keys: cfg.transformation.merge_links and/or "
+                "cfg.transformation.expansion_ucblock"
+            ) from e
+    
+        self.merge_links = merge_links
+        self.expansion_ucblock = expansion_ucblock
+    
+        # ---- Basic type checks ----
+        if not isinstance(self.merge_links, bool):
+            raise TypeError("cfg.transformation.merge_links must be a boolean.")
+        if not isinstance(self.expansion_ucblock, bool):
+            raise TypeError("cfg.transformation.expansion_ucblock must be a boolean.")
+    
+        # ---- Network compatibility checks (SMS++ limitations) ----
+        # Global constraints: PyPSA stores them in n.global_constraints (DataFrame).
+        # if hasattr(n, "global_constraints"):
+        #     try:
+        #         if n.global_constraints is not None and len(n.global_constraints) > 0:
+        #             raise ValueError(
+        #                 "SMS++ pipeline currently does not support PyPSA global_constraints. "
+        #                 f"Found {len(n.global_constraints)} global_constraints. "
+        #                 "Please remove/disable them before calling Transformation.run()."
+        #             )
+        #     except TypeError:
+        #         # In case global_constraints exists but isn't sized like a DataFrame
+        #         raise ValueError(
+        #             "SMS++ pipeline currently does not support PyPSA global_constraints "
+        #             "(unexpected type encountered)."
+        #         )
+    
+        return True
 
 
 #############################################################################################

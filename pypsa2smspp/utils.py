@@ -420,7 +420,12 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
         dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
         # dimensions['InvestmentBlock']['NumberDesignLines'] = dimensions['NetworkBlock']['NumberBranches_ext']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
-
+    
+    # Correct number of links and branches based on real branches
+    dimensions['NetworkBlock']['NumberBranches'] += dimensions['NetworkBlock']['Lines']
+    dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
+    dimensions['NetworkBlock']['Links'] = dimensions['NetworkBlock']['NumberBranches'] - dimensions['NetworkBlock']['Lines']
+    
 
 
 #%%
@@ -996,7 +1001,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "MinCapacityDesign
     if "MinCapacityDesign" not in d:
         def _min_cap_design(p_nom, p_nom_extendable, p_nom_min):
-            p_nom_min_safe = p_nom_min.replace(np.inf, 1e-6)
+            p_nom_min_safe = p_nom_min
             return (first_scalar(p_nom_min_safe)
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
@@ -1011,7 +1016,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "ConverterInvestmentCost"
     if "ConverterInvestmentCost" not in b:
-        b["ConverterInvestmentCost"] = lambda e_nom_extendable: 1e-6 if bool(first_scalar(e_nom_extendable)) else 0.0
+        b["ConverterInvestmentCost"] = lambda e_nom_extendable: 1e-12 if bool(first_scalar(e_nom_extendable)) else 0.0
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
@@ -1025,7 +1030,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "BatteryMinCapacityDesign"
     if "BatteryMinCapacityDesign" not in b:
         def _battery_min_cap_design(e_nom, e_nom_extendable, e_nom_min):
-            e_nom_min_safe = e_nom_min.replace(np.inf, 1e-6)
+            e_nom_min_safe = e_nom_min
             return (first_scalar(e_nom_min_safe)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
@@ -1317,7 +1322,7 @@ def resolve_param_value(
     block_class = attr_name.split("_")[0]
     size = smspp_parameters[block_class]['Size'][key]
 
-    if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]']:
+    if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]', '[L] | [NB]']:
         weight = param in [
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
             'start_up_cost', 'stand_by_cost'
@@ -1380,6 +1385,14 @@ def determine_size_type(
     block_class = attr_name.split("_")[0]
     row = smspp_parameters[block_class].loc[key]
     variable_type = row['Type']
+    
+    if block_class in ['Lines', 'Links'] and dimensions['NetworkBlock']['NumberBranches'] > dimensions['NetworkBlock']['combined']:
+        if key in ['StartLine', 'EndLine', 'Efficiency', 'HyperArcID']:
+            variable_size = ('NumberBranches',) 
+            return variable_type, variable_size
+        else:
+            variable_size = ('NumberLines',) if block_class == 'Lines' else ('NumberLinks',)
+            return variable_type, variable_size
 
     # Compose unified dimension dict
     dim_map = {

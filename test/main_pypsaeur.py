@@ -39,6 +39,8 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
     reduce_snapshots_and_scale_costs,
+    clean_storage_units,
+    clean_stores
 )
 
 # ----------------- Helpers -----------------
@@ -147,25 +149,24 @@ def run_debug(cfg: DebugRunConfig) -> Tuple[pd.DataFrame, pypsa.Network, pypsa.N
 
     try:
         # -------- Load network --------
-        n_raw = pypsa.Network(str(cfg.network_nc))
-
-        # -------- Optional cleaning --------
-        n_clean = n_raw
+        n_smspp = pypsa.Network(str(cfg.network_nc))
 
         if cfg.do_clean_e_sum:
-            n_clean = clean_e_sum(n_clean)
+            n_smspp = clean_e_sum(n_smspp)
 
         if cfg.do_clean_ciclicity_storage:
-            n_clean = clean_ciclicity_storage(n_clean)
+            n_smspp = clean_ciclicity_storage(n_smspp)
 
         if cfg.do_reduce_snapshots:
-            n_clean = reduce_snapshots_and_scale_costs(n_clean, cfg.reduce_snapshots_to)
+            n_smspp = reduce_snapshots_and_scale_costs(n_smspp, cfg.reduce_snapshots_to)
 
         if cfg.do_add_slack_unit:
-            n_clean = add_slack_unit(n_clean)
+            n_smspp = add_slack_unit(n_smspp)
+        
+        # n_smspp = clean_storage_units(n_smspp)
 
         # -------- PyPSA optimization (reference) --------
-        network = n_clean.copy()
+        network = n_smspp.copy()
         network.optimize(solver_name=cfg.solver_name)
 
         # Export LP (debug)
@@ -290,15 +291,15 @@ def main():
     # ---- Edit these defaults for quick debugging ----
     cfg = DebugRunConfig(
         network_nc=Path(
-            "/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks/base_s_20_elec_1h.nc"
+            "C:\\Users\\aless\\sms\\transformation_pypsa_smspp\\test\\networks\\base_s_50___2050.nc"
         ),
-        config_yaml=Path("pypsa2smspp/data/config_default.yaml"),
+        config_yaml=Path("../pypsa2smspp/data/config_default.yaml"),
         solver_name="gurobi",
         do_clean_e_sum=False,
         do_clean_ciclicity_storage=True,
         do_add_slack_unit=False,
-        do_reduce_snapshots=False,
-        reduce_snapshots_to=240,
+        do_reduce_snapshots=True,
+        reduce_snapshots_to=24,
         export_pypsa_lp=True,
         export_pypsa_nc=True,
         export_smspp_repopulated_nc=True,
@@ -313,5 +314,5 @@ def main():
     
 
 if __name__ == "__main__":
-    df, n_smspp,network = main()
+    df, n_smspp, network = main()
 
