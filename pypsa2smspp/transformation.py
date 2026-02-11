@@ -55,7 +55,9 @@ from .pip_utils import (
     load_yaml_config,
     StepTimer,
     step,
-    AttrDict
+    AttrDict,
+    load_any_config,
+    default_transformation_cfg
 )
 
 from .inverse import (
@@ -101,7 +103,7 @@ class Transformation:
         Parameters for a ThermalUnitBlock
     """
 
-    def __init__(self, config: Union[str, Path, Mapping[str, Any], AttrDict]):
+    def __init__(self, config: Union[None, str, Path, Mapping[str, Any], AttrDict] = None):
         """
         Initializes the Transformation class.
 
@@ -123,16 +125,11 @@ class Transformation:
         self.config = deepcopy(config_conv)
         
         # Config file
-        if isinstance(config, (str, Path)):
-            self.cfg = load_yaml_config(config, as_attrdict=True)
-        elif isinstance(config, Mapping):
-            # Accept dict/AttrDict directly
-            self.cfg = config if isinstance(config, AttrDict) else AttrDict(config)
-        else:
-            raise TypeError(
-                "config must be a path (str/Path) or a mapping (dict/AttrDict); "
-                f"got {type(config).__name__}"
-            )
+        self.cfg = load_any_config(
+            config,
+            defaults=default_transformation_cfg(),
+            as_attrdict=True,
+        )
 
         
         # Attribute for unit blocks

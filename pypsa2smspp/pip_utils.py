@@ -10,7 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Mapping, Union
 
 
 
@@ -227,3 +227,71 @@ class step:
                 print(f"[FAIL ] {self.name} ({elapsed:.3f}s) -> {exc}")
             return False
 
+
+
+def default_transformation_cfg() -> Dict[str, Any]:
+    """
+    Default configuration used when the user does not provide a YAML/config mapping.
+    """
+    return {
+        "transformation": {
+            "merge_links": True,
+            "expansion_ucblock": True,
+            "max_hours_stores": 1,
+        },
+        "run": {
+            "mode": "ucblock",  # "ucblock" | "investmentblock" | "auto" (if you support it)
+        },
+        "smspp": {
+            "ucblock": {
+                "output_prefix": "uc",
+                "template": "UCBlock/uc_solverconfig_grb",
+            },
+            "investmentblock": {
+                "output_prefix": "inv",
+                "template": "InvestmentBlock/BSPar.txt",
+                "inner_block_name": "InvestmentBlock",
+            },
+            "log_executable_call": True,
+        },
+        "io": {
+            "workdir": "output/test",
+            "name": "test_case",
+            "overwrite": True,
+        },
+    }
+
+def load_any_config(
+    config: Union[None, str, Path, Mapping[str, Any], "AttrDict"] = None,
+    *,
+    defaults: Mapping[str, Any] | None = None,
+    as_attrdict: bool = True,
+):
+    """
+    Load configuration from:
+      - None -> defaults (or empty dict)
+      - path -> YAML, merged into defaults
+      - mapping -> merged into defaults
+
+    Returns AttrDict by default (if as_attrdict=True).
+    """
+    base = deepcopy(defaults) if defaults is not None else {}
+
+    if config is None:
+        cfg = base
+
+    elif isinstance(config, (str, Path)):
+        cfg = load_yaml_config(Path(config), defaults=base, as_attrdict=as_attrdict)
+        return cfg  # already converted
+
+    elif isinstance(config, Mapping):
+        # merge mapping into defaults
+        cfg = _recursive_update(base, dict(config))
+
+    else:
+        raise TypeError(
+            "config must be None, a path (str/Path), or a mapping (dict/AttrDict); "
+            f"got {type(config).__name__}"
+        )
+
+    return AttrDict(cfg) if as_attrdict else cfg
