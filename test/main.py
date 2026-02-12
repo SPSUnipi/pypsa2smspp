@@ -83,13 +83,13 @@ network.model.to_file(fn = f"output/pypsa_{name}.lp")
 
 #%% Transformation class
 
-transformation = Transformation("..\\pypsa2smspp\\data\\config_default.yaml")
+transformation = Transformation("..\\pypsa2smspp\\data\\config_default_inv.yaml")
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
 # cfg_path = cfg_path.resolve()
 
-# nd.n = nd.n.smspp(config=str(cfg_path), verbose=True)
+# nd.n = nd.n.smspp(verbose=True)
 
 objective_pypsa = network.objective + network.objective_constant
 objective_smspp = nd.n.objective

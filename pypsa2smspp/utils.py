@@ -322,7 +322,7 @@ def networkblock_dimensions(n, expansion_ucblock):
             )
         else:
             num_design_links = 0
-
+        
         
         return {
             "Lines": lines_count,
@@ -330,7 +330,8 @@ def networkblock_dimensions(n, expansion_ucblock):
             "combined": combined_count,
             "NumberLines": combined_count,
             "NumberDesignLines_lines": num_design_lines,
-            "NumberDesignLines_links": num_design_links
+            "NumberDesignLines_links": num_design_links,
+            "NumberBranches": 0,
         }
 
     # # --- detect extra outputs from multi-links to build branches ---
@@ -357,6 +358,7 @@ def networkblock_dimensions(n, expansion_ucblock):
         "Links": links_count,
         "combined": combined_count,
         "NumberLines": combined_count,
+        "NumberBranches": 0,
     }
 
 
@@ -399,6 +401,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     3. if we are in sector coupled, reduce the number of branches associated (if merge_links)
     """
     
+    # Prime righe facoltative perché se ho sector coupled lo gestisco già alla fine...
     number_merged_links = dimensions['NetworkBlock']['Links'] - len(links_merged_df)
     number_ext_merg_links = dimensions['NetworkBlock']['merged_links_ext']
     
@@ -415,17 +418,16 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     else:
        dimensions['InvestmentBlock']['NumAssets'] -= number_ext_merg_links
     
-    if "NumberBranches" in dimensions['NetworkBlock']:
-        dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links
-        dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
+    if dimensions['NetworkBlock']['NumberBranches'] > 0:
+        # dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links # sbagliato perché viene calcolato dopo e quindi tiene già conto dei 100
         # dimensions['InvestmentBlock']['NumberDesignLines'] = dimensions['NetworkBlock']['NumberBranches_ext']
         # dimensions['NetworkBlock']['NumberLines'] = dimensions['NetworkBlock']['combined']
     
-    # Correct number of links and branches based on real branches
-    dimensions['NetworkBlock']['NumberBranches'] += dimensions['NetworkBlock']['Lines']
-    dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
-    dimensions['NetworkBlock']['Links'] = dimensions['NetworkBlock']['NumberBranches'] - dimensions['NetworkBlock']['Lines']
-    
+        # Correct number of links and branches based on real branches
+        dimensions['NetworkBlock']['NumberBranches'] += dimensions['NetworkBlock']['Lines']
+        dimensions['UCBlock']['NumberBranches'] = dimensions['NetworkBlock']['NumberBranches']
+        dimensions['NetworkBlock']['Links'] = dimensions['NetworkBlock']['NumberBranches'] - dimensions['NetworkBlock']['Lines']
+        
 
 
 #%%
@@ -1391,7 +1393,7 @@ def determine_size_type(
             variable_size = ('NumberBranches',) 
             return variable_type, variable_size
         else:
-            variable_size = ('NumberLines',) if block_class == 'Lines' else ('NumberLinks',)
+            variable_size = ('NumberLines',) if block_class == 'Lines' else ('Links',)
             return variable_type, variable_size
 
     # Compose unified dimension dict
