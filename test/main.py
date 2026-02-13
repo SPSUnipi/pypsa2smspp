@@ -83,7 +83,7 @@ network.model.to_file(fn = f"output/pypsa_{name}.lp")
 
 #%% Transformation class
 
-transformation = Transformation("..\\pypsa2smspp\\data\\config_default_inv.yaml")
+transformation = Transformation("..\\pypsa2smspp\\data\\config_default.yaml")
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"

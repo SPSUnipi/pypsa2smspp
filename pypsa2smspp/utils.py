@@ -1180,8 +1180,9 @@ def process_dcnetworkblock(
             investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
             investment_meta["index_extendable"].append(lines_index)
             investment_meta["design_lines"].append(lines_index)
-
-        lines_index += 1
+        
+        if components_name == 'Line' or components_df.loc[idx, 'is_primary_branch']:
+            lines_index +=1
         unitblock_index += 1
 
     # asset_type: one entry per investment row (unchanged logic)

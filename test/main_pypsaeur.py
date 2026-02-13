@@ -284,7 +284,7 @@ def run_debug(cfg: DebugRunConfig) -> Tuple[pd.DataFrame, pypsa.Network, pypsa.N
     except Exception:
         pass
 
-    return df, n_smspp, network
+    return df, n_smspp, network, transformation
 
 
 def main():
@@ -308,11 +308,11 @@ def main():
         verbose=True,
     )
 
-    df, n_smspp, network = run_debug(cfg)
+    df, n_smspp, network, transformation = run_debug(cfg)
     print("\n>>> Wrote per-case artifacts to:", (cfg.out_root / (cfg.case_name or cfg.network_nc.stem)))
-    return df, n_smspp, network
+    return df, n_smspp, network, transformation
     
 
 if __name__ == "__main__":
-    df, n_smspp, network = main()
+    df, n_smspp, network, transformation = main()
 
