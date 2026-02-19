@@ -75,7 +75,7 @@ def run_ucblock(xlsx_path: Path, config_yaml: Path, relative_tolerance: float = 
     # if hasattr(transformation, "last_mode_used") and transformation.last_mode_used != "ucblock":
     #     pytest.skip(f"Not UCBlock mode for this case (mode={transformation.last_mode_used}).")
 
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=relative_tolerance, abs=absolute_tolerance)
 
     # ---- (3) Optional export ----
     try:
