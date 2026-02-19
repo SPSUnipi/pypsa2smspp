@@ -64,13 +64,13 @@ test_cases = get_test_cases()
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--relative_tolerance", "-rel", action="store", default="1e-5", help="Relative tolerance for objective comparison (default: 1e-5)"
+        "--relative_tolerance", action="store", default="1e-5", help="Relative tolerance for objective comparison (default: 1e-5)"
     )
     parser.addoption(
-        "--relative_tolerance_investment", "-rel_inv", action="store", default="1e-4", help="Relative tolerance for objective comparison when using InvestmentBlock (default: 1e-4)"
+        "--relative_tolerance_investment", action="store", default="1e-4", help="Relative tolerance for objective comparison when using InvestmentBlock (default: 1e-4)"
     )
     parser.addoption(
-        "--absolute_tolerance", "-abs", action="store", default="1e-3", help="Absolute tolerance for objective comparison (default: 1e-3)"
+        "--absolute_tolerance", action="store", default="1e-3", help="Absolute tolerance for objective comparison (default: 1e-3)"
     )
 
 
