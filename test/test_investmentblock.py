@@ -8,6 +8,7 @@ from conftest import (
     test_cases,
     OUT_TEST,
     relative_tolerance,
+    relative_tolerance_investment,
     absolute_tolerance,
 )
 
@@ -83,7 +84,7 @@ def run_investment_block(xlsx_path: Path, config_yaml: Path, relative_tolerance:
 
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_investment(test_case_xlsx, relative_tolerance, absolute_tolerance):
+def test_investment(test_case_xlsx, relative_tolerance_investment, absolute_tolerance):
     """
     Uses a dedicated YAML config that forces InvestmentBlock mode (recommended).
     """
@@ -94,7 +95,7 @@ def test_investment(test_case_xlsx, relative_tolerance, absolute_tolerance):
     if "ml" in name_l or "sector" in name_l:
         pytest.skip("Skipping case for investment block")
 
-    run_investment_block(test_case_xlsx, config_yaml, relative_tolerance, absolute_tolerance)
+    run_investment_block(test_case_xlsx, config_yaml, relative_tolerance_investment, absolute_tolerance)
 
 
 if __name__ == "__main__":
