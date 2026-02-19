@@ -14,9 +14,6 @@ from pathlib import Path
 import pytest
 import pypsa
 
-REL_TOL = 1e-5
-ABS_TOL = 1e-3
-
 HERE = Path(__file__).resolve().parent
 
 OUT = HERE / "output" / "test"
@@ -31,6 +28,8 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+
+from conftest import relative_tolerance, absolute_tolerance
 
 # NEW: load YAML as AttrDict so we can override io.name per case
 from pypsa2smspp.pip_utils import load_yaml_config
@@ -104,7 +103,7 @@ def make_case_cfg(config_yaml: Path, case_name: str):
 # Core runners
 # ---------------------------------------------------------------------
 
-def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", verbose: bool = False) -> None:
+def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", verbose: bool = False, rel_tol: float = 1e-5, abs_tol: float = 1e-3) -> None:
     case_name = xlsx_path.stem
     prefix = case_name
 
@@ -134,7 +133,7 @@ def run_case(xlsx_path: Path, config_yaml: Path, solver_name: str = "highs", ver
     obj_smspp = float(transformation.result.objective_value)
 
     # If this still fails sometimes, consider relaxing rel tol to 1e-4 for investment tests.
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=rel_tol, abs=abs_tol)
 
     # Optional export
     try:
@@ -161,13 +160,13 @@ def test_dispatch(test_case_xlsx):
 
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases, ids=test_names)
-def test_investment(test_case_xlsx):
+def test_investment(test_case_xlsx, relative_tolerance, absolute_tolerance):
     if not CFG_INVEST.exists():
         pytest.skip(f"Missing InvestmentBlock test config: {CFG_INVEST}")
     name_l = test_case_xlsx.name.lower()
     if "inv" not in name_l:
         pytest.skip("Skipping case for investment block")
-    run_case(test_case_xlsx, CFG_INVEST, solver_name="highs", verbose=False)
+    run_case(test_case_xlsx, CFG_INVEST, solver_name="highs", verbose=False, rel=relative_tolerance, abs=absolute_tolerance)
 
 
 if __name__ == "__main__":
