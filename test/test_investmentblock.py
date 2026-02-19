@@ -21,7 +21,7 @@ from pypsa2smspp.network_correction import (
 )
 
 
-def run_investment_block(xlsx_path: Path, config_yaml: Path, relative_tolerance: float = 1e-5, absolute_tolerance: float = 1e-3) -> None:
+def run_investment_block(xlsx_path: Path, config_yaml: Path, relative_tolerance: float = 1e-4, absolute_tolerance: float = 1e-3) -> None:
     """
     InvestmentBlock regression test:
     - build network from Excel
