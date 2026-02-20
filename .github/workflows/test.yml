@@ -26,7 +26,6 @@ jobs:
       matrix:
         python-version:
         - "3.13"
-        - "3.12"
     defaults:
       run:
         shell: bash -el {0}
