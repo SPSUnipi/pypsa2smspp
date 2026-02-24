@@ -40,8 +40,8 @@ class TransformationConfig:
             "InitUpDownTime": lambda up_time_before: up_time_before,
             "MinUpTime": lambda min_up_time: min_up_time,
             "MinDownTime": lambda min_down_time: min_down_time, 
-            #"DeltaRampUp": lambda ramp_limit_up: ramp_limit_up if not np.isnan(ramp_limit_up) else 0,
-            #"DeltaRampDown": lambda ramp_limit_down: ramp_limit_down if not np.isnan(ramp_limit_down) else 0,
+            "DeltaRampUp": lambda ramp_limit_up, p_nom: ramp_limit_up * p_nom if not np.isnan(ramp_limit_up.values[0]) else p_nom, # Di default MaxPower
+            "DeltaRampDown": lambda ramp_limit_down, p_nom: ramp_limit_down * p_nom if not np.isnan(ramp_limit_down.values[0]) else p_nom,
             "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "PrimaryRho": 0.0,
@@ -49,9 +49,9 @@ class TransformationConfig:
             "Availability": 1,
             "QuadTerm": lambda marginal_cost_quadratic: marginal_cost_quadratic,
             "LinearTerm": lambda marginal_cost: marginal_cost,
-            "ConstTerm": 0.0,
+            "ConstTerm": lambda stand_by_cost: stand_by_cost,
             "StartUpCost": lambda start_up_cost: start_up_cost,
-            "InitialPower": lambda p: p[0][0],
+            "InitialPower": 0.0,
             "FixedConsumption": 0.0,
             "InertiaCommitment": 1.0
         }
