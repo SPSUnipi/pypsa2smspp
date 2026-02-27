@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import re
 from pypsa2smspp import logger
+from typing import Optional, Sequence, Union
 
 
 #%%
@@ -255,6 +256,19 @@ def first_scalar(x):
         return float(x)
 
 
+def _normalize_selector(x: Union[bool, str, Sequence[str]]) -> Union[bool, list[str]]:
+    """Normalize selector types: bool | str | list[str] -> bool | list[str]."""
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, str):
+        s = x.strip()
+        return [s] if s else []
+    out = [str(v).strip() for v in x]
+    return [v for v in out if v]
+
+
+
+
 #%%
 #################################################################################################
 ############################### Dimensions for SMS++ ############################################
@@ -435,44 +449,60 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
 ############################### Direct transformation #########################################
 ###############################################################################################
 
-def get_attr_name(component_type: str, carrier: str | None = None, renewable_carriers: list[str] = []) -> str:
+def _normalize_carrier_list(x: Union[str, Sequence[str]]) -> set[str]:
+    """Normalize carrier list to lowercase set."""
+    if isinstance(x, str):
+        x = [x]
+    return {str(v).strip().lower() for v in x if str(v).strip()}
+
+
+def get_attr_name(
+    component_type: str,
+    carrier: str | None = None,
+    *,
+    enable_thermal_units: bool = True,
+    intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
+    default_intermittent: Sequence[str] = (),
+) -> str:
     """
     Maps a PyPSA component type and its carrier to the corresponding
-    UnitBlock attribute name to be used in the Transformation.
+    UnitBlock attribute name.
 
-    Parameters
-    ----------
-    component_type : str
-        The PyPSA component type (e.g., 'Generator', 'Store', 'StorageUnit', 'Line', 'Link')
-    carrier : str or None
-        The carrier name if available (e.g., 'solar', 'hydro', 'slack')
-
-    Returns
-    -------
-    str
-        The attribute name for the Transformation block parameters.
+    Logic for Generators:
+      - slack/load shedding -> SlackUnitBlock_parameters
+      - if enable_thermal_units=True -> IntermittentUnitBlock_parameters (no thermals)
+      - else:
+          intermittent set = intermittent_carriers if provided else default_intermittent
+          carrier in intermittent set -> IntermittentUnitBlock_parameters
+          otherwise -> ThermalUnitBlock_parameters
     """
-
-    # normalize for case-insensitive match
-    if carrier:
-        carrier = carrier.lower()
+    c = carrier.lower() if carrier else None
 
     # Generators
     if component_type == "Generator":
-        if carrier in renewable_carriers:
-            return "IntermittentUnitBlock_parameters"
-        elif carrier in ["slack", "load_shedding", "load shedding", "load", "Load"]:
+        if c in {"slack", "load_shedding", "load shedding", "load"}:
             return "SlackUnitBlock_parameters"
-        else:
+
+        if enable_thermal_units:
             return "IntermittentUnitBlock_parameters"
-            # return "ThermalUnitBlock_parameters"
+
+        # Thermals are allowed: decide intermittent vs thermal by carrier list
+        intermittent_set = (
+            _normalize_carrier_list(intermittent_carriers)
+            if intermittent_carriers is not None
+            else {str(v).strip().lower() for v in default_intermittent if str(v).strip()}
+        )
+
+        if c is not None and c in intermittent_set:
+            return "IntermittentUnitBlock_parameters"
+
+        return "ThermalUnitBlock_parameters"
 
     # StorageUnit
     if component_type == "StorageUnit":
-        if carrier in ["hydro", "phs"]:
+        if c in {"hydro", "phs"}:
             return "HydroUnitBlock_parameters"
-        else:
-            return "BatteryUnitBlock_parameters"
+        return "BatteryUnitBlock_parameters"
 
     # Store
     if component_type == "Store":
@@ -487,61 +517,86 @@ def get_attr_name(component_type: str, carrier: str | None = None, renewable_car
         return "Links_parameters"
 
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
-
 # ------------------------ Pre-processing functions --------------------------------
 
-def build_store_and_merged_links(n, merge_links=False, logger=print):
+
+def build_store_and_merged_links(n, merge_links=False, logger=None, merge_selector=None):
     """
     Build enriched stores_df (adds efficiency_store/efficiency_dispatch)
     and links_merged_df (replaces per-store charge/discharge link pair with
-    a single merged link with eta=1 and summed capital_cost). Keeps a mapping
-    for perfect inverse transformation.
+    a single merged link with eta=1 and summed capital_cost).
 
-    IMPORTANT
-    ---------
-    Merging is only performed for specific technologies that PyPSA-Eur
-    constrains to have tied charger/discharger (or forward/backward) capacities:
-    - TES (heat) stores
-    - Battery stores
-    - Hydrogen "inverse" (reversed/forward) links
+    Parameters
+    ----------
+    n : pypsa.Network
+    merge_links : bool | str | list[str]
+        - False -> no merge
+        - True  -> merge only safe presets: tes, battery, h2
+        - str/list[str] -> subset of presets and/or custom tags.
+          If custom tags are provided (not in {tes,battery,h2}), merge_selector is REQUIRED.
+    logger : logging.Logger | callable | None
+        If None, uses standard logging. If callable (e.g., print), it will be called with the message.
+        If it has .warning, that method is used.
+    merge_selector : callable | None
+        Power-user hook:
+            merge_selector(n, store_name, srow, charge_row, discharge_row) -> bool
+        If provided, it can authorize merging additional (custom) pairs beyond presets.
 
     Returns
     -------
     stores_df : pd.DataFrame
-        Copy of n.stores with extra columns:
-        - efficiency_store (eta_ch)
-        - efficiency_dispatch (eta_dis)
-
     links_merged_df : pd.DataFrame
-        Copy of n.links where the store-related charge/discharge rows are
-        replaced by a single merged link per store. The merged link has:
-        - efficiency = 1.0
-        - marginal_cost = 0.0
-        - capital_cost = capex_ch + capex_dis
-        - p_nom = chosen from originals (see note below)
-        - p_nom_extendable = common value (assert both equal)
-        - name includes both original names for traceability
-
     merge_dim : int
-        Number of extendable links "lost" by merging:
         extendable_links_initial - extendable_links_final
-
-    Notes
-    -----
-    - Charge link is detected as (bus0 == bus_elec) & (bus1 == bus_store).
-      Discharge link as (bus0 == bus_store) & (bus1 == bus_elec).
-    - If only one of the two links exists, we still merge using the available
-      one and set missing values to defaults; a warning is emitted.
-    - On p_nom: PyPSA-Eur ties charger/discharger sizes in practice. We:
-        * assert ~equal within tolerance, otherwise pick min and warn.
-      This avoids over-stating capability if data are slightly inconsistent.
     """
+    import logging
+    import numpy as np
+    import pandas as pd
+
+    def _warn(msg: str):
+        """Emit warnings robustly for logger=None / logging.Logger / print-like callables."""
+        if logger is None:
+            logging.getLogger(__name__).warning(msg)
+        elif hasattr(logger, "warning"):
+            logger.warning(msg)
+        else:
+            logger(msg)
 
     def _count_extendable(df):
         """Count number of links with p_nom_extendable == True."""
         if df.empty or "p_nom_extendable" not in df.columns:
             return 0
         return int(df["p_nom_extendable"].fillna(False).astype(bool).sum())
+
+    def _normalize_merge_spec(x):
+        """
+        Return (preset_part, custom_part).
+        Presets are: tes, battery, h2.
+        """
+        presets = {"tes", "battery", "h2"}
+
+        if isinstance(x, bool):
+            return (set(presets) if x else set()), set()
+
+        if isinstance(x, str):
+            x = [x]
+
+        requested = {str(s).strip().lower() for s in x if str(s).strip()}
+        aliases = {"hydrogen": "h2", "h₂": "h2"}
+        requested = {aliases.get(s, s) for s in requested}
+
+        preset_part = requested & presets
+        custom_part = requested - presets
+        return preset_part, custom_part
+
+    def _to_float(v, default: float = 0.0) -> float:
+        """Safe float conversion with NaN handling."""
+        try:
+            if v is None or (isinstance(v, float) and np.isnan(v)) or pd.isna(v):
+                return float(default)
+            return float(v)
+        except Exception:
+            return float(default)
 
     stores_df = n.stores.copy()
     links_merged_df = n.links.copy()
@@ -556,8 +611,17 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
 
     # If merging is disabled or network is trivial, exit early
     if not merge_links or links_merged_df.empty or stores_df.empty:
-        merge_dim = 0
-        return stores_df, links_merged_df, merge_dim
+        return stores_df, links_merged_df, 0
+
+    preset_part, custom_part = _normalize_merge_spec(merge_links)
+
+    if custom_part and merge_selector is None:
+        raise ValueError(
+            "merge_links contains custom entries "
+            f"{sorted(custom_part)} but merge_selector is None. "
+            "Provide merge_selector(n, store_name, srow, charge_row, discharge_row) -> bool "
+            "or restrict merge_links to presets: tes, battery, h2."
+        )
 
     # ------------------------------------------------------------------
     # Detect technologies for which merge is allowed (TES, batteries, H2)
@@ -573,29 +637,20 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
 
     # Batteries: detect charger/discharger extendable links as in PyPSA-Eur
     link_index_series = n.links.index.to_series()
-    charger_bool = link_index_series.str.contains(
-        "battery charger", case=False, na=False
-    )
-    discharger_bool = link_index_series.str.contains(
-        "battery discharger", case=False, na=False
-    )
+    charger_bool = link_index_series.str.contains("battery charger", case=False, na=False)
+    discharger_bool = link_index_series.str.contains("battery discharger", case=False, na=False)
 
     battery_chargers_ext = set(
-        n.links.loc[
-            charger_bool & n.links["p_nom_extendable"].fillna(False)
-        ].index
+        n.links.loc[charger_bool & n.links["p_nom_extendable"].fillna(False)].index
     )
     battery_dischargers_ext = set(
-        n.links.loc[
-            discharger_bool & n.links["p_nom_extendable"].fillna(False)
-        ].index
+        n.links.loc[discharger_bool & n.links["p_nom_extendable"].fillna(False)].index
     )
 
     # Hydrogen reversed: detect forward/backward pairs as in extra functionalities
     h2_backwards = set()
     h2_forwards = set()
     if "reversed" in n.links.columns:
-        # carriers of reversed links
         carriers_rev = (
             n.links.loc[n.links["reversed"].fillna(False), "carrier"]
             .dropna()
@@ -618,50 +673,55 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
     # Tolerance for p_nom equality check
     PNOM_TOL = 1e-6
 
-    # Loop over stores and merge only if they belong to TES/battery/H2 logic
+    # Loop over stores and merge only if they belong to allowed logic
     for store_name, srow in stores_df.iterrows():
-        bus_store = srow["bus"]
-
-        # Heuristic: the links are the ones connected to the store bus
-        mask_ch = (links_merged_df["bus0"] == bus_store) | (
-            links_merged_df["bus1"] == bus_store
-        )
-        cand = links_merged_df[mask_ch]
-        if cand.empty:
-            # No links connected to this store -> nothing to merge
+        bus_store = srow.get("bus", None)
+        if bus_store is None:
             continue
 
-        # We assume at most one charge and one discharge per store
+        # Candidates: links connected to store bus
+        cand = links_merged_df[
+            (links_merged_df["bus0"] == bus_store) | (links_merged_df["bus1"] == bus_store)
+        ]
+        if cand.empty:
+            continue
+
+        # Charge: elec -> store (bus1 == store_bus); Discharge: store -> elec (bus0 == store_bus)
         charge_rows = cand[cand["bus1"] == bus_store]
         discharge_rows = cand[cand["bus0"] == bus_store]
-
         if charge_rows.empty or discharge_rows.empty:
-            # We don't have a proper pair -> skip merging this store
             continue
 
-        charge_row = charge_rows.iloc[0]
-        discharge_row = discharge_rows.iloc[0]
+        # Pairing strategy: pick a charge row and match a discharge row that returns to the same elec bus
+        charge_row = None
+        discharge_row = None
+        bus_elec = None
+
+        for _, ch in charge_rows.iterrows():
+            be = ch.get("bus0", None)
+            if be is None:
+                continue
+            dis_cand = discharge_rows[discharge_rows["bus1"] == be]
+            if not dis_cand.empty:
+                charge_row = ch
+                discharge_row = dis_cand.iloc[0]
+                bus_elec = be
+                break
+
+        if charge_row is None or discharge_row is None or bus_elec is None:
+            continue
 
         idx_ch = charge_row.name
         idx_dis = discharge_row.name
 
-        bus_elec = (
-            charge_row["bus0"]
-            if charge_row["bus0"] == discharge_row["bus1"]
-            else None
-        )
-        if bus_elec is None:
-            # Could not determine the paired electrical bus; skip merge
-            continue
-
         # --------------------------------------------------------------
-        # Check if this store/link pair belongs to allowed technologies
+        # Preset eligibility checks
         # --------------------------------------------------------------
 
         # TES: store bus is one of the heat buses
         is_tes = bus_store in tes_buses
 
-        # Battery: names follow "battery charger/discharger" pattern
+        # Battery: names follow "battery charger/discharger" pattern AND extendable
         is_battery_pair = (
             (idx_ch in battery_chargers_ext and idx_dis in battery_dischargers_ext)
             or (idx_dis in battery_chargers_ext and idx_ch in battery_dischargers_ext)
@@ -673,60 +733,63 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
             or (idx_dis in h2_backwards and idx_ch in h2_forwards)
         )
 
-        # If none of the above holds, do NOT merge this store
-        if not (is_tes or is_battery_pair or is_h2_inv_pair):
+        allowed_preset = (
+            ("tes" in preset_part and is_tes)
+            or ("battery" in preset_part and is_battery_pair)
+            or ("h2" in preset_part and is_h2_inv_pair)
+        )
+
+        allowed_custom = False
+        if merge_selector is not None:
+            try:
+                allowed_custom = bool(merge_selector(n, store_name, srow, charge_row, discharge_row))
+            except Exception as e:
+                _warn(f"[merge] merge_selector failed for store '{store_name}': {e}. Skipping.")
+                allowed_custom = False
+
+        if not (allowed_preset or allowed_custom):
             continue
 
         # --------------------------------------------------------------
-        # From here on, do the actual merge as before
+        # Do the actual merge
         # --------------------------------------------------------------
 
-        # Extract params with defaults
-        # Charge (elec -> store)
-        eta_ch = charge_row.efficiency
-        p_nom_ch = charge_row.p_nom
-        capex_ch = charge_row.capital_cost
-        ext_ch = bool(charge_row.p_nom_extendable)
-        name_ch = charge_row.name
+        eta_ch = _to_float(charge_row.get("efficiency", 1.0), 1.0)
+        eta_dis = _to_float(discharge_row.get("efficiency", 1.0), 1.0)
 
-        # Discharge (store -> elec)
-        eta_dis = discharge_row.efficiency
-        p_nom_dis = discharge_row.p_nom
-        capex_dis = discharge_row.capital_cost
-        ext_dis = bool(discharge_row.p_nom_extendable)
-        name_dis = discharge_row.name
+        p_nom_ch = _to_float(charge_row.get("p_nom", 0.0), 0.0)
+        p_nom_dis = _to_float(discharge_row.get("p_nom", 0.0), 0.0)
 
-        # Extendability must match (as per your assumption)
+        capex_ch = _to_float(charge_row.get("capital_cost", 0.0), 0.0)
+        capex_dis = _to_float(discharge_row.get("capital_cost", 0.0), 0.0)
+
+        ext_ch = bool(charge_row.get("p_nom_extendable", False))
+        ext_dis = bool(discharge_row.get("p_nom_extendable", False))
+
         if ext_ch != ext_dis:
-            logger.warning(
-                f"[merge] Warning: extendability mismatch for store '{store_name}' "
+            _warn(
+                f"[merge] extendability mismatch for store '{store_name}' "
                 f"(charge={ext_ch}, discharge={ext_dis}). Using logical AND."
             )
         pnom_extendable = bool(ext_ch and ext_dis)
 
-        # Choose p_nom for the merged link
         if abs(p_nom_ch - p_nom_dis) > PNOM_TOL:
-            logger.warning(
-                f"[merge] Warning: p_nom mismatch for store '{store_name}' "
+            _warn(
+                f"[merge] p_nom mismatch for store '{store_name}' "
                 f"(ch={p_nom_ch}, dis={p_nom_dis}). Using min()."
             )
         p_nom_merged = float(min(p_nom_ch, p_nom_dis))
 
-        # Capital cost is the SUM (two converters of same size)
         capex_merged = float(capex_ch + capex_dis)
 
         # Update store efficiencies
         stores_df.at[store_name, "efficiency_store"] = float(eta_ch)
         stores_df.at[store_name, "efficiency_dispatch"] = float(eta_dis)
 
-        # Prepare merged link row:
-        # We clone one of the originals to inherit optional columns, then override.
-        new_row = charge_row if charge_row is not None else discharge_row
-        new_row = new_row.copy()  # avoid SettingWithCopy issues
+        # Clone one of the originals to inherit optional columns, then override
+        new_row = charge_row.copy()
+        merged_name = f"{idx_ch or 'NA'}__{idx_dis or 'NA'}"
 
-        merged_name = f"{name_ch or 'NA'}__{name_dis or 'NA'}"
-
-        # Override key fields
         new_row.name = merged_name
         new_row["bus0"] = bus_elec
         new_row["bus1"] = bus_store
@@ -735,20 +798,15 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
         new_row["capital_cost"] = capex_merged
         new_row["p_nom"] = p_nom_merged
         new_row["p_nom_extendable"] = pnom_extendable
-        new_row["p_min_pu"] = -eta_dis  # account for discharge limit perspective
+        new_row["p_min_pu"] = -float(eta_dis)  # discharge limit in merged convention
 
         # If there are p_nom_min/max columns, keep them consistent (safe defaults)
         for col in ["p_nom_min", "p_nom_max"]:
             if col in new_row.index and pd.isna(new_row[col]):
-                # set permissive bounds
                 new_row[col] = 0.0 if col.endswith("_min") else np.inf
 
         # Mark rows to drop (original charge/discharge)
-        if name_ch is not None:
-            rows_to_drop.append(name_ch)
-        if name_dis is not None:
-            rows_to_drop.append(name_dis)
-
+        rows_to_drop.extend([idx_ch, idx_dis])
         rows_to_append.append(new_row)
 
     # Apply drops/appends
@@ -757,9 +815,7 @@ def build_store_and_merged_links(n, merge_links=False, logger=print):
             index=[r for r in rows_to_drop if r in links_merged_df.index]
         )
     if rows_to_append:
-        links_merged_df = pd.concat(
-            [links_merged_df, pd.DataFrame(rows_to_append)], axis=0
-        )
+        links_merged_df = pd.concat([links_merged_df, pd.DataFrame(rows_to_append)], axis=0)
 
     # Count extendable links after merging
     extendable_final = _count_extendable(links_merged_df)
