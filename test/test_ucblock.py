@@ -6,8 +6,8 @@ from conftest import (
     create_test_config,
     safe_remove,
     test_cases,
-    REL_TOL,
-    ABS_TOL,
+    relative_tolerance,
+    absolute_tolerance,
     OUT_TEST,
 )
 
@@ -19,7 +19,7 @@ from pypsa2smspp.network_correction import (
     add_slack_unit,
 )
 
-def run_ucblock(xlsx_path: Path, config_yaml: Path) -> None:
+def run_ucblock(xlsx_path: Path, config_yaml: Path, relative_tolerance: float = 1e-5, absolute_tolerance: float = 1e-3) -> None:
     """
     UCBlock regression test:
     - build network from Excel
@@ -75,7 +75,7 @@ def run_ucblock(xlsx_path: Path, config_yaml: Path) -> None:
     # if hasattr(transformation, "last_mode_used") and transformation.last_mode_used != "ucblock":
     #     pytest.skip(f"Not UCBlock mode for this case (mode={transformation.last_mode_used}).")
 
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=relative_tolerance, abs=absolute_tolerance)
 
     # ---- (3) Optional export ----
     try:
@@ -85,7 +85,7 @@ def run_ucblock(xlsx_path: Path, config_yaml: Path) -> None:
 
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_ucblock(test_case_xlsx):
+def test_ucblock(test_case_xlsx, relative_tolerance, absolute_tolerance):
     """
     Uses a dedicated YAML config that forces UCBlock mode (recommended).
     """
@@ -95,7 +95,7 @@ def test_ucblock(test_case_xlsx):
     if not config_yaml.exists():
         pytest.skip(f"Missing UCBlock test config: {config_yaml}")
 
-    run_ucblock(test_case_xlsx, config_yaml)
+    run_ucblock(test_case_xlsx, config_yaml, relative_tolerance, absolute_tolerance)
 
 
 if __name__ == "__main__":

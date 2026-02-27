@@ -7,9 +7,6 @@ import pypsa
 import pysmspp
 import pytest
 
-REL_TOL = 1e-1   # relative tolerance for objective comparison. TODO: tighten tolerance
-ABS_TOL = 1e-2   # absolute tolerance for objective comparison
-
 # --- Force working directory to this file's folder and build robust paths ---
 HERE = Path(__file__).resolve().parent            # .../pypsa2smspp/test
 
@@ -64,3 +61,29 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
 
 test_cases = get_test_cases()
 
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--relative_tolerance", action="store", default="1e-5", help="Relative tolerance for objective comparison (default: 1e-5)"
+    )
+    parser.addoption(
+        "--relative_tolerance_investment", action="store", default="1e-4", help="Relative tolerance for objective comparison when using InvestmentBlock (default: 1e-4)"
+    )
+    parser.addoption(
+        "--absolute_tolerance", action="store", default="1e-3", help="Absolute tolerance for objective comparison (default: 1e-3)"
+    )
+
+
+@pytest.fixture
+def relative_tolerance(request):
+    return float(request.config.getoption("--relative_tolerance"))
+
+
+@pytest.fixture
+def relative_tolerance_investment(request):
+    return float(request.config.getoption("--relative_tolerance_investment"))
+
+
+@pytest.fixture
+def absolute_tolerance(request):
+    return float(request.config.getoption("--absolute_tolerance"))
