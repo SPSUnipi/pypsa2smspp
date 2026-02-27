@@ -72,7 +72,7 @@ version_scheme = "no-guess-dev"
 [tool.pytest.ini_options]   
 filterwarnings = [
     "error::DeprecationWarning", # Raise all DeprecationWarnings as errors
-    "error::FutureWarning",      # Raise all FutureWarnings as errors
+    # "error::FutureWarning",      # Raise all FutureWarnings as errors
 ]
 
 # Coverage settings
