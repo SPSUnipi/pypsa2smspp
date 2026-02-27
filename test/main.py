@@ -77,13 +77,13 @@ nd.n = add_slack_unit(nd.n)
 network = nd.n.copy()
 network.optimize(solver_name='gurobi')
 
-network.export_to_netcdf(f"output/pypsa_{name}.nc")
+# network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
-network.model.to_file(fn = f"output/pypsa_{name}.lp")
+# network.model.to_file(fn = f"output/pypsa_{name}.lp")
 
 #%% Transformation class
 
-transformation = Transformation(name='prova', capacity_expansion_ucblock=False)
+transformation = Transformation(name='prova')
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"

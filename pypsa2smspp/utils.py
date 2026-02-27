@@ -460,7 +460,7 @@ def get_attr_name(
     component_type: str,
     carrier: str | None = None,
     *,
-    enable_thermal_units: bool = True,
+    enable_thermal_units: bool = False,
     intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
     default_intermittent: Sequence[str] = (),
 ) -> str:
@@ -483,7 +483,7 @@ def get_attr_name(
         if c in {"slack", "load_shedding", "load shedding", "load"}:
             return "SlackUnitBlock_parameters"
 
-        if enable_thermal_units:
+        if not enable_thermal_units:
             return "IntermittentUnitBlock_parameters"
 
         # Thermals are allowed: decide intermittent vs thermal by carrier list

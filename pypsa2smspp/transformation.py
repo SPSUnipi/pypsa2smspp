@@ -73,6 +73,106 @@ FP_PARAMS = os.path.join(DIR, "data", "smspp_parameters.xlsx")
 class Transformation:
     """
     Transformation class for converting PyPSA network components into SMS++ blocks.
+
+    The class provides a high-level pipeline to:
+      1) validate and pre-process a PyPSA network,
+      2) convert components into SMS++ blocks,
+      3) run SMS++ optimization via pySMSpp,
+      4) parse the solution and optionally map results back to PyPSA.
+
+    Parameters
+    ----------
+    merge_links : bool | str | Sequence[str], default True
+        Controls whether store-related charge/discharge link pairs are merged into a single
+        "merged link" representation (useful to match PyPSA-Eur modelling conventions).
+
+        Supported values:
+          - False: disable merging entirely.
+          - True: enable merging for built-in safe presets (TES, battery, H2 reversed).
+          - str / list[str]: enable merging for a subset of presets and/or custom tags.
+            If custom tags are provided (i.e., values not in {"tes","battery","h2"}),
+            a `merge_selector` MUST be provided.
+
+    merge_selector : callable, optional
+        Optional power-user hook to authorize additional merges beyond the built-in presets.
+
+        Signature:
+            merge_selector(n, store_name, srow, charge_row, discharge_row) -> bool
+
+        Notes:
+          - If `merge_links` contains custom entries, this selector is required.
+          - Any exception raised inside the selector will cause the corresponding store
+            merge to be skipped.
+
+    capacity_expansion_ucblock : bool, default True
+        Selects the internal block structure / modelling mode:
+          - True  -> build UCBlock-style representation.
+          - False -> build InvestmentBlock-style representation.
+
+        This flag is used to choose default SMS++ templates when `configfile="auto"`.
+
+    enable_thermal_units : bool, default False
+        Controls whether "thermal" generator units are allowed in the transformation.
+
+        Behaviour:
+          - False: all non-slack generators are treated as intermittent (i.e., no thermals).
+          - True : both intermittent and thermal generators are allowed.
+
+        When enabled, the intermittent/thermal split is determined by `intermittent_carriers`
+        (user override) or by the library default set (typically `renewable_carriers` from constants).
+
+    intermittent_carriers : str | Sequence[str], optional
+        Defines which generator carriers should be treated as intermittent when
+        `enable_thermal_units=True`.
+
+        Behaviour:
+          - None: use the library default intermittent set (typically `renewable_carriers`).
+          - str / list[str]: explicit override (case-insensitive).
+
+        Notes:
+          - This parameter is ignored when `enable_thermal_units=False` (since everything
+            is treated as intermittent anyway, except slack/load-shedding carriers).
+
+    workdir : str | Path, default "output"
+        Output directory for SMS++ artifacts. The directory is created if it does not exist.
+
+    name : str, default "test_case"
+        Case name used to render file templates (e.g., "temp_{name}.nc").
+
+    overwrite : bool, default True
+        If True, existing artifacts at the resolved paths are removed before optimization.
+
+    fp_temp : str | Path, default "temp_{name}.nc"
+        Temporary network file path template passed to `SMSNetwork.optimize(fp_temp=...)`.
+        If relative, it is interpreted relative to `workdir`.
+        Supports formatting with `{name}`.
+
+    fp_log : str | Path | None, default "log_{name}.txt"
+        Log file path template passed to `SMSNetwork.optimize(fp_log=...)`.
+        If None, logging to file is disabled. Supports `{name}`.
+
+    fp_solution : str | Path | None, default "solution_{name}.nc"
+        Solution file path template passed to `SMSNetwork.optimize(fp_solution=...)`.
+        If None, solution writing may be disabled depending on solver behaviour. Supports `{name}`.
+
+    configfile : str | Path | pysmspp.SMSConfig | None, default "auto"
+        SMS++ configuration input passed to `SMSNetwork.optimize(configfile=...)`.
+
+        Supported values:
+          - "auto" or None: use built-in default template based on `capacity_expansion_ucblock`.
+          - str/Path: interpreted as a template path used to build `pysmspp.SMSConfig(template=...)`.
+          - pysmspp.SMSConfig: used directly.
+
+    pysmspp_options : Mapping[str, Any], optional
+        Additional keyword arguments forwarded to `SMSNetwork.optimize(...)`.
+
+        Typical keys include (all optional; pySMSpp provides defaults):
+          - smspp_solver : str | SMSPPSolverTool
+          - inner_block_name : str
+          - logging : bool
+          - tracking_period : float
+
+        Any other keys are forwarded as solver-constructor kwargs (power-user usage).
     """
 
     def __init__(
@@ -82,9 +182,9 @@ class Transformation:
         merge_links: Union[bool, str, Sequence[str]] = True,
         merge_selector: Optional[Callable[..., bool]] = None,
         capacity_expansion_ucblock: bool = True,
-        enable_thermal_units: Union[bool, str, Sequence[str]] = False,
+        enable_thermal_units: bool = False,
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
-    
+
         # --- I/O ---
         workdir: Union[str, Path] = "output",
         name: str = "test_case",
@@ -92,34 +192,34 @@ class Transformation:
         fp_temp: Union[str, Path] = "temp_{name}.nc",
         fp_log: Optional[Union[str, Path]] = "log_{name}.txt",
         fp_solution: Optional[Union[str, Path]] = "solution_{name}.nc",
-    
+
         # --- SMS++ ---
         configfile: Optional[Union[str, Path, "pysmspp.SMSConfig"]] = "auto",
         pysmspp_options: Optional[Mapping[str, Any]] = None,
     ):
         config = TransformationConfig()
         self.config = deepcopy(config)
-        
+
         self.merge_links = merge_links
         if merge_selector is not None:
             self.merge_selector = merge_selector
-    
+
         self.capacity_expansion_ucblock = bool(capacity_expansion_ucblock)
-        self.enable_thermal_units = enable_thermal_units
+        self.enable_thermal_units = bool(enable_thermal_units)
         self.intermittent_carriers = intermittent_carriers
-    
+
         self.workdir = Path(workdir)
         self.name = str(name)
         self.overwrite = bool(overwrite)
-    
+
         self.fp_temp = fp_temp
         self.fp_log = fp_log
         self.fp_solution = fp_solution
-    
+
         self.configfile = configfile
         self.pysmspp_options = dict(pysmspp_options or {})
-    
-        # internal state (as you already have)
+
+        # internal state
         self.unitblocks = {}
         self.networkblock = {}
         self.investmentblock = {"Blocks": []}
@@ -1143,8 +1243,14 @@ class Transformation:
             raise ValueError("SMSNetwork not initialized.")
     
         # --- Decide block type from your flag (no "mode" needed) ---
-        block_type = "UCBlock" if self.capacity_expansion_ucblock else "InvestmentBlock"
-    
+        if self.capacity_expansion_ucblock:
+            block_type = "UCBlock"
+            innerblock_name = "Block_0"
+        else:
+            block_type = "InvestmentBlock"
+            innerblock_name = "InvestmentBlock"
+        
+        
         # --- Resolve configfile/template ---
         default_template_map = {
             "UCBlock": "UCBlock/uc_solverconfig_grb.txt",
@@ -1191,6 +1297,7 @@ class Transformation:
             fp_temp=fp_temp,
             fp_log=fp_log,
             fp_solution=fp_solution,
+            inner_block_name=innerblock_name,
             **solver_options,
         )
         return self.result
