@@ -25,7 +25,7 @@ import pypsa
 # =============================================================================
 
 # Inputs
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_5___2050.nc")
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_2_elec_1h.nc")
 CONFIG_YAML = Path(r"../pypsa2smspp/data/config_default.yaml")
 
 # Output
@@ -229,7 +229,7 @@ try:
     metrics["Obj_PyPSA"] = obj_pypsa
 
     # -------- SMS++ pipeline (ONE CALL) --------
-    transformation = Transformation(str(CONFIG_YAML))
+    transformation = Transformation(name=CASE_NAME, workdir="output/test_pypsaeur")
     n_smspp = transformation.run(network, verbose=VERBOSE)
 
     obj_smspp = float(transformation.result.objective_value)

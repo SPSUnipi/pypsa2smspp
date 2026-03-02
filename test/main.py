@@ -83,7 +83,7 @@ network.optimize(solver_name='gurobi')
 
 #%% Transformation class
 
-transformation = Transformation(name='prova')
+transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0], workdir="output/develop")
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
