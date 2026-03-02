@@ -2,20 +2,19 @@
 """
 Batch SMS++ benchmark runner over multiple Excel inputs.
 
-YAML-driven, single-call pipeline:
-    nd.n = Transformation(cfg).run(nd.n)
+New style (no YAML):
+    nd.n = Transformation(...).run(network)
 
-All timings are collected internally by Transformation (StepTimer).
-
-Outputs (per case, in output/test/):
+Per case outputs (in output/test/):
 - pypsa_<case>.nc
 - pypsa_<case>.lp
-- smspp_<case>_trm.nc
-- smspp_<case>_solution.nc
-- smspp_<case>_log.txt
-- smspp_<case>_network.nc
+- smspp_<case>_trm.nc              (SMSNetwork exported after conversion, if available)
+- smspp_<case>_temp.nc             (fp_temp used by pySMSpp during optimization)
+- smspp_<case>_solution.nc         (fp_solution produced by the solver)
+- smspp_<case>_log.txt             (fp_log produced by the solver)
+- smspp_<case>_network.nc          (final PyPSA network after inverse transformation)
 
-Author: aless
+Author: aless (adapted)
 """
 
 import os
@@ -23,10 +22,11 @@ import sys
 import traceback
 from pathlib import Path
 from datetime import datetime
-import pandas as pd
-import pypsa
 import shutil
 import time
+
+import pandas as pd
+import pypsa
 
 # ---------------------------------------------------------------------
 # Paths & environment
@@ -54,7 +54,6 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
-from pypsa2smspp.pip_utils import load_yaml_config
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -62,48 +61,32 @@ from pypsa2smspp.pip_utils import load_yaml_config
 
 def extract_step_time(timer_rows, step_name):
     for r in timer_rows:
-        if r["step"] == step_name:
-            return round(r["elapsed_s"], 6)
+        if r.get("step") == step_name:
+            try:
+                return round(float(r.get("elapsed_s", 0.0)), 6)
+            except Exception:
+                return None
     return None
 
 
-def copy_if_exists(src: Path, dst: Path):
+def safe_unlink(path: Path):
     try:
-        if src.exists():
-            shutil.copy(src, dst)
+        if path.exists():
+            path.unlink()
     except Exception:
         pass
-    
-
-def make_case_cfg(config_yaml: Path, case_name: str, out_dir: Path):
-    """
-    Load YAML config and override io.name so all outputs are unique
-    but written into the same directory.
-    """
-    cfg = load_yaml_config(config_yaml)
-
-    if not hasattr(cfg, "io"):
-        cfg.io = {}
-
-    cfg.io.workdir = str(out_dir)   # output/test
-    cfg.io.name = case_name         # UNIQUE PER NETWORK
-
-    return cfg
 
 
 # ---------------------------------------------------------------------
 # Single-case runner
 # ---------------------------------------------------------------------
 
-def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
+def run_single_case(xlsx_path: Path) -> dict:
     case_name = xlsx_path.stem
     print(f"\n=== Running case: {case_name} ===")
-    
-    cfg = make_case_cfg(
-        config_yaml=config_yaml,
-        case_name=case_name,
-        out_dir=OUT,
-    )
+
+    is_inv = "inv" in xlsx_path.name.lower()
+    capacity_expansion_ucblock = (not is_inv)
 
     # ---------------- Paths ----------------
 
@@ -111,6 +94,7 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
     pypsa_lp = OUT / f"pypsa_{case_name}.lp"
 
     smspp_trm_nc = OUT / f"smspp_{case_name}_trm.nc"
+    smspp_temp_nc = OUT / f"smspp_{case_name}_temp.nc"
     smspp_solution_nc = OUT / f"smspp_{case_name}_solution.nc"
     smspp_log_txt = OUT / f"smspp_{case_name}_log.txt"
     smspp_network_nc = OUT / f"smspp_{case_name}_network.nc"
@@ -118,6 +102,7 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
     summary = {
         "case": case_name,
         "input_file": str(xlsx_path),
+        "capacity_expansion_ucblock": capacity_expansion_ucblock,
         "status": "OK",
         "error_msg": "",
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -132,6 +117,10 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
         "Obj_PyPSA": None,
         "Obj_SMSpp": None,
         "Obj_rel_error_pct": None,
+        # artifacts
+        "fp_temp": str(smspp_temp_nc),
+        "fp_log": str(smspp_log_txt),
+        "fp_solution": str(smspp_solution_nc),
     }
 
     try:
@@ -143,14 +132,14 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
         parser.input_data_path = str(xlsx_path.parent)
         parser.input_name_components = xlsx_path.name
 
-        if "sector" in xlsx_path.name:
+        if "sector" in xlsx_path.name.lower():
             parser.load_sign = -1
 
         nd = NetworkDefinition(parser)
 
         n = nd.n
         n = clean_ciclicity_storage(n)
-        if "sector" not in xlsx_path.name:
+        if "sector" not in xlsx_path.name.lower():
             n = add_slack_unit(n)
 
         # --------------------------------------------------------------
@@ -185,25 +174,45 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
         # SMS++ pipeline (ONE CALL)
         # --------------------------------------------------------------
 
-        transformation = Transformation(cfg)
+        # Optional: clean artifacts if overwrite-like behavior is needed also outside
+        # (Transformation already does overwrite for fp_* according to your new optimize())
+        safe_unlink(smspp_trm_nc)
+
+        transformation = Transformation(
+            # mode selection
+            capacity_expansion_ucblock=capacity_expansion_ucblock,
+
+            # IO / naming
+            workdir=OUT,
+            name=case_name,
+            overwrite=True,
+
+            # Explicit artifacts (using {name} -> case_name)
+            fp_temp="smspp_{name}_temp.nc",
+            fp_log="smspp_{name}_log.txt",
+            fp_solution="smspp_{name}_solution.nc",
+
+            # SMS++ config selection inside optimize via "auto"
+            configfile="auto",
+
+            # Solver options (optional; keep empty to use pySMSpp defaults)
+            pysmspp_options={},
+        )
+
         nd.n = transformation.run(network, verbose=True)
 
         # --------------------------------------------------------------
         # Save SMS++ artifacts
         # --------------------------------------------------------------
 
-        # transformed network (TRM)
+        # Export transformed SMS network if available (not strictly required, but useful)
         try:
-            transformation.sms_network.export_to_netcdf(smspp_trm_nc)
+            if getattr(transformation, "sms_network", None) is not None:
+                transformation.sms_network.export_to_netcdf(smspp_trm_nc)
         except Exception:
             pass
 
-        workdir = Path(transformation.cfg.io.workdir)
-
-        copy_if_exists(workdir / "solution.nc", smspp_solution_nc)
-        copy_if_exists(workdir / "log.txt", smspp_log_txt)
-
-        # final PyPSA network after inverse
+        # Final PyPSA network after inverse
         try:
             nd.n.export_to_netcdf(smspp_network_nc)
         except Exception:
@@ -213,19 +222,23 @@ def run_single_case(xlsx_path: Path, config_yaml: Path) -> dict:
         # Objectives
         # --------------------------------------------------------------
 
-        obj_smspp = float(transformation.result.objective_value)
+        try:
+            obj_smspp = float(transformation.result.objective_value)
+        except Exception:
+            # fallback if result structure changes
+            obj_smspp = float(getattr(transformation.result, "objective", float("nan")))
+
         summary["Obj_SMSpp"] = obj_smspp
 
-        if obj_pypsa != 0.0:
-            summary["Obj_rel_error_pct"] = round(
-                (obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8
-            )
+        if obj_pypsa != 0.0 and pd.notna(obj_smspp):
+            summary["Obj_rel_error_pct"] = round((obj_pypsa - obj_smspp) / obj_pypsa * 100.0, 8)
 
         # --------------------------------------------------------------
         # Timings (from Transformation.timer)
         # --------------------------------------------------------------
 
-        rows = transformation.timer.rows
+        rows = getattr(transformation, "timer", None)
+        rows = rows.rows if rows is not None else []
 
         summary["Transform_direct_s"] = extract_step_time(rows, "direct")
         summary["PySMSpp_convert_s"] = extract_step_time(rows, "convert_to_blocks")
@@ -275,12 +288,7 @@ def main():
 
     rows = []
     for xlsx in xlsx_files:
-        if "inv" in xlsx.name:
-            cfg = REPO_ROOT / "test" / "configs" / "config_test_investment.yaml"
-        else:
-            cfg = REPO_ROOT / "pypsa2smspp" / "data" / "config_default.yaml"
-
-        rows.append(run_single_case(xlsx, cfg))
+        rows.append(run_single_case(xlsx))
 
     df = pd.DataFrame(rows)
     csv_path = OUT / "bench_summary.csv"
