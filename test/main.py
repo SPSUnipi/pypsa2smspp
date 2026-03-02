@@ -79,7 +79,7 @@ network.optimize(solver_name='gurobi')
 
 # network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
-# network.model.to_file(fn = f"output/pypsa_{name}.lp")
+network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
 
 #%% Transformation class
 
