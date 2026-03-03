@@ -37,7 +37,7 @@ class TransformationConfig:
 
         # Parameters for thermal units
         self.ThermalUnitBlock_parameters = {
-            "InitUpDownTime": lambda up_time_before: up_time_before,
+            "InitUpDownTime": lambda up_time_before, down_time_before: up_time_before if up_time_before.values[0] > 0 else -down_time_before,
             "MinUpTime": lambda min_up_time: min_up_time,
             "MinDownTime": lambda min_down_time: min_down_time, 
             "DeltaRampUp": lambda ramp_limit_up, p_nom: ramp_limit_up * p_nom if not np.isnan(ramp_limit_up.values[0]) else p_nom, # Di default MaxPower
@@ -51,9 +51,11 @@ class TransformationConfig:
             "LinearTerm": lambda marginal_cost: marginal_cost,
             "ConstTerm": lambda stand_by_cost: stand_by_cost,
             "StartUpCost": lambda start_up_cost: start_up_cost,
-            "InitialPower": 0.0,
-            "FixedConsumption": 0.0,
-            "InertiaCommitment": 1.0
+            "InitialPower": lambda p_nom, up_time_before: p_nom if up_time_before.values[0] > 0 else 0,
+            "FixedConsumption": 0.0, # How much the component consumes if off
+            "InertiaCommitment": 1.0,
+            "StartUpLimit": lambda ramp_limit_start_up, p_nom: ramp_limit_start_up * p_nom if not np.isnan(ramp_limit_start_up.values[0]) else p_nom,
+            "ShutDownLimit": lambda ramp_limit_shut_down, p_nom: ramp_limit_shut_down * p_nom if not np.isnan(ramp_limit_shut_down.values[0]) else p_nom,
         }
 
         self.BatteryUnitBlock_parameters = {

@@ -83,7 +83,9 @@ network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
 
 #%% Transformation class
 
-transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0], workdir="output/develop")
+transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0],
+                                workdir="output/develop",
+                                enable_thermal_units=True)
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
