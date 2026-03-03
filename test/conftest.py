@@ -64,3 +64,6 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
 
 test_cases = get_test_cases()
 
+def get_network(fp: Path | str) -> str:
+    """Helper to load a network from a .nc file."""
+    return str(Path(HERE) / "networks" / fp)
