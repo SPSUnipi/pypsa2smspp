@@ -16,6 +16,7 @@ from copy import deepcopy
 import pysmspp
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Union, Literal, Callable
+import math
 
 from .constants import conversion_dict, nominal_attrs, renewable_carriers
 from .utils import (
@@ -920,7 +921,8 @@ class Transformation:
         # n.optimize.assign_duals(n) # Still doesn't work
         
         n._multi_invest = 0
-        n.optimize.post_processing()
+        if not math.isinf(objective_smspp):
+            n.optimize.post_processing()
         n._objective_constant = 0
         
         

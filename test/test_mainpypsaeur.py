@@ -2,9 +2,9 @@
 """
 Batch SMS++ benchmark runner over multiple PyPSA networks (.nc).
 
-New style:
+New style (no YAML):
 - PyPSA optimize (reference)
-- SMS++ pipeline with ONE call: Transformation(cfg).run(network)
+- SMS++ pipeline with ONE call: Transformation(...).run(network)
 - Timings are taken from Transformation.timer
 
 Outputs:
@@ -18,6 +18,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 import re
+import time
 
 import pandas as pd
 import pypsa
@@ -27,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 os.chdir(HERE)
 print(">>> FORCED CWD:", Path.cwd())
 
-# Ensure PYTHONPATH for imports from repo root (e.g., scripts/)
+# Ensure PYTHONPATH for imports from repo root (if needed)
 REPO_ROOT = HERE.parent
 SCRIPTS = (REPO_ROOT / "scripts").resolve()
 if str(SCRIPTS) not in sys.path:
@@ -41,14 +42,8 @@ OUT_TEST.mkdir(parents=True, exist_ok=True)
 
 # --- Domain imports (after PYTHONPATH is set) ---
 from pypsa2smspp.transformation import Transformation
-from pypsa2smspp.pip_utils import load_yaml_config  # to override io.name per case
+from pypsa2smspp.network_correction import clean_ciclicity_storage
 
-from pypsa2smspp.network_correction import (
-    clean_ciclicity_storage,
-    # clean_e_sum,
-    # add_slack_unit,
-    # clean_stores,
-)
 
 # ---------- Utilities ----------
 
@@ -69,24 +64,12 @@ def pypsa_reference_objective(network: "pypsa.Network") -> float:
         return float(network.objective)
 
 
-def make_case_cfg(config_yaml: Path, case_name: str):
-    """
-    Load YAML config and override io.name so each case writes unique artifacts.
-    Prevents collisions in batch runs.
-    """
-    cfg = load_yaml_config(config_yaml)
-    if not hasattr(cfg, "io"):
-        cfg.io = {}
-    cfg.io.name = f"bench_{case_name}"
-    return cfg
-
-
 # ---------- Core runner for a single .nc network ----------
 
 def run_single_nc(
     nc_path: Path,
     *,
-    config_yaml: Path,
+    capacity_expansion_ucblock: bool,
     solver_name: str = "gurobi",
     do_clean_ciclicity_storage: bool = True,
     export_pypsa_lp: bool = True,
@@ -114,11 +97,11 @@ def run_single_nc(
     summary = {
         "case": case_name,
         "input_file": str(nc_path),
-        "config_yaml": str(config_yaml),
+        "capacity_expansion_ucblock": bool(capacity_expansion_ucblock),
         "status": "OK",
         "error_msg": "",
-        "PyPSA_opt_s": None,          # NOTE: we do not time PyPSA via StepTimer; do it manually if needed
-        "SMSpp_total_s": None,        # from Transformation.timer
+        "PyPSA_opt_s": None,
+        "SMSpp_total_s": None,
         "Obj_PyPSA": None,
         "Obj_SMSpp": None,
         "Obj_rel_error_pct": None,
@@ -137,10 +120,9 @@ def run_single_nc(
         # -------- PyPSA optimization (reference) --------
         network = n_clean.copy()
 
-        # Time PyPSA optimize (optional manual timing)
-        t0 = pd.Timestamp.now()
+        t0 = time.perf_counter()
         network.optimize(solver_name=solver_name)
-        summary["PyPSA_opt_s"] = float((pd.Timestamp.now() - t0).total_seconds())
+        summary["PyPSA_opt_s"] = round(time.perf_counter() - t0, 6)
 
         # Export LP for debugging (best effort)
         if export_pypsa_lp:
@@ -160,8 +142,19 @@ def run_single_nc(
         summary["Obj_PyPSA"] = obj_pypsa
 
         # -------- SMS++ pipeline (ONE CALL) --------
-        cfg = make_case_cfg(config_yaml, case_name)
-        transformation = Transformation(cfg)  # requires Transformation to accept dict/AttrDict
+        # Use explicit fp_* templates. They will be rendered with name=case_name.
+        transformation = Transformation(
+            capacity_expansion_ucblock=capacity_expansion_ucblock,
+            workdir=OUT_TEST,
+            name=case_name,
+            overwrite=True,
+            fp_temp="smspp_{name}_temp.nc",
+            fp_log="smspp_{name}_log.txt",
+            fp_solution="smspp_{name}_solution.nc",
+            configfile="auto",
+            pysmspp_options={},  # keep pySMSpp defaults (can be filled if needed)
+        )
+
         n_smspp = transformation.run(network, verbose=verbose)
 
         obj_smspp = float(transformation.result.objective_value)
@@ -209,12 +202,6 @@ def run_single_nc(
 
 
 def main():
-    # ---- Choose your config YAML ----
-    # Use a benchmark-specific YAML if you want, otherwise default is fine.
-    config_yaml = Path(__file__).resolve().parents[1] / "pypsa2smspp" / "data" / "config_default.yaml"
-    if not config_yaml.exists():
-        raise FileNotFoundError(config_yaml)
-
     # ---- Discover inputs (.nc networks) ----
     inputs_dir = Path("/home/pampado/sector-coupled/pypsa-eur/resources/smspp_electricity_only_italy/networks")
 
@@ -233,9 +220,13 @@ def main():
 
     rows = []
     for nc in nc_files:
+        # Heuristic: if filename suggests investment, use InvestmentBlock
+        name_l = nc.name.lower()
+        capacity_expansion_ucblock = ("inv" not in name_l)
+
         row = run_single_nc(
             nc,
-            config_yaml=config_yaml,
+            capacity_expansion_ucblock=capacity_expansion_ucblock,
             solver_name="gurobi",
             do_clean_ciclicity_storage=True,
             export_pypsa_lp=True,

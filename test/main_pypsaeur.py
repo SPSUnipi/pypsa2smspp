@@ -25,7 +25,7 @@ import pypsa
 # =============================================================================
 
 # Inputs
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_2_elec_1h.nc")
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_5___2050.nc")
 CONFIG_YAML = Path(r"../pypsa2smspp/data/config_default.yaml")
 
 # Output
