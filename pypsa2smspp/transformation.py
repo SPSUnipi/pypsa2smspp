@@ -63,6 +63,10 @@ from .io_parser import (
     split_merged_dcnetworkblocks
 )
 
+from .stochastic_utils import (
+    get_base_scenario_network
+    )
+
 NP_DOUBLE = np.float64
 NP_UINT = np.uint32
 
@@ -242,13 +246,14 @@ class Transformation:
         # Keep timings accessible after the run
         self.timer = StepTimer()
         n.calculate_dependent_values()
+        n_direct = get_base_scenario_network(n)
         
         with step(self.timer, "consistency_check", verbose=verbose):
             self.consistency_check(n)
     
         with step(self.timer, "direct", verbose=verbose):
             n.stores['max_hours'] = self.config.max_hours_stores
-            self.direct(n)
+            self.direct(n_direct)
         
         with step(self.timer, "convert_to_blocks", verbose=verbose):
             self.sms_network = self.convert_to_blocks()

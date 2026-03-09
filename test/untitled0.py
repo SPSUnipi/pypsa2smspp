@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 17 09:38:56 2025
+Created on Tue Mar  3 16:56:54 2026
+
+@author: aless
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Oct 29 14:14:38 2024
 
 @author: aless
 """
@@ -41,6 +48,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
+import pypsa
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -59,51 +67,39 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_load'
+network = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\pypsa_network.nc")
 
-#%% Network definition with PyPSA
-config = TestConfig()
-
-nd = NetworkDefinition(config)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
-nd.n = add_slack_unit(nd.n)
+network = add_slack_unit(network)
 
-SCENARIOS = ["low", "med", "high"]
-DIESEL_PRICES = {"low": 30, "med": 70, "high": 100}  # EUR/MWh_th
-load = nd.n.loads_t.p_set
-LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
-PROB = {"low": 0.4, "med": 0.3, "high": 0.3}  # Scenario probabilities
+n_smspp = network.copy()
+network.optimize(solver_name='gurobi')
 
-network_stoch_load = nd.n.copy()
-# network_stoch_price = nd.n.copy()
+# network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
-# Become stochastic
-network_stoch_load.set_scenarios(PROB)
-# network_stoch_price.set_scenarios(PROB)
+network.model.to_file(fn = "output/develop/pypsa.lp")
 
-for scenario in SCENARIOS:
-    # network_stoch_price.generators.loc[(scenario, 'IT0 0 diesel'), "marginal_cost"] = DIESEL_PRICES[scenario]
-    network_stoch_load.loads_t.p_set[(scenario, "IT0 0")] = LOAD_VALUE[scenario]
+#%% Transformation class
 
-nd.n.optimize(solver_name='gurobi')
-network_stoch_load.optimize(solver_name='gurobi')
-# network_stoch_price.optimize(solver_name='gurobi')
-
-nd.n.export_to_netcdf("output/pypsa_deterministic.nc")
-network_stoch_load.export_to_netcdf("output/pypsa_stoch_load.nc")
-# network_stoch_price.export_to_netcdf("output/pypsa_stoch_price.nc")
-
-
-statistics = nd.n.statistics()
-statistics_stoch_load = network_stoch_load.statistics()
-# statistics_stoch_price = network_stoch_price.statistics()
-
-transformation = Transformation(name=name,
+transformation = Transformation(name="prova_francese",
                                 workdir="output/develop",
-                                )
-nd.n = transformation.run(nd.n)
+                                enable_thermal_units=False)
+n_smspp = transformation.run(n_smspp)
 
+# cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
+# cfg_path = cfg_path.resolve()
 
+# nd.n = nd.n.smspp(verbose=True)
+
+objective_pypsa = network.objective + network.objective_constant
+objective_smspp = n_smspp.objective
+
+error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
+    
+print(f"Error PyPSA-SMS++ of {error}%")
+
+statistics_pypsa = network.statistics()
+statistics_smspp = n_smspp.statistics()
 
