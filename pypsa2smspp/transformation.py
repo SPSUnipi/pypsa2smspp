@@ -921,8 +921,8 @@ class Transformation:
         # n.optimize.assign_duals(n) # Still doesn't work
         
         n._multi_invest = 0
-        if not math.isinf(objective_smspp):
-            n.optimize.post_processing()
+        #if not math.isinf(objective_smspp):
+        #    n.optimize.post_processing()
         n._objective_constant = 0
         
         
