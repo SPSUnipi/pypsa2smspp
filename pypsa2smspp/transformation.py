@@ -1263,7 +1263,7 @@ class Transformation:
         
         # --- Resolve configfile/template ---
         default_template_map = {
-            "UCBlock": "UCBlock/uc_solverconfig_grb.txt",
+            "UCBlock": "UCBlock/uc_solverconfig.txt",
             "InvestmentBlock": "InvestmentBlock/BSPar.txt",
         }
     
