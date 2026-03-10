@@ -6,9 +6,10 @@ from conftest import (
     create_test_config,
     safe_remove,
     test_cases,
-    REL_TOL,
-    ABS_TOL,
     OUT_TEST,
+    relative_tolerance,
+    relative_tolerance_investment,
+    absolute_tolerance,
 )
 
 from network_definition import NetworkDefinition
@@ -20,7 +21,7 @@ from pypsa2smspp.network_correction import (
 )
 
 
-def run_investment_block(xlsx_path: Path) -> None:
+def run_investment_block(xlsx_path: Path, config_yaml: Path, relative_tolerance: float = 1e-4, absolute_tolerance: float = 1e-3) -> None:
     """
     InvestmentBlock regression test:
     - build network from Excel
@@ -81,7 +82,11 @@ def run_investment_block(xlsx_path: Path) -> None:
 
     obj_smspp = float(transformation.result.objective_value)
 
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    # Optional: if you expose the used mode, you can enforce it here
+    # if hasattr(transformation, "last_mode_used") and transformation.last_mode_used != "investmentblock":
+    #     pytest.skip(f"Not InvestmentBlock mode for this case (mode={transformation.last_mode_used}).")
+
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=relative_tolerance, abs=absolute_tolerance)
 
     # ---- (3) Optional export ----
     try:
@@ -91,12 +96,18 @@ def run_investment_block(xlsx_path: Path) -> None:
 
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_investment(test_case_xlsx):
+def test_investment(test_case_xlsx, relative_tolerance_investment, absolute_tolerance):
+    """
+    Uses a dedicated YAML config that forces InvestmentBlock mode (recommended).
+    """
+    config_yaml = Path(__file__).resolve().parents[1] / "test" / "configs" / "config_test_investment.yaml"
+    if not config_yaml.exists():
+        pytest.skip(f"Missing InvestmentBlock test config: {config_yaml}")
     name_l = test_case_xlsx.name.lower()
     if "ml" in name_l or "sector" in name_l or "ext" not in name_l:
         pytest.skip("Skipping case for investment block")
 
-    run_investment_block(test_case_xlsx)
+    run_investment_block(test_case_xlsx, config_yaml, relative_tolerance_investment, absolute_tolerance)
 
 
 if __name__ == "__main__":
