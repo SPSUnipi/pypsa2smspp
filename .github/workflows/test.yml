@@ -32,7 +32,7 @@ jobs:
     env:
       MPLBACKEND: Agg  # https://github.com/orgs/community/discussions/26434
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
@@ -59,6 +59,13 @@ jobs:
     - name: Test package with SMSpp
       run: |
         pytest
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-data-${{ matrix.python-version }}
+        path: test\output\test
   
   test_with_smspp:
     # Test package build in matrix of OS and Python versions
@@ -77,12 +84,12 @@ jobs:
     env:
       MPLBACKEND: Agg  # https://github.com/orgs/community/discussions/26434
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0 # Needed for setuptools_scm
 
     - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -131,3 +138,10 @@ jobs:
         echo "PATH is now: $PATH"
         echo "LD_LIBRARY_PATH is now: $LD_LIBRARY_PATH"
         pytest
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-data-${{ matrix.python-version }}
+        path: test\output\test
