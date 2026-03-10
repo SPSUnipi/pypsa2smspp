@@ -27,7 +27,7 @@ dependencies = [
     "pypsa>=1",
     "xarray",
     "openpyxl",
-    "pysmspp>=0.0.2",
+    "pysmspp>=0.0.3",
 ]
 
 [project.urls]
