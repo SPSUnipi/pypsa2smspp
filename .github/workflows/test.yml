@@ -66,7 +66,6 @@ jobs:
       with:
         name: test-data-${{ matrix.python-version }}
         path: |
-          pypsa2smspp/test/output/test
           test/output/test
         retention-days: 14
   
@@ -148,6 +147,5 @@ jobs:
       with:
         name: test-data-${{ matrix.python-version }}
         path: |
-          pypsa2smspp/test/output/test
           test/output/test
         retention-days: 14
