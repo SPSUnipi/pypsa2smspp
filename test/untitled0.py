@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Tue Mar  3 16:56:54 2026
+
+@author: aless
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Tue Oct 29 14:14:38 2024
 
 @author: aless
@@ -41,6 +48,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
+import pypsa
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -59,34 +67,26 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'test_pypsaeur'
+network = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\pypsa_network.nc")
 
-#%% Network definition with PyPSA
-config = TestConfig()
-if "sector" in config.input_name_components:
-    config.load_sign = -1
-
-nd = NetworkDefinition(config)
-
-nd.n = clean_ciclicity_storage(nd.n)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
-nd.n = add_slack_unit(nd.n)
+network = add_slack_unit(network)
 
-network = nd.n.copy()
+n_smspp = network.copy()
 network.optimize(solver_name='gurobi')
 
 # network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
-network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
+network.model.to_file(fn = "output/develop/pypsa.lp")
 
 #%% Transformation class
 
-transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0],
+transformation = Transformation(name="prova_francese",
                                 workdir="output/develop",
-                                enable_thermal_units=True)
-nd.n = transformation.run(nd.n)
+                                enable_thermal_units=False)
+n_smspp = transformation.run(n_smspp)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
 # cfg_path = cfg_path.resolve()
@@ -94,12 +94,12 @@ nd.n = transformation.run(nd.n)
 # nd.n = nd.n.smspp(verbose=True)
 
 objective_pypsa = network.objective + network.objective_constant
-objective_smspp = nd.n.objective
+objective_smspp = n_smspp.objective
 
 error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
     
 print(f"Error PyPSA-SMS++ of {error}%")
 
 statistics_pypsa = network.statistics()
-statistics_smspp = nd.n.statistics()
+statistics_smspp = n_smspp.statistics()
 

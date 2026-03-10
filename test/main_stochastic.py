@@ -59,16 +59,12 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_marginal'
+name = 'stochastic_base_load'
 
 #%% Network definition with PyPSA
 config = TestConfig()
-if "sector" in config.input_name_components:
-    config.load_sign = -1
 
 nd = NetworkDefinition(config)
-
-nd.n = clean_ciclicity_storage(nd.n)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
@@ -81,28 +77,33 @@ LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
 PROB = {"low": 0.4, "med": 0.3, "high": 0.3}  # Scenario probabilities
 
 network_stoch_load = nd.n.copy()
-network_stoch_price = nd.n.copy()
+# network_stoch_price = nd.n.copy()
 
 # Become stochastic
 network_stoch_load.set_scenarios(PROB)
-network_stoch_price.set_scenarios(PROB)
+# network_stoch_price.set_scenarios(PROB)
 
 for scenario in SCENARIOS:
-    network_stoch_price.generators.loc[(scenario, 'IT0 0 diesel'), "marginal_cost"] = DIESEL_PRICES[scenario]
+    # network_stoch_price.generators.loc[(scenario, 'IT0 0 diesel'), "marginal_cost"] = DIESEL_PRICES[scenario]
     network_stoch_load.loads_t.p_set[(scenario, "IT0 0")] = LOAD_VALUE[scenario]
 
 nd.n.optimize(solver_name='gurobi')
 network_stoch_load.optimize(solver_name='gurobi')
-network_stoch_price.optimize(solver_name='gurobi')
+# network_stoch_price.optimize(solver_name='gurobi')
 
 nd.n.export_to_netcdf("output/pypsa_deterministic.nc")
 network_stoch_load.export_to_netcdf("output/pypsa_stoch_load.nc")
-network_stoch_price.export_to_netcdf("output/pypsa_stoch_price.nc")
+# network_stoch_price.export_to_netcdf("output/pypsa_stoch_price.nc")
 
 
 statistics = nd.n.statistics()
 statistics_stoch_load = network_stoch_load.statistics()
-statistics_stoch_price = network_stoch_price.statistics()
+# statistics_stoch_price = network_stoch_price.statistics()
+
+transformation = Transformation(name=name,
+                                workdir="output/develop",
+                                )
+nd.n = transformation.run(nd.n)
 
 
 
