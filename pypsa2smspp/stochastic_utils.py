@@ -362,3 +362,101 @@ def merge_tssb_dss_parts(dss_parts: List[Dict[str, Any] | None]) -> Dict[str, An
         )
 
     return valid_parts[0]
+
+
+# Build Abstract Path
+
+def calculate_design_variables(
+    investment_meta,
+    unitblock_design_data,
+):
+    """
+    Build design-variable descriptors for the TSSB StaticAbstractPath.
+
+    Parameters
+    ----------
+    investment_meta : dict
+        Metadata collected during iterate_components.
+    unitblock_design_data : list[dict]
+        Design-variable metadata collected unit by unit.
+
+    Returns
+    -------
+    list[dict]
+        List of design-variable descriptors.
+    """
+    design_variables = []
+
+    # Unit-block design variables (already collected explicitly)
+    for item in unitblock_design_data:
+        design_variables.append(item)
+
+    # Network design variables from extendable lines/links
+    design_lines = list(investment_meta.get("design_lines", []))
+    if design_lines:
+        for line_idx in design_lines:
+            design_variables.append(
+                {
+                    "block_index": 0,
+                    "var_name": "x_network",
+                    "component_type": "network",
+                    "element_index": int(line_idx),
+                    "range_index": int(line_idx) + 1,
+                }
+            )
+
+    return design_variables
+
+
+def build_tssb_static_abstract_path(design_variables):
+    """
+    Build a preliminary StaticAbstractPath representation from design variables.
+    """
+    path_dim = len(design_variables)
+    total_length = 2 * path_dim
+
+    path_group_indices = []
+    path_node_types = []
+    path_element_indices = []
+    path_range_indices = []
+    path_start = []
+
+    current = 0
+    for dv in design_variables:
+        path_start.append(current)
+
+        # Block node
+        path_group_indices.append(str(dv["block_index"]))
+        path_node_types.append("B")
+        path_element_indices.append(0)
+        path_range_indices.append(0)
+
+        # Variable node
+        path_group_indices.append(dv["var_name"])
+        path_node_types.append("V")
+        path_element_indices.append(int(dv["element_index"]))
+        path_range_indices.append(int(dv["range_index"]))
+
+        current += 2
+
+    path_node_types = np.array(path_node_types, dtype="object")
+    path_group_indices = np.array(path_group_indices, dtype="object")
+
+    path_element_indices = np.ma.masked_array(
+        np.array(path_element_indices, dtype=np.uint32),
+        mask=(path_node_types == "B"),
+    )
+    path_range_indices = np.ma.masked_array(
+        np.array(path_range_indices, dtype=np.uint32),
+        mask=(path_node_types == "B"),
+    )
+
+    return {
+        "PathDim": path_dim,
+        "TotalLength": total_length,
+        "PathGroupIndices": path_group_indices,
+        "PathNodeTypes": path_node_types,
+        "PathElementIndices": path_element_indices,
+        "PathRangeIndices": path_range_indices,
+        "PathStart": np.array(path_start, dtype=np.uint32),
+    }

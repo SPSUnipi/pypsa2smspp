@@ -78,7 +78,7 @@ PROB = {"low": 0.4, "med": 0.3, "high": 0.3}  # Scenario probabilities
 nd.n.set_scenarios(PROB)
 
 for scenario in SCENARIOS:
-    nd.n.loads_t.p_set[(scenario, "IT0 0")] = LOAD_VALUE[scenario]
+    nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
 
 n_pypsa = nd.n.copy()
 

@@ -69,6 +69,8 @@ from .stochastic_utils import (
     build_dss_marginal,
     build_dss_renewables,
     merge_tssb_dss_parts,
+    calculate_design_variables,
+    build_tssb_static_abstract_path,
 )
 
 NP_DOUBLE = np.float64
@@ -118,6 +120,7 @@ class Transformation:
         
         # Stochastic
         stochastic_parameters: Optional[Mapping[str, Any]] = None,
+        
     ):
         """
         Parameters
@@ -246,6 +249,7 @@ class Transformation:
         self.tssb_data = None
         self.design_variables = []
         self.stochastic_parameters = dict(stochastic_parameters or {})
+        self.unitblock_design_data = []
 
  
         
@@ -337,6 +341,7 @@ class Transformation:
         # Probably useful to group this part as 'preprocessing' as it is independent from the rest
         generator_node = []
         investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": [], 'design_lines': []}
+        self.unitblock_design_data = []
         unitblock_index = 0
         lines_index = 0
         self._dc_names = []
@@ -468,6 +473,7 @@ class Transformation:
                     investment_meta["index_extendable"].append(unitblock_index)
                     investment_meta["Blocks"].append(f"{attr_name.split('_')[0]}_{unitblock_index}")
                     investment_meta["asset_type"].append(0)
+                    self._store_unitblock_design_variable(attr_name, unitblock_index)
     
                 unitblock_index += 1
     
@@ -1706,9 +1712,14 @@ class Transformation:
         node_order = dss_data.get("node_order", [])
         time_horizon = int(len(snapshot_order))
         number_nodes = int(len(node_order))
-
+        
         design_variables = self._collect_design_variables()
-        static_abstract_path = self._build_tssb_static_abstract_path(design_variables)
+        sap_data = build_tssb_static_abstract_path(design_variables)
+        
+        self.dimensions["tssb"]["sap"] = {
+            "PathDim": sap_data["PathDim"],
+            "TotalLength": sap_data["TotalLength"],
+        }
 
         # Minimal demand-only mapping:
         # take the full scenario vector and apply it to the full demand target vector.
@@ -1742,11 +1753,7 @@ class Transformation:
             },
         }
 
-        self.dimensions.setdefault("tssb", {})
-        self.dimensions["tssb"]["static_abstract_path"] = {
-            "PathDim": static_abstract_path["PathDim"],
-            "TotalLength": static_abstract_path["TotalLength"],
-        }
+
         self.dimensions["tssb"]["stochastic_block"] = {
             "NumberDataMappings": stochastic_block["NumberDataMappings"],
             "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
@@ -1755,7 +1762,7 @@ class Transformation:
 
         self.tssb_data = {
             "enabled": True,
-            "dss": dss_data,
+            "discrete_scenario_set": dss_data,
             "number_scenarios": number_scenarios,
             "scenario_size": scenario_size,
             "time_horizon": time_horizon,
@@ -1764,7 +1771,7 @@ class Transformation:
             "snapshot_order": snapshot_order,
             "flattening": dss_data.get("flattening"),
             "design_variables": design_variables,
-            "static_abstract_path": static_abstract_path,
+            "static_abstract_path": sap_data,
             "stochastic_block": stochastic_block,
         }
 
@@ -1797,156 +1804,106 @@ class Transformation:
         }
     
         return dss_data
-        
-    def _collect_design_variables(self):
+
+
+    def _store_unitblock_design_variable(self, attr_name, unitblock_index):
         """
-        Collect design-variable descriptors from the already-built internal representation.
+        Store design-variable metadata for StaticAbstractPath construction.
 
-        Notes
-        -----
-        This is intentionally lightweight and based on self.unitblocks / dimensions,
-        so direct() does not need to build the full abstract path explicitly.
+        Parameters
+        ----------
+        attr_name : str
+            Unit block parameter family name.
+        unitblock_index : int
+            Unit block index in the SMS++ structure.
         """
-        design_variables = []
+        block_type = attr_name.split("_")[0]
 
-        # Unit-level design variables
-        for block_name, block in self.unitblocks.items():
-            if not bool(block.get("Extendable", False)):
-                continue
-
-            block_type = block.get("block", "")
-            if block_type == "BatteryUnitBlock":
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_battery",
-                        "n_elements": 1,
-                    }
-                )
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_converter",
-                        "n_elements": 1,
-                    }
-                )
-            elif block_type == "ThermalUnitBlock":
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_thermal",
-                        "n_elements": 1,
-                    }
-                )
-            elif block_type == "IntermittentUnitBlock":
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_intermittent",
-                        "n_elements": 1,
-                    }
-                )
-            elif block_type == "HydroUnitBlock":
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_hydro",
-                        "n_elements": 1,
-                    }
-                )
-            else:
-                design_variables.append(
-                    {
-                        "component": block_name,
-                        "block_type": block_type,
-                        "var_name": "x_design",
-                        "n_elements": 1,
-                    }
-                )
-
-        # Network-level design variable (lines + links merged later in SMS++)
-        num_design_lines = int(
-            self.dimensions.get("InvestmentBlock", {}).get("NumberDesignLines", 0)
-        )
-        if num_design_lines > 0:
-            design_variables.append(
+        if block_type == "BatteryUnitBlock":
+            self.unitblock_design_data.append(
                 {
-                    "component": "NetworkBlock",
-                    "block_type": "NetworkBlock",
-                    "var_name": "x_line",
-                    "n_elements": num_design_lines,
+                    "block_index": unitblock_index,
+                    "var_name": "x_battery",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": "x_converter",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
                 }
             )
 
-        self.design_variables = design_variables
-        return design_variables
+        elif block_type == "ThermalUnitBlock":
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": "x_thermal",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
 
+        elif block_type == "IntermittentUnitBlock":
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": "x_intermittent",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
 
-    def _build_tssb_static_abstract_path(self, design_variables):
+        elif block_type == "HydroUnitBlock":
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": "x_hydro",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
+
+        else:
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": "x_design",
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
+            
+            
+    def _collect_design_variables(self):
         """
-        Build a preliminary StaticAbstractPath representation from design variables.
-
-        Current convention:
-        - each design variable contributes one Block node and one Variable node;
-        - vector-valued variables are represented through PathRangeIndices > 1.
-
-        If SMS++ later requires a different encoding for vector design variables,
-        only this builder should need to change.
+        Collect design-variable descriptors for the TSSB StaticAbstractPath.
+    
+        Design variables are gathered during iterate_components for unit blocks
+        and reconstructed from investment_meta['design_lines'] for the network.
         """
-        path_dim = len(design_variables)
-        total_length = 2 * path_dim
-
-        path_group_indices = []
-        path_node_types = []
-        path_element_indices = []
-        path_range_indices = []
-        path_start = []
-
-        current = 0
-        for i, dv in enumerate(design_variables):
-            path_start.append(current)
-
-            # Block node
-            path_group_indices.append(str(i))
-            path_node_types.append("B")
-            path_element_indices.append(0)
-            path_range_indices.append(0)
-
-            # Variable node
-            path_group_indices.append(dv["var_name"])
-            path_node_types.append("V")
-            path_element_indices.append(0)
-            path_range_indices.append(int(dv["n_elements"]))
-
-            current += 2
-
-        path_node_types = np.array(path_node_types, dtype="object")
-        path_group_indices = np.array(path_group_indices, dtype="object")
-
-        path_element_indices = np.ma.masked_array(
-            np.array(path_element_indices, dtype=np.uint32),
-            mask=(path_node_types == "B"),
-        )
-        path_range_indices = np.ma.masked_array(
-            np.array(path_range_indices, dtype=np.uint32),
-            mask=(path_node_types == "B"),
-        )
-
-        return {
-            "PathDim": path_dim,
-            "TotalLength": total_length,
-            "PathGroupIndices": path_group_indices,
-            "PathNodeTypes": path_node_types,
-            "PathElementIndices": path_element_indices,
-            "PathRangeIndices": path_range_indices,
-            "PathStart": np.array(path_start, dtype=np.uint32),
+        investment_meta = {
+            "design_lines": list(
+                self.networkblock.get("Design", {})
+                .get("DesignLines", {})
+                .get("value", [])
+            )
         }
-
+    
+        self.design_variables = calculate_design_variables(
+            investment_meta=investment_meta,
+            unitblock_design_data=self.unitblock_design_data,
+        )
+        return self.design_variables
 
 
 #############################################################################################
