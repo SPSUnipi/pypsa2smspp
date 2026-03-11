@@ -71,37 +71,29 @@ nd = NetworkDefinition(config)
 nd.n = add_slack_unit(nd.n)
 
 SCENARIOS = ["low", "med", "high"]
-DIESEL_PRICES = {"low": 30, "med": 70, "high": 100}  # EUR/MWh_th
 load = nd.n.loads_t.p_set
 LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
 PROB = {"low": 0.4, "med": 0.3, "high": 0.3}  # Scenario probabilities
 
-network_stoch_load = nd.n.copy()
-# network_stoch_price = nd.n.copy()
-
-# Become stochastic
-network_stoch_load.set_scenarios(PROB)
-# network_stoch_price.set_scenarios(PROB)
+nd.n.set_scenarios(PROB)
 
 for scenario in SCENARIOS:
-    # network_stoch_price.generators.loc[(scenario, 'IT0 0 diesel'), "marginal_cost"] = DIESEL_PRICES[scenario]
-    network_stoch_load.loads_t.p_set[(scenario, "IT0 0")] = LOAD_VALUE[scenario]
+    nd.n.loads_t.p_set[(scenario, "IT0 0")] = LOAD_VALUE[scenario]
 
-nd.n.optimize(solver_name='gurobi')
-network_stoch_load.optimize(solver_name='gurobi')
-# network_stoch_price.optimize(solver_name='gurobi')
+n_pypsa = nd.n.copy()
 
-nd.n.export_to_netcdf("output/pypsa_deterministic.nc")
-network_stoch_load.export_to_netcdf("output/pypsa_stoch_load.nc")
-# network_stoch_price.export_to_netcdf("output/pypsa_stoch_price.nc")
+n_pypsa.optimize(solver_name='gurobi')
 
+n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")
 
-statistics = nd.n.statistics()
-statistics_stoch_load = network_stoch_load.statistics()
-# statistics_stoch_price = network_stoch_price.statistics()
+statistics_pypsa = n_pypsa.statistics()
 
 transformation = Transformation(name=name,
-                                workdir="output/develop",
+                                workdir="output/develop/tssb",
+                                stochastic_parameters={
+                                    "stochastic_type": "tssb",
+                                    "parameters": ["demand", "price"]
+                                }
                                 )
 nd.n = transformation.run(nd.n)
 

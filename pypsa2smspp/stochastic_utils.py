@@ -10,8 +10,8 @@ outside of the main Transformation class, so the pipeline can remain readable.
 
 
 
-from typing import Any, Dict, List, Sequence, Tuple
-
+from typing import Any, Dict, Mapping, Optional, Sequence, List, Tuple
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -31,20 +31,6 @@ def get_scenario_names(n) -> List[Any]:
         return list(scenarios)
     except TypeError:
         return []
-
-
-def get_base_scenario_network(n):
-    """Return a deterministic network for direct conversion.
-
-    If the input network is stochastic, return the first scenario.
-    Otherwise, return the original network unchanged.
-    """
-    scenario_names = get_scenario_names(n)
-
-    if scenario_names:
-        return n.get_scenario(scenario_names[0])
-
-    return n
 
 
 def _extract_probability_series_from_obj(obj, scenario_names: Sequence[Any]) -> pd.Series | None:
@@ -156,19 +142,71 @@ def has_extendable_assets(n) -> bool:
     return False
 
 
-def describe_problem_structure(n) -> Dict[str, Any]:
+def _normalize_stochastic_parameters(
+    stochastic_parameters: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Normalize user-provided stochastic metadata.
+
+    Expected example
+    ----------------
+    {
+        "stochastic_type": "tssb",
+        "parameters": ["demand", "price"]
+    }
+    """
+    sp = dict(stochastic_parameters or {})
+
+    stochastic_type = sp.get("stochastic_type", None)
+    parameters = sp.get("parameters", [])
+
+    if parameters is None:
+        parameters = []
+    elif isinstance(parameters, str):
+        parameters = [parameters]
+    else:
+        parameters = list(parameters)
+
+    parameters = [str(p).strip().lower() for p in parameters if str(p).strip()]
+
+    valid_parameters = {"demand", "price", "renewables"}
+    invalid = sorted(set(parameters) - valid_parameters)
+    if invalid:
+        raise ValueError(
+            f"Unsupported stochastic parameters: {invalid}. "
+            f"Supported values are {sorted(valid_parameters)}."
+        )
+
+    return {
+        "stochastic_type": stochastic_type,
+        "parameters": parameters,
+    }
+
+
+def describe_problem_structure(
+    n,
+    *,
+    capacity_expansion_ucblock: bool,
+    stochastic_parameters: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Describe the high-level optimization structure of the PyPSA network."""
     is_stochastic = is_stochastic_network(n)
     scenario_names = get_scenario_names(n)
 
+    sp = _normalize_stochastic_parameters(stochastic_parameters)
+
+    stochastic_type = sp["stochastic_type"] if is_stochastic else None
+    stochastic_parameter_set = set(sp["parameters"]) if is_stochastic else set()
+
     return {
         "is_stochastic": is_stochastic,
-        "stochastic_type": "tssb" if is_stochastic else None,
+        "stochastic_type": stochastic_type,
         "number_scenarios": len(scenario_names),
         "scenario_names": scenario_names,
-        "has_investment": has_extendable_assets(n),
-        "has_uc": True,
-        "has_scenario_dependent_demand": is_stochastic,
+        "has_investment_block": not bool(capacity_expansion_ucblock),
+        "stochastic_demand": "demand" in stochastic_parameter_set,
+        "stochastic_marginal": "marginal" in stochastic_parameter_set,
+        "stochastic_renewables": "renewables" in stochastic_parameter_set,
     }
 
 
@@ -211,50 +249,6 @@ def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
     return demand_by_bus.T.to_numpy(dtype=float).reshape(-1)
 
 
-def build_tssb_demand_scenarios(
-    n,
-) -> Tuple[np.ndarray, np.ndarray, List[Any], List[Any], str]:
-    """Build scenario matrix and probabilities for demand-only TSSB.
-
-    Returns
-    -------
-    scenarios : np.ndarray
-        Shape = (NumberScenarios, ScenarioSize)
-    pool_weights : np.ndarray
-        Shape = (NumberScenarios,)
-    bus_order : list
-        Bus ordering used in the scenario flattening.
-    snapshot_order : list
-        Snapshot ordering used in the scenario flattening.
-    flattening : str
-        Human-readable description of the flattening convention.
-    """
-    scenario_names = get_scenario_names(n)
-    if not scenario_names:
-        raise ValueError("TSSB scenario extraction requested on a deterministic network.")
-
-    scenarios = []
-    bus_order = None
-    snapshot_order = None
-
-    for scenario_name in scenario_names:
-        n_s = n.get_scenario(scenario_name)
-        demand_by_bus = get_bus_demand_matrix(n_s)
-
-        if bus_order is None:
-            bus_order = list(demand_by_bus.index)
-            snapshot_order = list(demand_by_bus.columns)
-        else:
-            demand_by_bus = demand_by_bus.reindex(index=bus_order, columns=snapshot_order, fill_value=0.0)
-
-        scenarios.append(flatten_bus_demand_time_major(demand_by_bus))
-
-    scenario_matrix = np.vstack(scenarios).astype(float)
-    pool_weights = get_scenario_probabilities(n).astype(float)
-    flattening = "time_major_node_minor"
-
-    return scenario_matrix, pool_weights, bus_order, snapshot_order, flattening
-
 def get_base_scenario_network(n):
     """Return a deterministic network for direct conversion.
 
@@ -270,3 +264,101 @@ def get_base_scenario_network(n):
         return n.get_scenario(scenarios[0])
 
     return n
+
+
+# Build Discrete Scenario Set
+
+def build_dss_demand(
+    n,
+) -> Dict[str, Any]:
+    
+    """Build DSS data for stochastic demand.
+    Returns
+    -------
+    scenarios : np.ndarray
+        Shape = (NumberScenarios, ScenarioSize)
+    pool_weights : np.ndarray
+        Shape = (NumberScenarios,)
+    bus_order : list
+        Bus ordering used in the scenario flattening.
+    snapshot_order : list
+        Snapshot ordering used in the scenario flattening.
+    flattening : str
+        Human-readable description of the flattening convention.
+    """
+    
+    scenario_names = get_scenario_names(n)
+    if not scenario_names:
+        raise ValueError("DSS demand extraction requested on a deterministic network.")
+
+    scenarios = []
+    bus_order = None
+    snapshot_order = None
+
+    for scenario_name in scenario_names:
+        n_s = n.get_scenario(scenario_name)
+        demand_by_bus = get_bus_demand_matrix(n_s)
+
+        if bus_order is None:
+            bus_order = list(demand_by_bus.index)
+            snapshot_order = list(demand_by_bus.columns)
+        else:
+            demand_by_bus = demand_by_bus.reindex(
+                index=bus_order,
+                columns=snapshot_order,
+                fill_value=0.0,
+            )
+
+        scenarios.append(flatten_bus_demand_time_major(demand_by_bus))
+
+    scenario_matrix = np.vstack(scenarios).astype(float)
+    pool_weights = get_scenario_probabilities(n).astype(float)
+    flattening = "time_major_node_minor"
+
+    return {
+        "parameter": "demand",
+        "scenarios": scenario_matrix,
+        "pool_weights": pool_weights,
+        "node_order": bus_order,
+        "snapshot_order": snapshot_order,
+        "flattening": flattening,
+        "scenario_size": int(scenario_matrix.shape[1]),
+        "number_scenarios": int(scenario_matrix.shape[0]),
+    }
+
+
+def build_dss_marginal(n) -> Dict[str, Any] | None:
+    """Placeholder builder for stochastic marginal costs."""
+    warnings.warn(
+        "build_dss_marginal was called, but stochastic marginal costs are not implemented yet.",
+        UserWarning,
+    )
+    return None
+
+
+def build_dss_renewables(n) -> Dict[str, Any] | None:
+    """Placeholder builder for stochastic renewable profiles."""
+    warnings.warn(
+        "build_dss_renewables was called, but stochastic renewables are not implemented yet.",
+        UserWarning,
+    )
+    return None
+
+
+def merge_tssb_dss_parts(dss_parts: List[Dict[str, Any] | None]) -> Dict[str, Any]:
+    """
+    Merge DSS parts into a single DiscreteScenarioSet payload.
+
+    For now only one stochastic source is supported.
+    """
+    valid_parts = [part for part in dss_parts if part is not None]
+
+    if not valid_parts:
+        raise ValueError("No DSS parts were built for the TSSB interface.")
+
+    if len(valid_parts) > 1:
+        raise NotImplementedError(
+            "Merging multiple stochastic DSS parts is not implemented yet."
+        )
+
+    return valid_parts[0]
