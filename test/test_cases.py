@@ -162,4 +162,4 @@ def test_investment(test_case_xlsx):
 
 
 if __name__ == "__main__":
-    run_case(test_cases[5], capacity_expansion_ucblock=False, solver_name="highs", verbose=True)
+    run_case(test_cases[10], capacity_expansion_ucblock=False, solver_name="highs", verbose=True)

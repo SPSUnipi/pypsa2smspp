@@ -39,13 +39,13 @@ def run_tssb(fp) -> None:
     network.optimize(solver_name="highs")
 
     try:
-        obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
+        obj_pypsa = float(network.objective + network.objective_constant)
     except Exception:
         obj_pypsa = float(network.objective)
 
     # ---- (2) SMS++ pipeline (ONE CALL) ----
     transformation = Transformation()
-    n = transformation.run(network, verbose=False)
+    n = transformation.run(n, verbose=False)
 
     obj_smspp = float(transformation.result.objective_value)
 
