@@ -71,6 +71,8 @@ from .stochastic_utils import (
     merge_tssb_dss_parts,
     calculate_design_variables,
     build_tssb_static_abstract_path,
+    build_stochastic_mapping_demand,
+    build_tssb_stochastic_block_data,
 )
 
 NP_DOUBLE = np.float64
@@ -1168,107 +1170,6 @@ class Transformation:
 
         return abstract_path_block
 
-
-    def build_tssb_stochastic_block(self, TimeHorizon=24, NumberNodes=2, block=None):
-        """
-        Build a StochasticBlock for a TSSB (two-stage stochastic block) structure.
-        """
-        # TODO: this requires some minimal adaptations to properly link the required inputs with the input network. Moreover, the additional link is to properly link "block" that it will become the ucblock populated in the following steps. The current implementation is just a placeholder with dummy values.
-        NumberDataMappings = 1  # only demand suppored for now
-
-        set_size_demand = [0, 0]
-        set_elements_demand = [0, TimeHorizon * NumberNodes, 0, TimeHorizon * NumberNodes]
-        function_name_demand = ["UCBlock::set_active_power_demand"]
-
-        caller = ["B"]  # The caller is a Block
-        caller_type = ["D"]
-        block_location = [0]  # U CBlock
-
-        set_size = np.array(set_size_demand, dtype=np.uint32)
-        set_elements = np.array(set_elements_demand, dtype=np.uint32)
-
-        NumberDataMappings = set_size.shape[0] // 2
-        SetSize_dim = set_size.shape[0]
-        SetElements_dim = set_elements.shape[0]
-
-        if block is None:
-            block = Block(
-                id=Attribute("id", "0"),
-                filename=Attribute("filename", "EC_CO_Test_TUB.nc4[0]"),
-            )
-
-        stochastic_block = Block(
-            block_type="StochasticBlock",
-            NumberDataMappings=NumberDataMappings,
-            SetSize_dim=SetSize_dim,
-            SetElements_dim=SetElements_dim,
-            FunctionName=Variable(
-                "FunctionName",
-                "str",
-                ("NumberDataMappings",),
-                np.repeat(
-                    np.array(function_name_demand, dtype="object"),
-                    NumberDataMappings,
-                ),
-            ),
-            Caller=Variable(
-                "Caller",
-                "c",
-                ("NumberDataMappings",),
-                np.array(caller, dtype="object"),
-            ),
-            DataType=Variable(
-                "DataType",
-                "c",
-                ("NumberDataMappings",),
-                np.array(caller_type, dtype="object"),
-            ),
-            SetSize=Variable(
-                "SetSize",
-                "u4",
-                ("SetSize_dim",),
-                set_size,
-            ),
-            SetElements=Variable(
-                "SetElements",
-                "u4",
-                ("SetElements_dim",),
-                set_elements,
-            ),
-            AbstractPath=Block(
-                PathDim=Dimension("PathDim", len(block_location)),
-                TotalLength=Dimension("TotalLength", 0),
-                PathGroupIndices=Variable(
-                    "PathGroupIndices",
-                    "str",
-                    ("TotalLength",),
-                    np.array([], dtype="object"),
-                ),
-                PathElementIndices=Variable(
-                    "PathElementIndices",
-                    "u4",
-                    ("TotalLength",),
-                    [],  # ignored missing values (masked array)
-                ),
-                PathRangeIndices=Variable(
-                    "PathRangeIndices",
-                    "u4",
-                    ("TotalLength",),
-                    [],  # ignored missing values
-                ),
-                PathStart=Variable(
-                    "PathStart",
-                    "u4",
-                    ("PathDim",),
-                    np.array(block_location, dtype=np.uint32),
-                ),
-                PathNodeTypes=Variable("PathNodeTypes", "c", ("TotalLength",), []),
-            ),
-            Block=block,
-        )
-
-        return stochastic_block
-
     
     def convert_to_twostagestochasticblock(self, master, index_id, name_id):
         """
@@ -1703,15 +1604,9 @@ class Transformation:
                 f"prepare_tssb_interface only supports 'tssb', got "
                 f"{self.problem_structure.get('stochastic_type')!r}."
             )
-
+        
+        #TODO build demand node by node instead of node0, node1, node0, node1
         dss_data = self.build_tssb_dss(n)
-
-        number_scenarios = int(dss_data["number_scenarios"])
-        scenario_size = int(dss_data["scenario_size"])
-        snapshot_order = dss_data.get("snapshot_order", [])
-        node_order = dss_data.get("node_order", [])
-        time_horizon = int(len(snapshot_order))
-        number_nodes = int(len(node_order))
         
         design_variables = self._collect_design_variables()
         sap_data = build_tssb_static_abstract_path(design_variables)
@@ -1721,56 +1616,11 @@ class Transformation:
             "TotalLength": sap_data["TotalLength"],
         }
 
-        # Minimal demand-only mapping:
-        # take the full scenario vector and apply it to the full demand target vector.
-        stochastic_block = {
-            "NumberDataMappings": 1,
-            "FunctionName": np.array(
-                ["UCBlock::set_active_power_demand"],
-                dtype="object",
-            ),
-            "Caller": np.array(["B"], dtype="object"),
-            "DataType": np.array(["D"], dtype="object"),
-            "SetSize": np.array([0, 0], dtype=np.uint32),
-            "SetElements": np.array(
-                [0, scenario_size, 0, scenario_size],
-                dtype=np.uint32,
-            ),
-            "AbstractPath": {
-                "PathDim": 1,
-                "TotalLength": 0,
-                "PathGroupIndices": np.array([], dtype="object"),
-                "PathNodeTypes": np.array([], dtype="object"),
-                "PathElementIndices": np.ma.masked_array(
-                    np.array([], dtype=np.uint32),
-                    mask=np.array([], dtype=bool),
-                ),
-                "PathRangeIndices": np.ma.masked_array(
-                    np.array([], dtype=np.uint32),
-                    mask=np.array([], dtype=bool),
-                ),
-                "PathStart": np.array([0], dtype=np.uint32),
-            },
-        }
-
-
-        self.dimensions["tssb"]["stochastic_block"] = {
-            "NumberDataMappings": stochastic_block["NumberDataMappings"],
-            "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
-            "SetElements_dim": int(stochastic_block["SetElements"].shape[0]),
-        }
+        stochastic_block = self.build_tssb_stochastic_block()
 
         self.tssb_data = {
             "enabled": True,
             "discrete_scenario_set": dss_data,
-            "number_scenarios": number_scenarios,
-            "scenario_size": scenario_size,
-            "time_horizon": time_horizon,
-            "number_nodes": number_nodes,
-            "node_order": node_order,
-            "snapshot_order": snapshot_order,
-            "flattening": dss_data.get("flattening"),
-            "design_variables": design_variables,
             "static_abstract_path": sap_data,
             "stochastic_block": stochastic_block,
         }
@@ -1905,7 +1755,53 @@ class Transformation:
         )
         return self.design_variables
 
+    
+    def build_tssb_stochastic_block(self):
+        """
+        Build the StochasticBlock payload for TSSB.
 
+        Notes
+        -----
+        For now only stochastic demand is implemented.
+        Future stochastic mappings (e.g. marginal costs, renewables)
+        can be appended to the data_mappings list.
+        """
+        # TODO:
+        # Future mappings for marginal costs and renewables may require one mapping
+        # per modified unit / variable, depending on how the scenario vector is encoded.
+        
+        data_mappings = []
+
+        if self.problem_structure.get("stochastic_demand", False):
+            data_mappings.append(
+                build_stochastic_mapping_demand(
+                    scenario_size=self.dimensions['UCBlock']['TimeHorizon']
+                )
+            )
+
+        if self.problem_structure.get("stochastic_marginal", False):
+            # TODO: add mapping(s) for set_linear when implemented
+            pass
+
+        if self.problem_structure.get("stochastic_renewables", False):
+            # TODO: add mapping(s) for set_max_power when implemented
+            pass
+
+        if not data_mappings:
+            raise ValueError(
+                "No stochastic data mappings were built for the TSSB StochasticBlock."
+            )
+
+        stochastic_block = build_tssb_stochastic_block_data(data_mappings)
+
+        self.dimensions.setdefault("tssb", {})
+        self.dimensions["tssb"]["sb"] = {
+            "NumberDataMappings": stochastic_block["NumberDataMappings"],
+            "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
+            "SetElements_dim": int(stochastic_block["SetElements"].shape[0]),
+        }
+
+        return stochastic_block
 #############################################################################################
 ############################## Backup #######################################################
 #############################################################################################

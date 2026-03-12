@@ -460,3 +460,71 @@ def build_tssb_static_abstract_path(design_variables):
         "PathRangeIndices": path_range_indices,
         "PathStart": np.array(path_start, dtype=np.uint32),
     }
+
+
+# Build stochastic block
+
+def build_stochastic_mapping_demand(scenario_size):
+    """
+    Build the stochastic data mapping for demand.
+
+    Notes
+    -----
+    The full scenario vector is passed to UCBlock::set_active_power_demand
+    through a single Range/Range mapping.
+    """
+    return {
+        "target": "demand",
+        "function_name": "UCBlock::set_active_power_demand",
+        "caller": "B",
+        "data_type": "D",
+        "set_size": [0, 0],
+        "set_elements": [0, int(scenario_size), 0, int(scenario_size)],
+    }
+
+
+def build_tssb_stochastic_block_data(data_mappings):
+    """
+    Build the StochasticBlock payload from a list of data mappings.
+    """
+    if not data_mappings:
+        raise ValueError("At least one stochastic data mapping is required.")
+
+    function_names = []
+    callers = []
+    data_types = []
+    set_size = []
+    set_elements = []
+
+    for mapping in data_mappings:
+        function_names.append(mapping["function_name"])
+        callers.append(mapping["caller"])
+        data_types.append(mapping["data_type"])
+        set_size.extend(mapping["set_size"])
+        set_elements.extend(mapping["set_elements"])
+
+    stochastic_block = {
+        "NumberDataMappings": len(data_mappings),
+        "FunctionName": np.array(function_names, dtype="object"),
+        "Caller": np.array(callers, dtype="object"),
+        "DataType": np.array(data_types, dtype="object"),
+        "SetSize": np.array(set_size, dtype=np.uint32),
+        "SetElements": np.array(set_elements, dtype=np.uint32),
+        "AbstractPath": {
+            "PathDim": 1,
+            "TotalLength": 0,
+            "PathGroupIndices": np.array([], dtype="object"),
+            "PathNodeTypes": np.array([], dtype="object"),
+            "PathElementIndices": np.ma.masked_array(
+                np.array([], dtype=np.uint32),
+                mask=np.array([], dtype=bool),
+            ),
+            "PathRangeIndices": np.ma.masked_array(
+                np.array([], dtype=np.uint32),
+                mask=np.array([], dtype=bool),
+            ),
+            "PathStart": np.array([0], dtype=np.uint32),
+        },
+    }
+
+    return stochastic_block
