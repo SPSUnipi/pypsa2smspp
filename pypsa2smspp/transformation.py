@@ -996,230 +996,206 @@ class Transformation:
     ## Create SMSNetwork
     def convert_to_blocks(self):
         """
-        Builds the SMSNetwork block hierarchy depending on whether
-        the problem is an investment (NumAssets > 0) or only unit commitment.
-    
-        Sets:
-        -------
-        self.sms_network : SMSNetwork
-            The built SMSNetwork structure.
-    
-        Returns
-        -------
-        SMSNetwork
-            The network with all blocks added.
+        Build the SMSNetwork hierarchy depending on:
+        - deterministic vs stochastic
+        - UC-only vs InvestmentBlock + UCBlock
         """
-    
-        # -----------------
-        # Initialize empty SMSNetwork
-        # -----------------
         sn = SMSNetwork(file_type=SMSFileType.eBlockFile)
         master = sn
         index_id = 0
-
-        if False:  # check if TSSB problem
-            name_id = 'TwoStageStochasticBlock'
-            sn = self.convert_to_twostagestochasticblock(master, index_id, name_id)
     
-            # InnerBlock for UC is inside StochasticBlock
-            master = sn.blocks[name_id]
-            name_id = 'InnerBlock'
+        # --------------------------------------------------
+        # Optional outer stochastic layer
+        # --------------------------------------------------
+        if self.problem_structure.get("is_stochastic", False):
+            stochastic_type = self.problem_structure.get("stochastic_type", None)
+    
+            if stochastic_type != "tssb":
+                raise ValueError(
+                    f"Unsupported stochastic_type in convert_to_blocks: {stochastic_type!r}"
+                )
+    
+            self.convert_to_tssb(master, index_id=0, name_id="Block_0")
+    
+            # Move master to the inner block container of StochasticBlock
+            master = sn.blocks["Block_0"].blocks["StochasticBlock"]
+            index_id = 0
+    
+        # --------------------------------------------------
+        # Deterministic investment / UC nesting
+        # --------------------------------------------------
+        if self.problem_structure.get("has_investment_block", False):
+            name_id = "InvestmentBlock"
+            self.convert_to_investmentblock(master, index_id, name_id)
+    
+            master = master.blocks[name_id]
             index_id += 1
-    
-        # -----------------
-        # Check if investment problem
-        # -----------------
-        if (not self.capacity_expansion_ucblock) and (self.dimensions['InvestmentBlock']['NumAssets'] > 0):
-             name_id = 'InvestmentBlock'
-             sn = self.convert_to_investmentblock(master, index_id, name_id)
-    
-             # InnerBlock for UC is inside InvestmentBlock
-             master = sn.blocks[name_id]
-             name_id = 'InnerBlock'
-             index_id += 1
+            name_id = "InnerBlock"
         else:
-            name_id = 'Block_0'
-        
-        # name_id = 'Block_0'
+            name_id = "Block_0"
     
-        # -----------------
-        # Add UCBlock (always present)
-        # -----------------
+        # --------------------------------------------------
+        # UCBlock always present
+        # --------------------------------------------------
         self.convert_to_ucblock(master, index_id, name_id)
     
-        # Save final
         self.sms_network = sn
         return sn
-
-
-    def build_tssb_scenario_set(self):
+    
+    def convert_to_tssb(self, master, index_id, name_id):
         """
-        Build a DiscreteScenarioSet for a TSSB (two-stage stochastic block) structure.
-        This helper loads a benchmark network from ``fp_tssb`` and extracts the scenario
-        data from the DiscreteScenarioSet block to create a new in-memory scenario set.
+        Add a TwoStageStochasticBlock to the SMSNetwork hierarchy.
+    
+        Structure:
+        TwoStageStochasticBlock
+        ├── DiscreteScenarioSet
+        ├── StaticAbstractPath
+        └── StochasticBlock
         """
-        # TODO: this shall be completely revised to create the scenario set from the data of the StochasticNetwork, not from a benchmark file. The current implementation is just a placeholder. Demand shall be aggregated by node and time and scenarios shall be created from the aggregated demand profiles. pool_weights shall be created from the probabilities of the scenarios.
-        fp_tssb = False
-        sn_benchmark = SMSNetwork(fp_tssb)
-
-        pool_weights = (
-            sn_benchmark.blocks["Block_0"]
-            .blocks["DiscreteScenarioSet"]
-            .variables["PoolWeights"]
-            .data
+        dims = self.dimensions["tssb"]["dss"]
+        number_scenarios = dims["NumberScenarios"]
+    
+        master.add(
+            "TwoStageStochasticBlock",
+            name_id,
+            id=f"{index_id}",
+            NumberScenarios=Dimension("NumberScenarios", number_scenarios),
         )
-
-        scenarios = (
-            sn_benchmark.blocks["Block_0"]
-            .blocks["DiscreteScenarioSet"]
-            .variables["Scenarios"]
-            .data
-        )
-
-        ScenarioSize = scenarios.shape[1]
-        NumberScenarios = scenarios.shape[0]
-
-        dds_block = Block(
+    
+        tssb_block = master.blocks[name_id]
+    
+        self.convert_to_discrete_scenario_set(tssb_block, "DiscreteScenarioSet")
+        self.convert_to_static_abstract_path(tssb_block, "StaticAbstractPath")
+        self.convert_to_stochastic_block(tssb_block, "StochasticBlock")
+    
+        return master
+    
+    def convert_to_discrete_scenario_set(self, master, name_id="DiscreteScenarioSet"):
+        """
+        Add the DiscreteScenarioSet block to a TSSB block.
+        """
+        dss_data = self.tssb_data["discrete_scenario_set"]
+        dims = self.dimensions["tssb"]["dss"]
+    
+        dss_block = Block(
             block_type="DiscreteScenarioSet",
-            ScenarioSize=ScenarioSize,
-            NumberScenarios=NumberScenarios,
+            NumberScenarios=Dimension("NumberScenarios", dims["NumberScenarios"]),
+            ScenarioSize=Dimension("ScenarioSize", dims["ScenarioSize"]),
             Scenarios=Variable(
                 "Scenarios",
                 "double",
                 ("NumberScenarios", "ScenarioSize"),
-                scenarios,
+                dss_data["scenarios"],
             ),
             PoolWeights=Variable(
                 "PoolWeights",
                 "double",
                 ("NumberScenarios",),
-                pool_weights,
+                dss_data["pool_weights"],
             ),
         )
-
-        return dds_block
-
-
-    def build_tssb_abstract_path(self):
+    
+        master.add_block(name_id, block=dss_block)
+        return master
+    
+    
+    def convert_to_static_abstract_path(self, master, name_id="StaticAbstractPath"):
         """
-        Build an AbstractPath for a TSSB (two-stage stochastic block) structure.
+        Add the StaticAbstractPath block to a TSSB block.
         """
-        # TODO: extract this from unit types depending on expandability, accounting for x_battery/x_converter. For ThermalUnitBlocks, x_thermal is mapped and similarly for the other units
-        variables = [
-            "x_thermal",
-            "x_intermittent",
-            "x_battery",
-            "x_converter",
-            "x_intermittent",
-        ]
-        locations = ["0", "1", "2", "2", "3"]
-
-        path_group_indices = np.array(
-            [str(item) for pair in zip(locations, variables) for item in pair],
-            dtype="object",
-        )
-
-        path_node_types = np.tile(["B", "V"], len(variables))
-
-        TotalLength = len(variables) * 2
-        PathDim = len(variables)  # for AbstractPath
-
-        def mask_by_node_type(arr, path_node_types):
-            return np.ma.masked_array(arr, mask=path_node_types == "B")
-
-        path_element_indices = mask_by_node_type(np.zeros(TotalLength), path_node_types)
-        path_range_indices = mask_by_node_type(np.ones(TotalLength), path_node_types)
-
-        abstract_path_block = Block(
-            PathDim=Dimension("PathDim", PathDim),
-            TotalLength=Dimension("TotalLength", TotalLength),
-            PathElementIndices=Variable(
-                "PathElementIndices",
+        sap_data = self.tssb_data["static_abstract_path"]
+        dims = self.dimensions["tssb"]["sap"]
+    
+        sap_block = Block(
+            block_type="AbstractPath",
+            PathDim=Dimension("PathDim", dims["PathDim"]),
+            TotalLength=Dimension("TotalLength", dims["TotalLength"]),
+            PathStart=Variable(
+                "PathStart",
                 "u4",
-                ("TotalLength",),
-                path_element_indices,  # important to have missing values! only ones does not work
-            ),
-            PathGroupIndices=Variable(
-                "PathGroupIndices",
-                "str",
-                ("TotalLength",),
-                np.array(
-                    path_group_indices,
-                    dtype="object",
-                ),
+                ("PathDim",),
+                sap_data["PathStart"],
             ),
             PathNodeTypes=Variable(
                 "PathNodeTypes",
                 "c",
                 ("TotalLength",),
-                path_node_types,
+                sap_data["PathNodeTypes"],
+            ),
+            PathGroupIndices=Variable(
+                "PathGroupIndices",
+                "str",
+                ("TotalLength",),
+                sap_data["PathGroupIndices"],
+            ),
+            PathElementIndices=Variable(
+                "PathElementIndices",
+                "u4",
+                ("TotalLength",),
+                sap_data["PathElementIndices"],
             ),
             PathRangeIndices=Variable(
                 "PathRangeIndices",
                 "u4",
                 ("TotalLength",),
-                path_range_indices,  # important to have missing values! only ones does not work
+                sap_data["PathRangeIndices"],
             ),
-            PathStart=Variable(
-                "PathStart",
+        )
+    
+        master.add_block(name_id, block=sap_block)
+        return master
+    
+    
+    def convert_to_stochastic_block(self, master, name_id="StochasticBlock"):
+        """
+        Add the StochasticBlock to a TSSB block.
+    
+        For now the inner AbstractPath is intentionally omitted.
+        """
+        sb_data = self.tssb_data["stochastic_block"]
+        dims = self.dimensions["tssb"]["sb"]
+    
+        sb_block = Block(
+            block_type="StochasticBlock",
+            NumberDataMappings=Dimension(
+                "NumberDataMappings",
+                dims["NumberDataMappings"],
+            ),
+            SetSize_dim=Dimension("SetSize_dim", dims["SetSize_dim"]),
+            SetElements_dim=Dimension("SetElements_dim", dims["SetElements_dim"]),
+            FunctionName=Variable(
+                "FunctionName",
+                "str",
+                ("NumberDataMappings",),
+                sb_data["FunctionName"],
+            ),
+            Caller=Variable(
+                "Caller",
+                "c",
+                ("NumberDataMappings",),
+                sb_data["Caller"],
+            ),
+            DataType=Variable(
+                "DataType",
+                "c",
+                ("NumberDataMappings",),
+                sb_data["DataType"],
+            ),
+            SetSize=Variable(
+                "SetSize",
                 "u4",
-                ("PathDim",),
-                np.arange(0, TotalLength, 2, dtype=np.uint32),  # ignored missing values
+                ("SetSize_dim",),
+                sb_data["SetSize"],
+            ),
+            SetElements=Variable(
+                "SetElements",
+                "u4",
+                ("SetElements_dim",),
+                sb_data["SetElements"],
             ),
         )
-
-        return abstract_path_block
-
     
-    def convert_to_twostagestochasticblock(self, master, index_id, name_id):
-        """
-        Adds a TwoStageStochasticBlock to the SMSNetwork, which is used for stochastic problems.
-    
-        Parameters
-        ----------
-        master : SMSNetwork
-            The root SMSNetwork object
-        index_id : int
-            ID for block naming
-        name_id : str
-            Name for the TwoStageStochasticBlock
-            
-        Returns
-        -------
-        SMSNetwork
-            The updated SMSNetwork with the TwoStageStochasticBlock added.
-        """
-
-        dds = self.build_tssb_scenario_set()
-        abstract_path = self.build_tssb_abstract_path()
-        stochastic_block = self.build_tssb_stochastic_block()
-        master.add(
-            "TwoStageStochasticBlock",
-            "Block_0",
-            id="0",
-            NumberScenarios=Dimension(
-                "NumberScenarios", dds.dimensions["NumberScenarios"].value
-            ),
-            DiscreteScenarioSet=dds,
-            StaticAbstractPath=abstract_path,
-            StochasticBlock=stochastic_block,
-        )
-    
-        # -----------------
-        # TwoStageStochasticBlock dimensions (currently empty, but can be extended)
-        # -----------------
-        kwargs = self.dimensions.get('TwoStageStochasticBlock', {})
-    
-        # -----------------
-        # Add TwoStageStochasticBlock itself
-        # -----------------
-        master.add(
-            "TwoStageStochasticBlock",
-            name_id,
-            id=f"{index_id}",
-            **kwargs
-        )
-    
+        master.add_block(name_id, block=sb_block)
         return master
     
     def convert_to_investmentblock(self, master, index_id, name_id):
@@ -1448,42 +1424,75 @@ class Transformation:
         )
 
 
+#############################################################################################
+################################ Optimize ##########################################
+#############################################################################################
+
     
     def optimize(self):
+        """
+        Optimize the already-built SMSNetwork.
+    
+        Solver/config selection is based on the top-level problem structure:
+        - deterministic UCBlock
+        - deterministic InvestmentBlock
+        - stochastic TwoStageStochasticBlock
+        """
     
         if self.sms_network is None:
             raise ValueError("SMSNetwork not initialized.")
     
-        # --- Decide block type from your flag (no "mode" needed) ---
-        if self.capacity_expansion_ucblock:
-            block_type = "UCBlock"
-            innerblock_name = "Block_0"
-        else:
+        # --------------------------------------------------
+        # Decide top-level block type for solver selection
+        # --------------------------------------------------
+        if self.problem_structure.get("is_stochastic", False):
+            stochastic_type = self.problem_structure.get("stochastic_type", None)
+    
+            if stochastic_type != "tssb":
+                raise ValueError(
+                    f"Unsupported stochastic_type in optimize: {stochastic_type!r}"
+                )
+    
+            block_type = "TwoStageStochasticBlock"
+            inner_block_name = "Block_0"
+    
+        elif self.problem_structure.get("has_investment_block", False):
             block_type = "InvestmentBlock"
-            innerblock_name = "InvestmentBlock"
-        
-        
-        # --- Resolve configfile/template ---
+            inner_block_name = "InvestmentBlock"
+    
+        else:
+            block_type = "UCBlock"
+            inner_block_name = "Block_0"
+    
+        # --------------------------------------------------
+        # Resolve configfile/template
+        # --------------------------------------------------
         default_template_map = {
             "UCBlock": "UCBlock/uc_solverconfig.txt",
             "InvestmentBlock": "InvestmentBlock/BSPar.txt",
+            # TODO: set the correct default template when the TSSB config is finalized
+            # "TwoStageStochasticBlock": "TwoStageStochasticBlock/tssb_solverconfig.txt",
         }
     
-        # self.configfile can be: "auto" | path-like string | Path | SMSConfig (optional)
         cfg = getattr(self, "configfile", "auto")
     
         if cfg is None or cfg == "auto":
+            if block_type not in default_template_map:
+                raise ValueError(
+                    f"No default config template is defined for block type {block_type!r}. "
+                    f"Please provide self.configfile explicitly."
+                )
             template = default_template_map[block_type]
             configfile = pysmspp.SMSConfig(template=str(template))
         else:
-            # Allow passing already-built SMSConfig
             if isinstance(cfg, pysmspp.SMSConfig):
                 configfile = cfg
             else:
-                # If you pass a path/string, we interpret it as a template path
                 configfile = pysmspp.SMSConfig(template=str(cfg))
     
-        # --- Workdir and filepaths ---
+        # --------------------------------------------------
+        # Workdir and filepaths
+        # --------------------------------------------------
         workdir = Path(self.workdir)
         workdir.mkdir(parents=True, exist_ok=True)
     
@@ -1491,7 +1500,9 @@ class Transformation:
         fp_log = None if self.fp_log is None else str(workdir / str(self.fp_log).format(name=self.name))
         fp_solution = None if self.fp_solution is None else str(workdir / str(self.fp_solution).format(name=self.name))
     
-        # --- Overwrite policy ---
+        # --------------------------------------------------
+        # Overwrite policy
+        # --------------------------------------------------
         if self.overwrite:
             for p in (fp_temp, fp_log, fp_solution):
                 if p is None:
@@ -1500,18 +1511,20 @@ class Transformation:
                 if pp.exists():
                     pp.unlink()
     
-        # --- Solver options dict (can be empty; PySMSpp uses defaults) ---
+        # --------------------------------------------------
+        # Solver options
+        # --------------------------------------------------
         solver_options = dict(self.pysmspp_options or {})
     
-        # Call SMS++ optimization
         self.result = self.sms_network.optimize(
             configfile=configfile,
             fp_temp=fp_temp,
             fp_log=fp_log,
             fp_solution=fp_solution,
-            inner_block_name=innerblock_name,
+            inner_block_name=inner_block_name,
             **solver_options,
         )
+    
         return self.result
 
 
@@ -1835,3 +1848,14 @@ class Transformation:
             
             self.generator_node['value'].append(bus)
             index += 1
+
+
+    def __repr__(self):
+        return (
+            f"Transformation(pypsa->sms++, "
+            f"stochastic={self.problem_structure.get('is_stochastic', False)}, "
+            f"stochastic_type={self.problem_structure.get('stochastic_type', None)}, "
+            f"has_investment_block={self.problem_structure.get('has_investment_block', None)})"
+        )
+    
+    __str__ = __repr__
