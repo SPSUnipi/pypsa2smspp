@@ -1003,6 +1003,7 @@ class Transformation:
         sn = SMSNetwork(file_type=SMSFileType.eBlockFile)
         master = sn
         index_id = 0
+        inside_tssb = False
     
         # --------------------------------------------------
         # Optional outer stochastic layer
@@ -1020,6 +1021,7 @@ class Transformation:
             # Move master to the inner block container of StochasticBlock
             master = sn.blocks["Block_0"].blocks["StochasticBlock"]
             index_id = 0
+            inside_tssb = True
     
         # --------------------------------------------------
         # Deterministic investment / UC nesting
@@ -1032,7 +1034,7 @@ class Transformation:
             index_id += 1
             name_id = "InnerBlock"
         else:
-            name_id = "Block_0"
+            name_id = "Block" if inside_tssb else "Block_0"
     
         # --------------------------------------------------
         # UCBlock always present
@@ -1470,8 +1472,7 @@ class Transformation:
         default_template_map = {
             "UCBlock": "UCBlock/uc_solverconfig.txt",
             "InvestmentBlock": "InvestmentBlock/BSPar.txt",
-            # TODO: set the correct default template when the TSSB config is finalized
-            # "TwoStageStochasticBlock": "TwoStageStochasticBlock/tssb_solverconfig.txt",
+            "TwoStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
         }
     
         cfg = getattr(self, "configfile", "auto")
