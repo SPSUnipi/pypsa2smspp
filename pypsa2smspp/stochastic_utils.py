@@ -248,6 +248,25 @@ def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
     """
     return demand_by_bus.T.to_numpy(dtype=float).reshape(-1)
 
+def flatten_bus_demand_node_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
+    """
+    Flatten bus demand with node-major / time-minor ordering.
+
+    Ordering:
+        (n0, t0), (n0, t1), ..., (n1, t0), (n1, t1), ...
+
+    Parameters
+    ----------
+    demand_by_bus : pd.DataFrame
+        Index = buses, columns = snapshots.
+
+    Returns
+    -------
+    np.ndarray
+        1D flattened vector.
+    """
+    return demand_by_bus.to_numpy(dtype=float).reshape(-1)
+
 
 def get_base_scenario_network(n):
     """Return a deterministic network for direct conversion.
@@ -309,11 +328,11 @@ def build_dss_demand(
                 fill_value=0.0,
             )
 
-        scenarios.append(flatten_bus_demand_time_major(demand_by_bus))
+        scenarios.append(flatten_bus_demand_node_major(demand_by_bus))
 
     scenario_matrix = np.vstack(scenarios).astype(float)
     pool_weights = get_scenario_probabilities(n).astype(float)
-    flattening = "time_major_node_minor"
+    flattening = "node_major_time_minor"
 
     return {
         "parameter": "demand",
