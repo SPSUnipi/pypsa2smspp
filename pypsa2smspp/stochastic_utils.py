@@ -369,35 +369,22 @@ def merge_tssb_dss_parts(dss_parts: List[Dict[str, Any] | None]) -> Dict[str, An
 def calculate_design_variables(
     investment_meta,
     unitblock_design_data,
+    network_block_index,
 ):
     """
     Build design-variable descriptors for the TSSB StaticAbstractPath.
-
-    Parameters
-    ----------
-    investment_meta : dict
-        Metadata collected during iterate_components.
-    unitblock_design_data : list[dict]
-        Design-variable metadata collected unit by unit.
-
-    Returns
-    -------
-    list[dict]
-        List of design-variable descriptors.
     """
     design_variables = []
 
-    # Unit-block design variables (already collected explicitly)
     for item in unitblock_design_data:
         design_variables.append(item)
 
-    # Network design variables from extendable lines/links
     design_lines = list(investment_meta.get("design_lines", []))
     if design_lines:
         for line_idx in design_lines:
             design_variables.append(
                 {
-                    "block_index": 0,
+                    "block_index": int(network_block_index),
                     "var_name": "x_network",
                     "component_type": "network",
                     "element_index": int(line_idx),
@@ -503,28 +490,49 @@ def build_tssb_stochastic_block_data(data_mappings):
         set_size.extend(mapping["set_size"])
         set_elements.extend(mapping["set_elements"])
 
+    number_mappings = len(data_mappings)
+    abstract_path = build_tssb_stochastic_block_abstract_path(number_mappings)
+
     stochastic_block = {
-        "NumberDataMappings": len(data_mappings),
+        "NumberDataMappings": number_mappings,
         "FunctionName": np.array(function_names, dtype="object"),
         "Caller": np.array(callers, dtype="object"),
         "DataType": np.array(data_types, dtype="object"),
         "SetSize": np.array(set_size, dtype=np.uint32),
         "SetElements": np.array(set_elements, dtype=np.uint32),
-        "AbstractPath": {
-            "PathDim": 1,
-            "TotalLength": 0,
-            "PathGroupIndices": np.array([], dtype="object"),
-            "PathNodeTypes": np.array([], dtype="object"),
-            "PathElementIndices": np.ma.masked_array(
-                np.array([], dtype=np.uint32),
-                mask=np.array([], dtype=bool),
-            ),
-            "PathRangeIndices": np.ma.masked_array(
-                np.array([], dtype=np.uint32),
-                mask=np.array([], dtype=bool),
-            ),
-            "PathStart": np.array([0], dtype=np.uint32),
-        },
+        "AbstractPath": abstract_path,
     }
 
     return stochastic_block
+
+
+def build_tssb_stochastic_block_abstract_path(number_mappings):
+    """
+    Build the AbstractPath for the StochasticBlock mappings.
+
+    Notes
+    -----
+    For now each mapping uses an empty path, meaning that the caller block
+    is the inner block reference passed by StochasticBlock at deserialization.
+    """
+    return {
+        "PathDim": int(number_mappings),
+        "TotalLength": 0,
+        "PathStart": np.zeros(int(number_mappings), dtype=np.uint32),
+        "PathNodeTypes": np.ma.masked_array(
+            np.array([], dtype="S1"),
+            mask=np.array([], dtype=bool),
+        ),
+        "PathGroupIndices": np.ma.masked_array(
+            np.array([], dtype=object),
+            mask=np.array([], dtype=bool),
+        ),
+        "PathElementIndices": np.ma.masked_array(
+            np.array([], dtype=np.uint32),
+            mask=np.array([], dtype=bool),
+        ),
+        "PathRangeIndices": np.ma.masked_array(
+            np.array([], dtype=np.uint32),
+            mask=np.array([], dtype=bool),
+        ),
+    }

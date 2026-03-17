@@ -1151,8 +1151,6 @@ class Transformation:
     def convert_to_stochastic_block(self, master, name_id="StochasticBlock"):
         """
         Add the StochasticBlock to a TSSB block.
-    
-        For now the inner AbstractPath is intentionally omitted.
         """
         sb_data = self.tssb_data["stochastic_block"]
         dims = self.dimensions["tssb"]["sb"]
@@ -1197,8 +1195,53 @@ class Transformation:
             ),
         )
     
+        self.add_sb_abstract_path(sb_block, sb_data["AbstractPath"])
+    
         master.add_block(name_id, block=sb_block)
         return master
+    
+    def add_sb_abstract_path(self, sb_block, ap_data, name_id="AbstractPath"):
+        """
+        Add the AbstractPath block inside a StochasticBlock.
+        """
+        ap_block = Block(
+            block_type="AbstractPath",
+            PathDim=Dimension("PathDim", ap_data["PathDim"]),
+            TotalLength=Dimension("TotalLength", ap_data["TotalLength"]),
+            PathStart=Variable(
+                "PathStart",
+                "u4",
+                ("PathDim",),
+                ap_data["PathStart"],
+            ),
+            PathNodeTypes=Variable(
+                "PathNodeTypes",
+                "c",
+                ("TotalLength",),
+                ap_data["PathNodeTypes"],
+            ),
+            PathGroupIndices=Variable(
+                "PathGroupIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathGroupIndices"],
+            ),
+            PathElementIndices=Variable(
+                "PathElementIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathElementIndices"],
+            ),
+            PathRangeIndices=Variable(
+                "PathRangeIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathRangeIndices"],
+            ),
+        )
+    
+        sb_block.add_block(name_id, block=ap_block)
+        return sb_block
     
     def convert_to_investmentblock(self, master, index_id, name_id):
         """
@@ -1762,10 +1805,13 @@ class Transformation:
                 .get("value", [])
             )
         }
+        
+        network_block_index = len(self.unitblocks)
     
         self.design_variables = calculate_design_variables(
             investment_meta=investment_meta,
             unitblock_design_data=self.unitblock_design_data,
+            network_block_index=network_block_index,
         )
         return self.design_variables
 
@@ -1808,11 +1854,14 @@ class Transformation:
 
         stochastic_block = build_tssb_stochastic_block_data(data_mappings)
 
-        self.dimensions.setdefault("tssb", {})
         self.dimensions["tssb"]["sb"] = {
             "NumberDataMappings": stochastic_block["NumberDataMappings"],
             "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
             "SetElements_dim": int(stochastic_block["SetElements"].shape[0]),
+            "AbstractPath": {
+                "PathDim": int(stochastic_block["AbstractPath"]["PathDim"]),
+                "TotalLength": int(stochastic_block["AbstractPath"]["TotalLength"]),
+            },
         }
 
         return stochastic_block

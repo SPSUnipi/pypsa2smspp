@@ -89,6 +89,7 @@ n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")
 statistics_pypsa = n_pypsa.statistics()
 
 transformation = Transformation(name=name,
+                                configfile="TSSBlock/TSSBSCfg_grb.txt",
                                 workdir="output/develop/tssb",
                                 stochastic_parameters={
                                     "stochastic_type": "tssb",
