@@ -54,6 +54,8 @@ from .inverse import (
     normalize_key,
     evaluate_function,
     dataarray_components,
+    block_to_dataarrays_stochastic,
+    broadcast_static_variables_over_scenarios,
 )
 from .io_parser import (
     parse_txt_to_unitblocks,
@@ -1019,8 +1021,10 @@ class Transformation:
         if len(names) != flow_matrix.shape[1]:
             raise ValueError("Mismatch between total network components and columns in FlowValue")
     
-        current_index = len(self.unitblocks)
         n_elements = flow_matrix.shape[1]
+    
+        # Fixed base index: DC blocks start right after physical UC blocks
+        base_index = self.dimensions["UCBlock"]["NumberUnits"]
     
         designlines = self.networkblock["Design"]["DesignLines"]["value"]
         designlines_set = set(np.atleast_1d(designlines).tolist())
@@ -1028,7 +1032,7 @@ class Transformation:
         i_ext = 0
     
         for i in range(n_elements):
-            block_index = current_index + i
+            block_index = base_index + i
             unitblock_name = f"DCNetworkBlock_{block_index}"
             block_type = types[i]
             block_label = "DCNetworkBlock_links" if block_type == "link" else "DCNetworkBlock_lines"
@@ -1077,8 +1081,8 @@ class Transformation:
                 self.unitblocks[unitblock_name]["scenarios"].setdefault(scenario_name, {})
                 self.unitblocks[unitblock_name]["scenarios"][scenario_name]["FlowValue"] = flow_value
                 self.unitblocks[unitblock_name]["scenarios"][scenario_name]["DesignVariable"] = design_value
-    
-    
+        
+        
     def prepare_dc_unitblock_info(self, n):
         """
         Return the (names, types) for DCNetworkBlock unitblocks.
@@ -1119,31 +1123,71 @@ class Transformation:
    
     
     def inverse_transformation(self, objective_smspp, n):
-        '''
+        """
         Performs the inverse transformation from the SMS++ blocks to xarray object.
-        The xarray wll be converted in a solution type Linopy file to get n.optimize()
-    
-        This method initializes the inverse process and sets inverse-conversion dicts
+        The xarray will be converted in a solution type Linopy file to get n.optimize().
     
         Parameters
         ----------
-        ojective_smspp: float
-            The objective function of the smspp problem
+        objective_smspp : float
+            The objective function value of the SMS++ problem.
         n : pypsa.Network
             A PyPSA network instance from which the data will be extracted.
-        '''
+        """
+        if self.problem_structure.get("is_stochastic", False):
+            self._inverse_transformation_stochastic(objective_smspp, n)
+        else:
+            self._inverse_transformation_deterministic(objective_smspp, n)
+    
+    
+    def _inverse_transformation_deterministic(self, objective_smspp, n):
+        """
+        Existing deterministic inverse transformation.
+        """
         all_dataarrays = self.iterate_blocks(n)
         self.ds = xr.Dataset(all_dataarrays)
-        
-        prepare_solution(n, self.ds, objective_smspp)
-        
+    
+        prepare_solution(
+            n,
+            self.ds,
+            objective_smspp,
+            is_stochastic=False,
+        )
+    
         n.optimize.assign_solution()
-        # n.optimize.assign_duals(n) # Still doesn't work
-        
+        # n.optimize.assign_duals(n)  # Still doesn't work
+    
         n._multi_invest = 0
-        #if not math.isinf(objective_smspp):
-        #    n.optimize.post_processing()
         n._objective_constant = 0
+    
+    
+    def _inverse_transformation_stochastic(self, objective_smspp, n):
+        """
+        Stochastic inverse transformation.
+    
+        Builds an xarray.Dataset whose variables mimic a PyPSA stochastic model,
+        i.e. operational variables with dimensions including 'scenario' and
+        design variables optionally duplicated over scenarios.
+        """
+        all_dataarrays = self.iterate_blocks_stochastic(n)
+        self.ds = xr.Dataset(all_dataarrays)
+    
+        prepare_solution(
+            n,
+            self.ds,
+            objective_smspp,
+            is_stochastic=True,
+        )
+    
+        n.optimize.assign_solution()
+    
+        n._multi_invest = 0
+        n._objective_constant = 0
+    
+        # Post-processing is mostly scenario-compatible in PyPSA.
+        # If something breaks here, this is the first thing to temporarily disable
+        # while debugging variable assignment.
+        n.optimize.post_processing()
         
         
     
@@ -1178,7 +1222,49 @@ class Transformation:
         # keep current behavior explicitly and avoid FutureWarnings
         return xr.merge(datasets, join="outer", compat="no_conflicts")
 
-
+    def iterate_blocks_stochastic(self, n):
+        """
+        Stochastic path: build PyPSA-like DataArrays with an additional 'scenario'
+        dimension whenever scenario-wise results are available.
+        """
+        datasets = []
+    
+        for name, unit_block in self.unitblocks.items():
+            component = component_definition(n, unit_block)
+    
+            if "scenarios" in unit_block:
+                dataarrays = block_to_dataarrays_stochastic(
+                    n=n,
+                    name=name,
+                    unit_block=unit_block,
+                    component=component,
+                    config=self.config,
+                    problem_structure=self.problem_structure,
+                    block_to_dataarrays_func=block_to_dataarrays,
+                )
+            else:
+                # Fallback for blocks that stayed deterministic-looking
+                dataarrays = block_to_dataarrays(
+                    n,
+                    name,
+                    unit_block,
+                    component,
+                    self.config,
+                )
+    
+            if dataarrays:
+                datasets.append(xr.Dataset(dataarrays))
+    
+        if not datasets:
+            return {}
+    
+        ds = xr.merge(datasets, join="outer", compat="no_conflicts")
+        ds = broadcast_static_variables_over_scenarios(
+            ds,
+            self.problem_structure.get("scenario_names", []),
+        )
+    
+        return dict(ds.data_vars)
 
 
 

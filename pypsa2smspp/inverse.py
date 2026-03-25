@@ -141,3 +141,112 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config) -> dict:
 
     return converted_dict
 
+
+
+def ensure_scenario_dim(da: xr.DataArray, scenario_name: str) -> xr.DataArray:
+    """
+    Add a scalar scenario dimension to a deterministic-looking DataArray.
+    """
+    if "scenario" in da.dims:
+        return da
+
+    return da.expand_dims(scenario=[scenario_name])
+
+
+def block_to_dataarrays_stochastic(
+    n,
+    name,
+    unit_block,
+    component,
+    config,
+    problem_structure,
+    block_to_dataarrays_func,
+):
+    """
+    Convert one physical unit block with scenario-wise results into PyPSA-like
+    xarray DataArrays.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        PyPSA network.
+    name : str
+        Name of the physical unit block in self.unitblocks.
+    unit_block : dict
+        Block dictionary with scenario-wise solution under unit_block["scenarios"].
+    component : str
+        Component type returned by component_definition(...).
+    config : object
+        Transformation config.
+    problem_structure : dict
+        Structure metadata containing scenario names.
+    block_to_dataarrays_func : callable
+        Existing deterministic converter, typically block_to_dataarrays(...).
+
+    Returns
+    -------
+    dict[str, xr.DataArray]
+        Mapping variable name -> DataArray.
+    """
+    scenario_names = problem_structure.get("scenario_names", [])
+    if not scenario_names:
+        return {}
+
+    per_variable = {}
+
+    for scenario_name in scenario_names:
+        scenario_values = unit_block.get("scenarios", {}).get(scenario_name, {})
+        if not scenario_values:
+            continue
+
+        # Build a temporary deterministic-style block:
+        # same physical metadata, but inject scenario solution at top level
+        temp_block = {
+            k: v for k, v in unit_block.items() if k != "scenarios"
+        }
+        temp_block.update(scenario_values)
+
+        scenario_dataarrays = block_to_dataarrays_func(
+            n,
+            name,
+            temp_block,
+            component,
+            config,
+        )
+
+        for var_name, da in scenario_dataarrays.items():
+            da = ensure_scenario_dim(da, scenario_name)
+            per_variable.setdefault(var_name, []).append(da)
+
+    merged = {}
+    for var_name, da_list in per_variable.items():
+        if da_list:
+            merged[var_name] = xr.concat(da_list, dim="scenario")
+
+    return merged
+
+
+def broadcast_static_variables_over_scenarios(ds: xr.Dataset, scenario_names) -> xr.Dataset:
+    """
+    Broadcast static-like variables over scenarios if they do not already
+    contain the scenario dimension.
+
+    This is useful for nominal/design variables in stochastic runs.
+    """
+    if not scenario_names:
+        return ds
+
+    updated = {}
+
+    for var_name, da in ds.data_vars.items():
+        if "scenario" in da.dims:
+            updated[var_name] = da
+            continue
+
+        # Heuristic: variables without snapshot dimension are treated as static
+        if "snapshot" not in da.dims:
+            updated[var_name] = da.expand_dims(scenario=scenario_names)
+        else:
+            updated[var_name] = da
+
+    return xr.Dataset(updated)

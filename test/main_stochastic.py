@@ -99,6 +99,6 @@ transformation = Transformation(name=name,
                                 }
                                 )
 nd.n = transformation.run(nd.n)
-
+statistics_smspp = nd.n.statistics()
 
 
