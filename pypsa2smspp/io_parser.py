@@ -201,33 +201,96 @@ class FakeVariable:
     """
     A dummy wrapper used to emulate PyPSA-style model.variable.solution attributes.
     """
+
     def __init__(self, solution):
         self.solution = solution
 
 
-def prepare_solution(n, ds: xr.Dataset, objective_smspp: float) -> None:
+class FakeObjective:
     """
-    Prepares a fake PyPSA model that wraps the xarray Dataset as a PyPSA-compatible solution.
+    Minimal wrapper for model.objective.value
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+
+class FakeParameters:
+    """
+    Minimal wrapper for model.parameters.<...>
+    """
+
+    pass
+
+
+class FakeConstraints:
+    """
+    Minimal wrapper for model.constraints.<...>
+    """
+
+    pass
+
+
+class FakeModel:
+    """
+    Minimal fake model compatible with the parts of PyPSA assign_solution()
+    and post_processing() that we rely on.
+    """
+
+    def __init__(self):
+        self.variables = {}
+        self.parameters = FakeParameters()
+        self.constraints = FakeConstraints()
+        self.objective = FakeObjective(0.0)
+
+
+def prepare_solution(
+    n,
+    ds: xr.Dataset,
+    objective_smspp: float,
+    *,
+    is_stochastic: bool = False,
+) -> None:
+    """
+    Prepare a fake PyPSA model that wraps the xarray Dataset as a PyPSA-compatible solution.
 
     Parameters
     ----------
     n : pypsa.Network
-        The original PyPSA network.
-    ds : xarray.Dataset
+        The PyPSA network.
+    ds : xr.Dataset
         The solution dataset to attach to the network.
-
-    Returns
-    -------
-    None (modifies n in place)
+    objective_smspp : float
+        Objective value from SMS++.
+    is_stochastic : bool, default False
+        Whether the dataset represents a stochastic PyPSA-like solution.
     """
-    n._model = type("FakeModel", (), {})()
-    n._model.variables = {name: FakeVariable(solution=dataarray) for name, dataarray in ds.items()}
+    model = FakeModel()
 
-    n._model.parameters = type("FakeParameters", (), {})()
-    n._model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+    model.variables = {
+        name: FakeVariable(solution=dataarray)
+        for name, dataarray in ds.items()
+    }
 
-    n._model.constraints = type("FakeConstraints", (), {})()
-    n._model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+    # Snapshots are always needed by assign_solution() and post_processing()
+    model.parameters.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
 
-    n._model.objective = type("FakeObjective", (), {})()
-    n._model.objective.value = objective_smspp
+    # Optional but useful for debugging / future compatibility
+    if is_stochastic:
+        if hasattr(n, "scenarios") and n.scenarios is not None:
+            model.parameters.scenarios = xr.DataArray(n.scenarios, dims=["scenario"])
+        elif "scenario" in ds.dims:
+            model.parameters.scenarios = xr.DataArray(
+                ds.coords["scenario"].values,
+                dims=["scenario"],
+            )
+
+    model.constraints.snapshots = xr.DataArray(n.snapshots, dims=["snapshot"])
+
+    if is_stochastic:
+        if hasattr(model.parameters, "scenarios"):
+            model.constraints.scenarios = model.parameters.scenarios
+
+    model.objective = FakeObjective(objective_smspp)
+
+    n._model = model

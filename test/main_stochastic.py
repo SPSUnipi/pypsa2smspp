@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_load'
+name = 'stochastic_base_load_dif'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -73,7 +73,7 @@ nd.n = add_slack_unit(nd.n)
 SCENARIOS = ["low", "med", "high"]
 load = nd.n.loads_t.p_set
 LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
-PROB = {"low": 0.4, "med": 0.3, "high": 0.3}  # Scenario probabilities
+PROB = {"low": 0.5, "med": 0.3, "high": 0.2}  # Scenario probabilities
 
 nd.n.set_scenarios(PROB)
 
@@ -83,17 +83,19 @@ for scenario in SCENARIOS:
 n_pypsa = nd.n.copy()
 
 n_pypsa.optimize(solver_name='gurobi')
+obj_pypsa = n_pypsa.objective + n_pypsa.objective_constant
 
-n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")
+# n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")
 
 statistics_pypsa = n_pypsa.statistics()
 
 transformation = Transformation(name=name,
                                 configfile="TSSBlock/TSSBSCfg_grb.txt",
+                                enable_thermal_units=False,
                                 workdir="output/develop/tssb",
                                 stochastic_parameters={
                                     "stochastic_type": "tssb",
-                                    "parameters": ["demand", "price"]
+                                    "parameters": ["demand"]
                                 }
                                 )
 nd.n = transformation.run(nd.n)

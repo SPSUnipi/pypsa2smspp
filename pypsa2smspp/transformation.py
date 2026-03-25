@@ -661,29 +661,54 @@ class Transformation:
     
     def parse_solution_to_unitblocks(self, solution, n):
         """
-        Parse a loaded SMS++ solution structure and populate self.unitblocks with unit-level data.
+        Parse a loaded SMS++ solution structure and populate self.unitblocks.
     
-        This function extracts the contents of UnitBlock_i from solution.blocks['Solution_0'],
-        and stores them into the corresponding entries of self.unitblocks. If transmission lines
-        are present, it also parses the NetworkBlock series and generates synthetic UnitBlocks
-        for each line or link.
+        Deterministic case
+        ------------------
+        Parse Solution_0 directly and store unit-level variables in the legacy flat
+        structure, e.g. self.unitblocks[block_name]["ActivePower"].
+    
+        Stochastic case
+        ---------------
+        Parse Solution_0 / ScenarioSolution_i blocks and store variables under:
+            self.unitblocks[block_name]["scenarios"][scenario_name][var_name]
     
         Parameters
         ----------
         solution : SMSNetwork
-            An in-memory SMS++ solution object (already parsed from file).
+            An in-memory SMS++ solution object.
         n : pypsa.Network
             The PyPSA network object used to retrieve line and link names.
     
         Returns
         -------
         solution_data : dict
-            A dictionary of blocks parsed from the SMSNetwork object (mainly for inspection).
+            Dictionary with parsed block references, mainly for inspection/debugging.
         """
-        num_units = self.dimensions['UCBlock']['NumberUnits']
+        if not hasattr(self, "unitblocks"):
+            raise ValueError("self.unitblocks must be initialized before parsing the solution.")
+    
+        if "Solution_0" not in solution.blocks:
+            raise KeyError("'Solution_0' not found in solution.blocks")
+    
+        if not hasattr(self, "networkblock") or self.networkblock is None:
+            self.networkblock = {}
+    
         solution_data = {}
     
-        solution_0 = solution.blocks['Solution_0']
+        if self.problem_structure.get("is_stochastic", False):
+            return self._parse_stochastic_solution_to_unitblocks(solution, n, solution_data)
+    
+        return self._parse_deterministic_solution_to_unitblocks(solution, n, solution_data)
+    
+    
+    def _parse_deterministic_solution_to_unitblocks(self, solution, n, solution_data):
+        """
+        Parse the legacy deterministic solution structure.
+        """
+        num_units = self.dimensions["UCBlock"]["NumberUnits"]
+    
+        solution_0 = solution.blocks["Solution_0"]
         has_investment = "DesignVariables" in solution_0.variables
     
         if has_investment:
@@ -693,112 +718,252 @@ class Transformation:
             inner_solution = solution_0
             solution_data["UCBlock"] = solution_0
     
-        if self.dimensions['UCBlock']['NumberLines'] > 0:
-            self.parse_networkblock_lines(inner_solution)
-            self.generate_line_unitblocks(n)
+        if self.dimensions["UCBlock"]["NumberLines"] > 0:
+            self.parse_networkblock_lines(inner_solution, scenario_name=None)
+            self.generate_line_unitblocks(n, scenario_name=None)
     
-        if not hasattr(self, "unitblocks"):
-            raise ValueError("self.unitblocks must be initialized before parsing the solution.")
-    
-        for i in range(num_units):
-            block_key = f"UnitBlock_{i}"
-            block = inner_solution.blocks[block_key]
-            solution_data[block_key] = block
-    
-            matching_key = next(
-                (key for key in self.unitblocks if key.endswith(f"_{i}")),
-                None
-            )
-    
-            if matching_key is None:
-                raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{i}")
-    
-            for var_name, var_obj in block.variables.items():
-                self.unitblocks[matching_key][var_name] = var_obj.data
-
+        self._parse_unitblocks_from_solution_block(
+            solution_block=inner_solution,
+            num_units=num_units,
+            scenario_name=None,
+            solution_data=solution_data,
+        )
     
         # Assign design variables if investment
         if has_investment:
             design_vars = solution_0.variables["DesignVariables"].data
             block_names = self.investmentblock.get("Blocks", [])
             assign_design_variables_to_unitblocks(self.unitblocks, block_names, design_vars)
-       
+    
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
     
     
-    
-    def parse_networkblock_lines(self, solution_0):
+    def _parse_stochastic_solution_to_unitblocks(self, solution, n, solution_data):
         """
-        Parse line-level time series from an SMS++ solution.
+        Parse the stochastic TSSB solution structure.
     
-        If Solution_0 contains a single 'NetworkBlock' already aggregated across time,
-        read variables directly. Otherwise, fall back to stacking 'NetworkBlock_i'
-        (one per snapshot). Result is stored in self.networkblock['Lines'][var] with
-        shape (time, element).
+        Expected layout:
+            Solution_0
+                ScenarioSolution_0
+                ScenarioSolution_1
+                ...
+    
+        Variables are stored in:
+            self.unitblocks[matching_key]["scenarios"][scenario_name][var_name]
         """
+        num_units = self.dimensions["UCBlock"]["NumberUnits"]
+        scenario_names = list(self.problem_structure["scenario_names"])
+        expected_n_scenarios = self.problem_structure["number_scenarios"]
     
+        if len(scenario_names) != expected_n_scenarios:
+            raise ValueError(
+                f"Mismatch between problem_structure['scenario_names'] ({len(scenario_names)}) "
+                f"and problem_structure['number_scenarios'] ({expected_n_scenarios})."
+            )
+    
+        solution_0 = solution.blocks["Solution_0"]
+        solution_data["TSSB"] = solution_0
+    
+        # Keep a scenario-wise container for parsed network data
+        self.networkblock.setdefault("Scenarios", {})
+    
+        for i, scenario_name in enumerate(scenario_names):
+            scenario_block_key = f"ScenarioSolution_{i}"
+    
+            if scenario_block_key not in solution_0.blocks:
+                raise KeyError(
+                    f"{scenario_block_key} not found in Solution_0. "
+                    f"Expected one scenario block per scenario in problem_structure."
+                )
+    
+            scenario_block = solution_0.blocks[scenario_block_key]
+            solution_data[scenario_block_key] = scenario_block
+    
+            if self.dimensions["UCBlock"]["NumberLines"] > 0:
+                self.parse_networkblock_lines(scenario_block, scenario_name=scenario_name)
+                self.generate_line_unitblocks(n, scenario_name=scenario_name)
+    
+            self._parse_unitblocks_from_solution_block(
+                solution_block=scenario_block,
+                num_units=num_units,
+                scenario_name=scenario_name,
+                solution_data=solution_data,
+            )
+    
+        split_merged_dcnetworkblocks(self.unitblocks)
+        return solution_data
+    
+    
+    def _parse_unitblocks_from_solution_block(
+        self,
+        solution_block,
+        num_units,
+        scenario_name=None,
+        solution_data=None,
+    ):
+        """
+        Parse UnitBlock_i from a generic solution block.
+    
+        Parameters
+        ----------
+        solution_block : Block
+            Solution block containing UnitBlock_i.
+        num_units : int
+            Number of physical unit blocks.
+        scenario_name : str or None, optional
+            If None, variables are stored in legacy flat format.
+            Otherwise they are stored under ["scenarios"][scenario_name].
+        solution_data : dict or None, optional
+            Optional dictionary used for inspection/debugging.
+        """
+        for i in range(num_units):
+            block_key = f"UnitBlock_{i}"
+    
+            if block_key not in solution_block.blocks:
+                raise KeyError(f"{block_key} not found in solution block")
+    
+            block = solution_block.blocks[block_key]
+    
+            if solution_data is not None:
+                if scenario_name is None:
+                    solution_data[block_key] = block
+                else:
+                    solution_data.setdefault("scenarios", {})
+                    solution_data["scenarios"].setdefault(scenario_name, {})
+                    solution_data["scenarios"][scenario_name][block_key] = block
+    
+            matching_key = self._get_matching_unitblock_key(i)
+    
+            for var_name, var_obj in block.variables.items():
+                self._store_unitblock_variable(
+                    matching_key=matching_key,
+                    var_name=var_name,
+                    data=var_obj.data,
+                    scenario_name=scenario_name,
+                )
+    
+    
+    def _get_matching_unitblock_key(self, unit_index):
+        """
+        Return the key in self.unitblocks corresponding to UnitBlock_{unit_index}.
+        """
+        matching_key = next(
+            (key for key in self.unitblocks if key.endswith(f"_{unit_index}")),
+            None,
+        )
+    
+        if matching_key is None:
+            raise KeyError(f"No matching key found in self.unitblocks for UnitBlock_{unit_index}")
+    
+        return matching_key
+    
+    
+    def _store_unitblock_variable(self, matching_key, var_name, data, scenario_name=None):
+        """
+        Store a parsed variable into self.unitblocks.
+    
+        Deterministic:
+            self.unitblocks[matching_key][var_name] = data
+    
+        Stochastic:
+            self.unitblocks[matching_key]["scenarios"][scenario_name][var_name] = data
+        """
+        if scenario_name is None:
+            self.unitblocks[matching_key][var_name] = data
+            return
+    
+        self.unitblocks[matching_key].setdefault("scenarios", {})
+        self.unitblocks[matching_key]["scenarios"].setdefault(scenario_name, {})
+        self.unitblocks[matching_key]["scenarios"][scenario_name][var_name] = data
+    
+    
+    def parse_networkblock_lines(self, solution_block, scenario_name=None):
+        """
+        Parse line-level time series from a generic SMS++ solution block.
+    
+        If the block contains a single aggregated 'NetworkBlock', variables are read
+        directly. Otherwise, it falls back to stacking 'NetworkBlock_i'.
+    
+        Deterministic storage:
+            self.networkblock["Lines"][var] -> shape (time, element)
+    
+        Stochastic storage:
+            self.networkblock["Scenarios"][scenario_name]["Lines"][var] -> shape (time, element)
+        """
         vars_of_interest = ("FlowValue", "NodeInjection")
     
-        blocks = solution_0.blocks
+        if scenario_name is None:
+            self.networkblock.setdefault("Lines", {})
+            target = self.networkblock["Lines"]
+        else:
+            self.networkblock.setdefault("Scenarios", {})
+            self.networkblock["Scenarios"].setdefault(scenario_name, {})
+            self.networkblock["Scenarios"][scenario_name].setdefault("Lines", {})
+            target = self.networkblock["Scenarios"][scenario_name]["Lines"]
     
-        # --- Case 1: new format, single aggregated block -------------------------
+        blocks = solution_block.blocks
+    
+        # --- Case 1: aggregated NetworkBlock -------------------------------------
         if "NetworkBlock" in blocks:
             block = blocks["NetworkBlock"]
-            
+    
             if "DesignNetworkBlock_0" in block.blocks:
                 block = block.blocks["DesignNetworkBlock_0"]
-                vars_of_interest = vars_of_interest + ("DesignValue",)
+                vars_local = vars_of_interest + ("DesignValue",)
+            else:
+                vars_local = vars_of_interest
     
-            for var in vars_of_interest:
+            for var in vars_local:
                 if var not in block.variables:
                     raise KeyError(f"{var} not found in NetworkBlock")
     
-                arr = block.variables[var].data  # expected shape: (time, element)
+                arr = block.variables[var].data
     
-                # Sanity: make sure we end up with 2D (time, element)
                 if arr.ndim == 1:
-                    # If ndim==1, assume it is (element,) repeated over a single time
                     arr = arr[np.newaxis, :]
     
                 if arr.ndim != 2:
                     raise ValueError(
-                        f"Unexpected shape for {var} in NetworkBlock: {arr.shape} (expected 2D)"
+                        f"Unexpected shape for {var} in NetworkBlock: {arr.shape} "
+                        f"(expected 2D)"
                     )
     
-                self.networkblock["Lines"][var] = arr
+                target[var] = arr
     
-            return  # done
+            return
     
-        # --- Case 2: legacy format, multiple NetworkBlock_i ----------------------
-        # Collect and sort by numeric suffix to be safe w.r.t. missing/extra blocks
+        # --- Case 2: legacy per-time NetworkBlock_i ------------------------------
         nb_keys = [
             k for k in blocks.keys()
             if k.startswith("NetworkBlock_") and k[len("NetworkBlock_"):].isdigit()
         ]
+    
         if not nb_keys:
-            raise KeyError("No 'NetworkBlock' or 'NetworkBlock_i' blocks found in Solution_0")
+            raise KeyError("No 'NetworkBlock' or 'NetworkBlock_i' blocks found in solution block")
     
         nb_keys.sort(key=lambda k: int(k.split("_")[-1]))
     
-        # Stack per-time blocks into (time, element)
         variable_first_lengths = {v: None for v in vars_of_interest}
         stacked = {v: [] for v in vars_of_interest}
     
         for k in nb_keys:
             block = blocks[k]
+    
             for var in vars_of_interest:
                 if var not in block.variables:
                     raise KeyError(f"{var} not found in {k}")
+    
                 arr = block.variables[var].data
     
-                # Each per-time block is expected to be 1D (element,) or 2D (1, element)
                 if arr.ndim == 2 and arr.shape[0] == 1:
                     arr = arr[0]
-                if arr.ndim != 1:
-                    raise ValueError(f"Unexpected shape for {var} in {k}: {arr.shape} (expected 1D)")
     
-                # Track element dimension consistency
+                if arr.ndim != 1:
+                    raise ValueError(
+                        f"Unexpected shape for {var} in {k}: {arr.shape} (expected 1D)"
+                    )
+    
                 if variable_first_lengths[var] is None:
                     variable_first_lengths[var] = arr.shape[0]
                 elif variable_first_lengths[var] != arr.shape[0]:
@@ -810,37 +975,44 @@ class Transformation:
                 stacked[var].append(arr)
     
         for var, lst in stacked.items():
-            # Shape -> (time, element)
-            self.networkblock["Lines"][var] = np.stack(lst, axis=0)
-
-
-
+            target[var] = np.stack(lst, axis=0)
     
-    def generate_line_unitblocks(self, n):
+    
+    def generate_line_unitblocks(self, n, scenario_name=None):
         """
-        Generate synthetic UnitBlocks for lines and links based on combined FlowValue data.
+        Generate or update synthetic DCNetworkBlock_* unitblocks for lines and links.
     
-        This function splits the FlowValue and DualCost arrays into individual unitblocks.
-        Each block is labeled as 'DCNetworkBlock_lines' or 'DCNetworkBlock_links' based on type.
+        Deterministic case
+        ------------------
+        Store directly:
+            self.unitblocks[unitblock_name]["FlowValue"]
+            self.unitblocks[unitblock_name]["DesignVariable"]
     
-        Parameters
-        ----------
-        n : pypsa.Network
-            PyPSA network object containing line and link names.
-    
-        Raises
-        ------
-        ValueError
-            If array dimensions are inconsistent.
+        Stochastic case
+        ---------------
+        Store under:
+            self.unitblocks[unitblock_name]["scenarios"][scenario_name]["FlowValue"]
+            self.unitblocks[unitblock_name]["scenarios"][scenario_name]["DesignVariable"]
         """
-        flow_matrix = self.networkblock['Lines']['FlowValue']
-        if 'DesignValue' in self.networkblock['Lines'].keys():
-           design_matrix = self.networkblock['Lines']['DesignValue'] 
+        if scenario_name is None:
+            lines_data = self.networkblock["Lines"]
         else:
-           design_matrix = 0
+            if "Scenarios" not in self.networkblock or scenario_name not in self.networkblock["Scenarios"]:
+                raise KeyError(f"Scenario '{scenario_name}' not found in self.networkblock['Scenarios']")
+            lines_data = self.networkblock["Scenarios"][scenario_name]["Lines"]
+    
+        if "FlowValue" not in lines_data:
+            raise KeyError("FlowValue not found in parsed networkblock lines")
+    
+        flow_matrix = lines_data["FlowValue"]
+    
+        if "DesignValue" in lines_data:
+            design_matrix = lines_data["DesignValue"]
+        else:
+            design_matrix = None
     
         names, types = self.prepare_dc_unitblock_info(n)
-        
+    
         links_effs = self.networkblock.get("efficiencies", {})
         max_eff_len = self.networkblock.get("max_eff_len", 1)
     
@@ -849,7 +1021,10 @@ class Transformation:
     
         current_index = len(self.unitblocks)
         n_elements = flow_matrix.shape[1]
-        designlines = self.networkblock['Design']['DesignLines']['value']
+    
+        designlines = self.networkblock["Design"]["DesignLines"]["value"]
+        designlines_set = set(np.atleast_1d(designlines).tolist())
+    
         i_ext = 0
     
         for i in range(n_elements):
@@ -857,47 +1032,65 @@ class Transformation:
             unitblock_name = f"DCNetworkBlock_{block_index}"
             block_type = types[i]
             block_label = "DCNetworkBlock_links" if block_type == "link" else "DCNetworkBlock_lines"
-            
-            if i in designlines:
-                designvariable = design_matrix[:, i_ext] if isinstance(design_matrix, np.ndarray) else self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
+    
+            if unitblock_name not in self.unitblocks:
+                entry = {
+                    "enumerate": f"UnitBlock_{block_index}",
+                    "block": block_label,
+                    "name": names[i],
+                }
+    
+                if block_type == "link":
+                    eff_list = links_effs.get(names[i], None)
+                    if eff_list is None:
+                        eff_list = [1.0] + [0.0] * max(0, max_eff_len - 1)
+                    entry["Efficiencies"] = eff_list
+    
+                self.unitblocks[unitblock_name] = entry
+    
+            if i in designlines_set:
+                if design_matrix is None:
+                    design_value = self.networkblock["Lines"]["variables"]["MaxPowerFlow"]["value"][i]
+                else:
+                    if isinstance(design_matrix, np.ndarray):
+                        if design_matrix.ndim == 1:
+                            design_value = design_matrix[i_ext]
+                        elif design_matrix.ndim == 2:
+                            design_value = design_matrix[:, i_ext]
+                        else:
+                            raise ValueError(
+                                f"Unexpected DesignValue shape: {design_matrix.shape}"
+                            )
+                    else:
+                        design_value = design_matrix
                 i_ext += 1
             else:
-                designvariable = self.networkblock['Lines']['variables']['MaxPowerFlow']['value'][i]
-
-            entry = {
-                "enumerate": f"UnitBlock_{block_index}",
-                "block": block_label,
-                "name": names[i],
-                "FlowValue": flow_matrix[:, i],
-                # "DualCost": dual_matrix[:, i],
-                "DesignVariable": designvariable,
-            }
-            
-            if block_type == "link":
-                # Add value of efficiency
-                eff_list = links_effs.get(names[i], None)
-                if eff_list is None:
-                    # If not present, create [1.0, 0.0, ..., 0.0] max_eff_len long (fallback)
-                    eff_list = [1.0] + [0.0] * max(0, max_eff_len - 1)
-                entry["Efficiencies"] = eff_list
-            
-            self.unitblocks[unitblock_name] = entry
-        
-
+                design_value = self.networkblock["Lines"]["variables"]["MaxPowerFlow"]["value"][i]
+    
+            flow_value = flow_matrix[:, i]
+    
+            if scenario_name is None:
+                self.unitblocks[unitblock_name]["FlowValue"] = flow_value
+                self.unitblocks[unitblock_name]["DesignVariable"] = design_value
+            else:
+                self.unitblocks[unitblock_name].setdefault("scenarios", {})
+                self.unitblocks[unitblock_name]["scenarios"].setdefault(scenario_name, {})
+                self.unitblocks[unitblock_name]["scenarios"][scenario_name]["FlowValue"] = flow_value
+                self.unitblocks[unitblock_name]["scenarios"][scenario_name]["DesignVariable"] = design_value
+    
+    
     def prepare_dc_unitblock_info(self, n):
         """
         Return the (names, types) for DCNetworkBlock unitblocks.
-        Prefer the 'physical' view from self._dc_index (NumberLines),
-        which matches FlowValue columns in NetworkBlock.
+        Prefer the physical view from self._dc_index, which matches FlowValue columns.
         """
-        if hasattr(self, "_dc_index") and self._dc_index and 'physical' in self._dc_index:
-            names = list(self._dc_index['physical']['names'])
-            types = list(self._dc_index['physical']['types'])
+        if hasattr(self, "_dc_index") and self._dc_index and "physical" in self._dc_index:
+            names = list(self._dc_index["physical"]["names"])
+            types = list(self._dc_index["physical"]["types"])
             return names, types
     
-        # Fallback legacy (se proprio manca il registry)
-        num_lines = self.dimensions['NetworkBlock']['Lines']
-        num_links = self.dimensions['NetworkBlock']['Links']
+        num_lines = self.dimensions["NetworkBlock"]["Lines"]
+        num_links = self.dimensions["NetworkBlock"]["Links"]
     
         line_names = list(n.lines.index)
         link_names = list(n.links.index)
@@ -914,7 +1107,7 @@ class Transformation:
             )
     
         names = line_names + link_names
-        types = (['line'] * num_lines) + (['link'] * num_links)
+        types = (["line"] * num_lines) + (["link"] * num_links)
         return names, types
 
 
