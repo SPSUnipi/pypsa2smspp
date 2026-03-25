@@ -75,7 +75,7 @@ nd.n = clean_ciclicity_storage(nd.n)
 nd.n = add_slack_unit(nd.n)
 
 network = nd.n.copy()
-network.optimize(solver_name='gurobi')
+network.optimize(solver_name='highs')
 
 # network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
@@ -85,7 +85,8 @@ network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
 
 transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0],
                                 workdir="output/develop",
-                                enable_thermal_units=True)
+                                enable_thermal_units=False,
+                                capacity_expansion_ucblock=True)
 nd.n = transformation.run(nd.n)
 
 # cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
