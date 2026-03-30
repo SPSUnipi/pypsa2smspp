@@ -59,23 +59,37 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'test_pypsaeur'
+name = 'sector_coupled_pypsaeur'
 
 #%% Network definition with PyPSA
 config = TestConfig()
-if "sector" in config.input_name_components:
-    config.load_sign = -1
+
+if name == None:
+    name = config.input_name_components.split("/")[-1].split(".")[0]
+
+# if "sector" in config.input_name_components:
+#     config.load_sign = -1
 
 nd = NetworkDefinition(config)
 
-nd.n = clean_ciclicity_storage(nd.n)
+# nd.n = clean_ciclicity_storage(nd.n)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
 nd.n = add_slack_unit(nd.n)
 
 network = nd.n.copy()
-network.optimize(solver_name='highs')
+SOLVER_OPTIONS = {
+    "Threads": 32,
+    "Method": 2,       # barrier
+    "Crossover": 0,
+    "BarConvTol": 1e-5,
+    "Seed": 123,
+    "AggFill": 0,
+    "PreDual": 0,
+}
+
+network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
 
 # network.export_to_netcdf(f"output/pypsa_{name}.nc")
 
@@ -83,24 +97,23 @@ network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
 
 #%% Transformation class
 
-transformation = Transformation(name=config.input_name_components.split("/")[-1].split(".")[0],
-                                workdir="output/develop",
+transformation = Transformation(name=name,
+                                workdir="output/develop/sector_coupled",
                                 enable_thermal_units=False,
-                                capacity_expansion_ucblock=True)
+                                capacity_expansion_ucblock=True,
+                                configfile="UCBlock/uc_solverconfig_grb.txt",
+                                merge_links=False)
 nd.n = transformation.run(nd.n)
-
-# cfg_path = Path("..") / "pypsa2smspp" / "data" / "config_default.yaml"
-# cfg_path = cfg_path.resolve()
 
 # nd.n = nd.n.smspp(verbose=True)
 
 objective_pypsa = network.objective + network.objective_constant
 objective_smspp = nd.n.objective
 
-error = (objective_pypsa - objective_smspp) / objective_pypsa * 100
+error = (objective_smspp - objective_pypsa) / objective_pypsa * 100
     
 print(f"Error PyPSA-SMS++ of {error}%")
 
-statistics_pypsa = network.statistics()
-statistics_smspp = nd.n.statistics()
+stats_pypsa = network.statistics()
+stats_smspp = nd.n.statistics()
 

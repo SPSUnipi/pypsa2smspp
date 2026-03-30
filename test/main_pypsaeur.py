@@ -26,12 +26,14 @@ import pypsa
 
 # Inputs
 # NETWORK_NC = Path(r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_5_elec_.nc")
-NETWORK_NC = Path(
-    r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_20_elec_.nc"
-)
+# NETWORK_NC = Path(
+#     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_20_elec_.nc"
+# )
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_giga_small.nc")
+
 
 # Output
-OUT_ROOT = Path("output/unit_commitment")
+OUT_ROOT = Path("output/develop")
 CASE_NAME = None  # if None -> derived from NETWORK_NC.stem
 
 # PyPSA reference solve
@@ -48,9 +50,9 @@ SOLVER_OPTIONS = {
 
 # Transformation toggles
 CAPACITY_EXPANSION_UCBLOCK = True      # True -> UCBlock, False -> InvestmentBlock
-ENABLE_THERMAL_UNITS = True            # False -> everything (except slack) treated as intermittent
+ENABLE_THERMAL_UNITS = False            # False -> everything (except slack) treated as intermittent
 INTERMITTENT_CARRIERS = None           # None -> default renewable_carriers; list/str -> override
-MERGE_LINKS = True                     # False / True / ["tes","battery","h2", ...]
+MERGE_LINKS = False                    # False / True / ["tes","battery","h2", ...]
 MERGE_SELECTOR = None                  # optional callable (only needed for custom merge tags)
 
 # SMS++ artifacts (rendered with {name} and placed in CASE_DIR)
@@ -61,7 +63,7 @@ FP_SOLUTION = "smspp_{name}_solution.nc"
 # SMS++ config selection (no YAML)
 # - "auto" chooses a default template based on CAPACITY_EXPANSION_UCBLOCK inside Transformation.optimize()
 # - otherwise pass a template path or a pysmspp.SMSConfig (depending on your implementation)
-CONFIGFILE = "auto"
+CONFIGFILE = "UCBlock/uc_solverconfig_grb.txt"
 
 # Optional: pass-through options for pySMSpp (all optional; defaults exist in pySMSpp)
 # Examples:
@@ -70,12 +72,12 @@ PYSMSSP_OPTIONS = {}
 
 # Cleaning toggles
 DO_CLEAN_E_SUM = False
-DO_CLEAN_CICLICITY_STORAGE = True
-DO_ADD_SLACK_UNIT = False
-DO_REDUCE_SNAPSHOTS = False
+DO_CLEAN_CICLICITY_STORAGE = False
+DO_ADD_SLACK_UNIT = True
+DO_REDUCE_SNAPSHOTS = True
 REDUCE_SNAPSHOTS_TO = 24
-# DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
-# DO_CLEAN_STORES = False         # optional, kept off by default
+DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
+DO_CLEAN_STORES = False         # optional, kept off by default
 
 # Debug artifacts
 EXPORT_PYPSA_LP = True
@@ -230,17 +232,17 @@ try:
         n_smspp = add_slack_unit(n_smspp)
 
     # Optional cleanups (uncomment if needed)
-    # if DO_CLEAN_STORAGE_UNITS:
-    #     n_smspp = clean_storage_units(n_smspp)
-    # if DO_CLEAN_STORES:
-    #     n_smspp = clean_stores(n_smspp)
+    if DO_CLEAN_STORAGE_UNITS:
+        n_smspp = clean_storage_units(n_smspp)
+    if DO_CLEAN_STORES:
+        n_smspp = clean_stores(n_smspp)
 
     # -------- PyPSA optimization (reference) --------
     network = n_smspp.copy()
     network.optimize(
         solver_name=SOLVER_NAME,
         solver_options=SOLVER_OPTIONS,
-        linearized_unit_commitment=True,
+        # linearized_unit_commitment=True,
     )
 
     if EXPORT_PYPSA_LP:
@@ -275,7 +277,7 @@ try:
         pysmspp_options=PYSMSSP_OPTIONS,
     )
 
-    n_smspp = transformation.run(network, verbose=VERBOSE)
+    n_smspp = transformation.run(n_smspp, verbose=VERBOSE)
 
     obj_smspp = float(transformation.result.objective_value)
     metrics["Obj_SMSpp"] = obj_smspp

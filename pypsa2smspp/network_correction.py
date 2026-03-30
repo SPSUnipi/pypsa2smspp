@@ -260,27 +260,39 @@ def reduce_snapshots_and_scale_costs(
 
 def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     """
-    Adds a high-cost slack generator to each bus in the network,
-    excluding buses whose names end with specific suffixes (e.g., H2, battery).
+    Add a high-cost slack generator only to buses that actually host at least one load,
+    excluding buses whose names end with specific suffixes (e.g. H2, battery).
 
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to which slack units will be added.
     exclude_suffixes : tuple of str, optional
-        Bus-name suffixes (case-insensitive) to exclude. Default: ("H2", "battery")
+        Bus-name suffixes (case-insensitive) to exclude.
+        Default: ("H2", "battery")
+
+    Returns
+    -------
+    n : pypsa.Network
+        The network with slack generators added.
     """
-    # Compute the maximum total demand over all time steps
-    max_total_demand = n.loads_t.p_set.sum(axis=1).max()
-    min_total_demand = n.loads_t.p_set.sum(axis=1).min()
-    
+    # Compute the maximum and minimum total demand over all time steps
+    total_demand = n.loads_t.p_set.sum(axis=1)
+    max_total_demand = total_demand.max()
+    min_total_demand = total_demand.min()
+
     # Helper to decide if a bus should be excluded
     def _is_excluded(bus_name: str) -> bool:
         bn = str(bus_name).strip().lower()
         return any(bn.endswith(sfx.lower()) for sfx in exclude_suffixes)
 
-    # Iterate over eligible buses only
+    # Keep only buses that actually have at least one load attached
+    load_buses = set(n.loads.bus.dropna().astype(str))
+
+    # Iterate only over buses with load and not excluded
     for bus in n.buses.index:
+        if str(bus) not in load_buses:
+            continue
         if _is_excluded(bus):
             continue
 
@@ -289,7 +301,7 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
             name=f"slack_unit {bus}",
             carrier="slack",
             bus=bus,
-            p_nom=max_total_demand if max_total_demand > 0 else -min_total_demand,
+            p_nom=5 * max_total_demand if max_total_demand > 0 else -min_total_demand,
             p_max_pu=1 if max_total_demand > 0 else 0,
             p_min_pu=0 if max_total_demand > 0 else -1,
             marginal_cost=10000 if max_total_demand > 0 else -10000,

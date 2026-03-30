@@ -10,162 +10,405 @@ import numpy as np
 import logging
 import pypsa
 
-LOG_FORMAT = ('%(levelname) -10s %(asctime)s %(name) -10s %(funcName) '
-              '-10s %(lineno) -5d: %(message)s')
+LOG_FORMAT = (
+    '%(levelname) -10s %(asctime)s %(name) -10s %(funcName) '
+    '-10s %(lineno) -5d: %(message)s'
+)
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logging.getLogger("Article").setLevel(logging.WARNING)
 
-#%% Definition of the network
+
 class NetworkDefinition:
     """
     NetworkDefinition class for building a PyPSA network from input Excel files.
 
-    This class reads data from multiple Excel files, including files for components, 
-    demand profiles, costs, and renewable energy sources. The paths to these files are 
-    provided by a parser object, reading from config/application.ini.
-    It then constructs a PyPSA network based on this data.
+    This class reads data from Excel files and constructs a PyPSA network.
+    It supports:
+    - static component sheets (Bus, Generator, Link, ...)
+    - generic PyPSA-style time-series override sheets with naming:
+      '<component>_t_<attribute>'
+      examples:
+          - loads_t_p_set
+          - generators_t_p_max_pu
+          - storage_units_t_inflow
+          - links_t_efficiency
 
-    Attributes:
-    ----------
-    parser : object
-        Object containing the paths for input data files.
+    Fallback logic is kept only for:
+    - loads_t_p_set -> add_demand()
+    - generators_t_p_max_pu -> add_renewables()
+    - storage_units_t_inflow -> add_hydro_inflow()
 
-    n : pypsa.Network
-        PyPSA network object that holds the components, costs, demand, and renewables data.
+    All other time-series sheets are optional:
+    if present, they are loaded; if absent, nothing is done.
     """
+
+    # Fallback-supported special sheets
+    FALLBACK_TS_SHEETS = {
+        "loads_t_p_set",
+        "generators_t_p_max_pu",
+        "storage_units_t_inflow",
+    }
 
     def __init__(self, parser):
         """
-        Initializes the NetworkDefinition class.
+        Initialize the NetworkDefinition class.
 
-        Parameters:
+        Parameters
         ----------
         parser : object
             Parser containing paths to input data files.
         """
         self.parser = parser
         self.init()
-        
+
     def init(self):
         """
-        Sets the workflow for the class
-
-        This method defines the network's snapshots and reads all components from the 
-        specified input files. It then adds costs for components, demand profiles, 
-        and renewables to the network.
+        Define the workflow for building the network.
         """
         self.n = pypsa.Network()
-        
+
         self.define_snapshots()
-        
+
         all_sheets = self.read_excel_components()
-        self.add_all_components(all_sheets)
-        
+
+        static_sheets, ts_sheets = self.split_static_and_timeseries_sheets(all_sheets)
+
+        self.add_all_components(static_sheets)
+
         if self.parser.add_costs_components:
             self.add_costs_components()
-        self.add_demand()
-        self.add_renewables()
-        self.add_hydro_inflow() 
-        
+
+        self.apply_timeseries_sheets(ts_sheets)
+
+        self.apply_timeseries_fallbacks(ts_sheets)
+
     def define_snapshots(self):
         """
-        Defines the network snapshots based on the parser input.
-
-        Sets:
-        --------
-        self.n.snapshots : range
-            Range of snapshots based on the number of snapshots from the parser.
-        
-        self.n.snapshot_weightings.objective : float
-            Weighting factor for snapshots, taken from the parser.
+        Define network snapshots based on parser input.
         """
         self.n.snapshots = range(0, self.parser.n_snapshots)
         self.n.snapshot_weightings.objective = self.parser.weight
         self.n.snapshot_weightings.generators = self.parser.weight
+        # Uncomment only if you explicitly want to force store weightings too
         # self.n.snapshot_weightings.stores = self.parser.weight
-    
+
     def read_excel_components(self):
         """
-        Reads components from an Excel file specified in the parser. Each sheet includes a class of components
+        Read all sheets from the Excel file containing the network definition.
 
-        Returns:
-        ----------
-        all_sheets : dict
-            Dictionary where keys are sheet names and values are DataFrames containing 
-            data for each component type.
+        Returns
+        -------
+        dict
+            Dictionary {sheet_name: DataFrame}.
         """
         file_path = f"{self.parser.input_data_path}/{self.parser.input_name_components}"
         all_sheets = pd.read_excel(file_path, sheet_name=None)
         return all_sheets
-    
-    def add_all_components(self, all_sheets):
-        """
-        Iterates over the sheets and adds each component type to the network.
 
-        Parameters:
+    def split_static_and_timeseries_sheets(self, all_sheets):
+        """
+        Split Excel sheets into static component sheets and time-series sheets.
+
+        A time-series sheet must follow the naming convention:
+            '<component>_t_<attribute>'
+
+        Parameters
         ----------
         all_sheets : dict
-            Dictionary containing component data for each type, organized by sheet name.
+            Dictionary of all Excel sheets.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            (static_sheets, ts_sheets)
         """
-        for sheet_name, data in all_sheets.items():
+        static_sheets = {}
+        ts_sheets = {}
+
+        for sheet_name, df in all_sheets.items():
+            parsed = self.parse_timeseries_sheet_name(sheet_name)
+            if parsed is None:
+                static_sheets[sheet_name] = df
+            else:
+                ts_sheets[sheet_name] = df
+
+        return static_sheets, ts_sheets
+
+    def parse_timeseries_sheet_name(self, sheet_name):
+        """
+        Parse a time-series sheet name of the form '<component>_t_<attribute>'.
+
+        Examples
+        --------
+        loads_t_p_set -> ('loads', 'p_set')
+        generators_t_p_max_pu -> ('generators', 'p_max_pu')
+        storage_units_t_inflow -> ('storage_units', 'inflow')
+
+        Parameters
+        ----------
+        sheet_name : str
+
+        Returns
+        -------
+        tuple[str, str] | None
+            (component_name, attribute_name) if valid, otherwise None.
+        """
+        marker = "_t_"
+        if marker not in sheet_name:
+            return None
+
+        component_name, attribute_name = sheet_name.split(marker, 1)
+
+        if not component_name or not attribute_name:
+            return None
+
+        if not hasattr(self.n, component_name):
+            return None
+
+        ts_container_name = f"{component_name}_t"
+        if not hasattr(self.n, ts_container_name):
+            return None
+
+        return component_name, attribute_name
+
+    def add_all_components(self, static_sheets):
+        """
+        Add all static component sheets to the network.
+
+        Parameters
+        ----------
+        static_sheets : dict
+            Dictionary containing only static component sheets.
+        """
+        for sheet_name, data in static_sheets.items():
             self.add_component(self.n, sheet_name, data)
-        
+
     def add_component(self, network, component_type, data):
         """
-        Adds a single component to the network.
+        Add a single static component sheet to the network.
 
-        Parameters:
+        Parameters
         ----------
         network : pypsa.Network
-            The PyPSA network to which the component will be added.
-
+            The PyPSA network.
         component_type : str
-            The type of component (e.g., Bus, Link, etc.) to add.
-        
-        data : DataFrame
-            Data for the component, with each row representing a specific unit.
+            Component type (e.g. Bus, Generator, Link, Store, ...).
+        data : pandas.DataFrame
+            Static component table.
         """
         for _, row in data.iterrows():
-            # Name of the component (expected to be the first column in the data)
             name = row[data.columns[0]]
-            params = {col: row[col] for col in data.columns if col != 'name' and pd.notna(row[col])}
+            params = {
+                col: row[col]
+                for col in data.columns
+                if col != "name" and pd.notna(row[col])
+            }
             network.add(component_type, name, **params)
-            
+
     def add_costs_components(self):
         """
-        Adds cost data to network components based on an Excel file.
-
-        Reads costs from an Excel file, iterates over generator and storage components,
-        and assigns capital and marginal costs to each component.
-
-        Notes:
-        ---------
-        Requires specific column names in the Excel file, e.g., 'Capital cost [€/MW]' 
-        and 'Marginal cost [€/MWh]'.
+        Add cost data to network components based on a costs Excel file.
         """
         file_path = f"{self.parser.input_data_path}/{self.parser.input_name_costs}"
         costs = pd.read_excel(file_path, index_col=0)
-        
+
         for components in self.n.components[["Generator", "StorageUnit", "Link", "Store"]]:
             if components.empty:
                 continue
             components_df = components.static
             for component in components_df.index:
-                components_df.loc[component, 'capital_cost'] = costs.at[component.split(" ")[0], 'Capital cost [€/MW]']
-                components_df.loc[component, 'marginal_cost'] = costs.at[component.split(" ")[0], 'Marginal cost [€/MWh]']
-        
+                components_df.loc[component, "capital_cost"] = costs.at[
+                    component.split(" ")[0], "Capital cost [€/MW]"
+                ]
+                components_df.loc[component, "marginal_cost"] = costs.at[
+                    component.split(" ")[0], "Marginal cost [€/MWh]"
+                ]
+
+    def _prepare_timeseries_sheet(self, df, expected_columns, object_name):
+        """
+        Prepare and validate a time-series override sheet read from Excel.
+
+        Expected format:
+        - rows = snapshots in the same order as self.n.snapshots
+        - columns = PyPSA component names
+        - no explicit snapshot column is required
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Raw dataframe from Excel.
+        expected_columns : iterable
+            Expected PyPSA object names.
+        object_name : str
+            Human-readable object name for logging/errors.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Clean dataframe aligned to snapshots and filtered to valid columns.
+        """
+        df_clean = df.copy()
+
+        # Drop fully empty rows/columns often introduced by Excel exports
+        df_clean = df_clean.dropna(axis=0, how="all").dropna(axis=1, how="all")
+
+        if df_clean.empty:
+            raise ValueError(f"The Excel sheet for {object_name} is empty after cleaning.")
+
+        # Normalize column names to strings
+        df_clean.columns = df_clean.columns.map(str)
+        expected_columns = pd.Index(expected_columns).map(str)
+
+        n_rows = len(df_clean)
+        n_snapshots = len(self.n.snapshots)
+        if n_rows != n_snapshots:
+            raise ValueError(
+                f"Invalid number of rows in Excel sheet for {object_name}: "
+                f"found {n_rows}, expected {n_snapshots} (one per snapshot)."
+            )
+
+        matching_columns = [col for col in df_clean.columns if col in expected_columns]
+        missing_in_network = [col for col in df_clean.columns if col not in expected_columns]
+        missing_in_sheet = [col for col in expected_columns if col not in df_clean.columns]
+
+        if missing_in_network:
+            LOGGER.warning(
+                "The following columns in the Excel sheet for %s do not match any existing PyPSA object "
+                "and will be ignored: %s",
+                object_name,
+                missing_in_network,
+            )
+
+        if missing_in_sheet:
+            LOGGER.warning(
+                "The following PyPSA %s are not present in the Excel sheet and will keep their default values: %s",
+                object_name,
+                missing_in_sheet,
+            )
+
+        if not matching_columns:
+            raise ValueError(
+                f"No valid columns found in Excel sheet for {object_name}. "
+                f"Expected names matching the network {object_name}."
+            )
+
+        df_clean = df_clean[matching_columns].copy()
+        df_clean.index = self.n.snapshots
+
+        return df_clean
+
+    def set_timeseries_from_excel(self, component_name, attribute_name, df):
+        """
+        Assign a generic PyPSA time-series attribute from an Excel sheet.
+
+        Parameters
+        ----------
+        component_name : str
+            PyPSA component table name in plural form, e.g. 'loads', 'generators',
+            'storage_units', 'links', 'stores'.
+        attribute_name : str
+            Time-series attribute name, e.g. 'p_set', 'p_max_pu', 'inflow'.
+        df : pandas.DataFrame
+            Raw Excel dataframe.
+        """
+        static_df = getattr(self.n, component_name)
+        ts_container_name = f"{component_name}_t"
+        ts_container = getattr(self.n, ts_container_name)
+
+        if static_df.empty:
+            LOGGER.warning(
+                "Skipping sheet '%s_t_%s': network has no static '%s' entries.",
+                component_name,
+                attribute_name,
+                component_name,
+            )
+            return
+
+        df_clean = self._prepare_timeseries_sheet(
+            df=df,
+            expected_columns=static_df.index,
+            object_name=component_name,
+        )
+
+        target_df = getattr(ts_container, attribute_name, None)
+        if target_df is None:
+            LOGGER.info(
+                "Creating time-series table '%s.%s' from Excel sheet.",
+                ts_container_name,
+                attribute_name,
+            )
+            setattr(ts_container, attribute_name, pd.DataFrame(index=self.n.snapshots))
+
+        target_df = getattr(ts_container, attribute_name)
+
+        for obj_name in df_clean.columns:
+            target_df[obj_name] = df_clean[obj_name].to_numpy()
+
+        LOGGER.info(
+            "Assigned %s.%s from Excel for %d objects over %d snapshots.",
+            ts_container_name,
+            attribute_name,
+            len(df_clean.columns),
+            len(df_clean.index),
+        )
+
+    def apply_timeseries_sheets(self, ts_sheets):
+        """
+        Apply all generic time-series sheets found in the Excel file.
+
+        Parameters
+        ----------
+        ts_sheets : dict
+            Dictionary {sheet_name: DataFrame} for time-series sheets only.
+        """
+        for sheet_name, df in ts_sheets.items():
+            parsed = self.parse_timeseries_sheet_name(sheet_name)
+            if parsed is None:
+                LOGGER.warning(
+                    "Sheet '%s' looks like a time-series sheet but could not be parsed. Skipping.",
+                    sheet_name,
+                )
+                continue
+
+            component_name, attribute_name = parsed
+            self.set_timeseries_from_excel(component_name, attribute_name, df)
+
+    def apply_timeseries_fallbacks(self, ts_sheets):
+        """
+        Apply fallback generators only for a small set of legacy-supported sheets.
+
+        Fallbacks are used only when the corresponding sheet is absent:
+        - loads_t_p_set -> add_demand()
+        - generators_t_p_max_pu -> add_renewables()
+        - storage_units_t_inflow -> add_hydro_inflow()
+
+        Parameters
+        ----------
+        ts_sheets : dict
+            Dictionary of time-series sheets found in Excel.
+        """
+        if "loads_t_p_set" not in ts_sheets:
+            LOGGER.info("Sheet 'loads_t_p_set' not found: using default add_demand().")
+            self.add_demand()
+        else:
+            LOGGER.info("Found Excel sheet 'loads_t_p_set': fallback add_demand() not used.")
+
+        if "generators_t_p_max_pu" not in ts_sheets:
+            LOGGER.info("Sheet 'generators_t_p_max_pu' not found: using default add_renewables().")
+            self.add_renewables()
+        else:
+            LOGGER.info("Found Excel sheet 'generators_t_p_max_pu': fallback add_renewables() not used.")
+
+        if "storage_units_t_inflow" not in ts_sheets:
+            LOGGER.info("Sheet 'storage_units_t_inflow' not found: using default add_hydro_inflow().")
+            self.add_hydro_inflow()
+        else:
+            LOGGER.info("Found Excel sheet 'storage_units_t_inflow': fallback add_hydro_inflow() not used.")
+
     def add_demand(self):
         """
-        Adds demand profiles to the network's loads based on daily demand data.
-
-        Reads daily demand data from a CSV file, then scales it to match the 
-        number of snapshots in the network. Demand profiles are set for each load 
-        in the network using this yearly demand profile.
-
-        Notes:
-        --------
-        Uses a random normal distribution to introduce variability in the demand profile.
+        Add demand profiles to the network loads based on daily demand data.
         """
         file_path = f"{self.parser.input_data_path}/{self.parser.input_name_demand}"
         df_demand_day = pd.read_csv(file_path)
@@ -176,51 +419,35 @@ class NetworkDefinition:
             df_demand_year = self.parser.load_sign * np.random.normal(
                 np.tile(df_demand_day["demand"], n_days),
                 np.tile(df_demand_day["standard_deviation"], n_days),
-            ) * 100
+            ) * 10000
             self.n.loads_t.p_set[load] = df_demand_year
-                    
+
     def add_renewables(self):
         """
-        Adds per-unit power profiles for renewable generators (solar and wind).
-
-        Reads power profiles for photovoltaic (PV) and wind generators from CSV files.
-        Assigns the profiles to generators in the network based on the generator name.
-
-        Notes:
-        ---------
-        Assumes specific column names in the CSV files for solar and wind profiles.
+        Add per-unit power profiles for renewable generators (solar and wind).
         """
-        file_path_PV = f"{self.parser.input_data_path}/{self.parser.input_name_pv}"
-        df_pv = pd.read_csv(file_path_PV, skiprows=3, nrows=len(self.n.snapshots))
+        file_path_pv = f"{self.parser.input_data_path}/{self.parser.input_name_pv}"
+        df_pv = pd.read_csv(file_path_pv, skiprows=3, nrows=len(self.n.snapshots))
 
         file_path_wind = f"{self.parser.input_data_path}/{self.parser.input_name_wind}"
         df_wind = pd.read_csv(file_path_wind, skiprows=3, nrows=len(self.n.snapshots))
-        
+
         for generator in self.n.generators.index:
-            if 'solar' in generator.lower() or 'pv' in generator.lower():
-                self.n.generators_t.p_max_pu[generator] = df_pv['electricity']
-            elif 'wind' in generator.lower():
-                self.n.generators_t.p_max_pu[generator] = df_wind['electricity']
-                
+            if "solar" in generator.lower() or "pv" in generator.lower():
+                self.n.generators_t.p_max_pu[generator] = df_pv["electricity"]
+            elif "wind" in generator.lower():
+                self.n.generators_t.p_max_pu[generator] = df_wind["electricity"]
+
     def add_hydro_inflow(self):
         """
-        Adds inflow time series for hydro StorageUnits, if present.
+        Add inflow time series for hydro StorageUnits, if present.
 
-        For each hydro StorageUnit, an inflow profile is created for all snapshots.
-        The mean inflow is set to one quarter of the StorageUnit capacity (p_nom),
-        with random Gaussian variation of ±10% (std = 10% of the mean).
-
-        Notes:
-        -------
-        A hydro StorageUnit is detected if its name contains the substring 'hydro'
-        (case-insensitive). If no such StorageUnit is found, the method exits silently.
+        This is only a fallback when 'storage_units_t_inflow' is not provided in Excel.
         """
-        # If there are no StorageUnits, nothing to do
         if self.n.storage_units.empty:
             LOGGER.info("No StorageUnits found in the network; skipping hydro inflow initialization.")
             return
 
-        # Identify hydro StorageUnits by name
         hydro_mask = self.n.storage_units.index.to_series().str.contains("hydro", case=False, na=False)
         hydro_units = self.n.storage_units.index[hydro_mask]
 
@@ -231,10 +458,10 @@ class NetworkDefinition:
         n_snapshots = len(self.n.snapshots)
 
         for unit in hydro_units:
-            # Use p_nom as proxy for the unit size
             if "p_nom" not in self.n.storage_units.columns:
                 LOGGER.warning(
-                    "StorageUnits have no 'p_nom' column; cannot compute inflow for '%s'. Skipping.", unit
+                    "StorageUnits have no 'p_nom' column; cannot compute inflow for '%s'. Skipping.",
+                    unit,
                 )
                 continue
 
@@ -242,18 +469,15 @@ class NetworkDefinition:
 
             if pd.isna(capacity):
                 LOGGER.warning(
-                    "Capacity 'p_nom' for StorageUnit '%s' is NaN; cannot compute inflow. Skipping.", unit
+                    "Capacity 'p_nom' for StorageUnit '%s' is NaN; cannot compute inflow. Skipping.",
+                    unit,
                 )
                 continue
 
-            # Base inflow: one quarter of capacity
             base_inflow = 0.25 * capacity
-
-            # Gaussian variation ±10% around the base inflow
             std_inflow = 0.10 * base_inflow
             inflow_profile = np.random.normal(loc=base_inflow, scale=std_inflow, size=n_snapshots)
 
-            # Assign inflow profile to storage_units_t.inflow
             self.n.storage_units_t.inflow[unit] = inflow_profile
 
             LOGGER.info(
@@ -262,8 +486,3 @@ class NetworkDefinition:
                 base_inflow,
                 std_inflow,
             )
-
-                
-        
-        
-                    

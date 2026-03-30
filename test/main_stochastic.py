@@ -101,4 +101,8 @@ transformation = Transformation(name=name,
 nd.n = transformation.run(nd.n)
 statistics_smspp = nd.n.statistics()
 
+obj_smspp = nd.n.objective
+error = (obj_smspp - obj_pypsa) / obj_pypsa * 100
+print(f"Error PyPSA-SMS++ of {error}%")
+
 
