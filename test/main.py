@@ -41,6 +41,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
+import pypsa
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -53,8 +54,20 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     parse_txt_file,
     compare_networks,
-    add_slack_unit
+    add_slack_unit,
+    reduce_snapshots_and_scale_costs,
     )
+
+SOLVER_OPTIONS = {
+    "Threads": 32,
+    "Method": 2,       # barrier
+    "Crossover": 0,
+    "BarConvTol": 1e-5,
+    "Seed": 123,
+    "AggFill": 0,
+    "PreDual": 0,
+}
+
 
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
@@ -76,18 +89,19 @@ nd = NetworkDefinition(config)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
-nd.n = add_slack_unit(nd.n)
+# nd.n = add_slack_unit(nd.n)
+# nd.n = clean_storage_units(nd.n)
 
 network = nd.n.copy()
-SOLVER_OPTIONS = {
-    "Threads": 32,
-    "Method": 2,       # barrier
-    "Crossover": 0,
-    "BarConvTol": 1e-5,
-    "Seed": 123,
-    "AggFill": 0,
-    "PreDual": 0,
-}
+n = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_pypsa_network_giga_small.nc")
+
+df_diff = compare_networks(
+    n,
+    network,
+    rtol=1e-9,
+    atol=1e-12,
+    compare_dtypes=True,
+)
 
 network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
 

@@ -21,11 +21,16 @@ def clean_marginal_cost(n):
     # n.stores.marginal_cost = 0
     return n
     
-def clean_global_constraints(n):
-    n.global_constraints = pd.DataFrame(columns=n.global_constraints.columns)
-    n.global_constraints_t = dict()
-    n.links.p_nom_extendable = False
-    return n
+def clean_global_constraints(n, inplace=True):
+    """
+    Remove all GlobalConstraint components from the network.
+    """
+    net = n if inplace else n.copy()
+
+    if not net.global_constraints.empty:
+        net.remove("GlobalConstraint", net.global_constraints.index)
+
+    return net
     
 def clean_e_sum(n):
     n.generators.e_sum_max = float('inf')
@@ -151,13 +156,24 @@ def reduce_snapshots_and_scale_costs(
     target: Union[int, Sequence, pd.Index],
     *,
     drop_renewables: bool = False,
-    renewable_carriers: Sequence[str] = ('solar', 'solar-hsat', 'onwind', 'offwind-ac', 'offwind-dc', 'offwind-float', 'PV', 'wind', 'ror'),
+    renewable_carriers: Sequence[str] = (
+        "solar",
+        "solar-hsat",
+        "onwind",
+        "offwind-ac",
+        "offwind-dc",
+        "offwind-float",
+        "PV",
+        "wind",
+        "ror",
+    ),
     adjust_snapshot_weightings: bool = False,
     evenly_spaced: bool = False,
+    scale_capital_costs: bool = True,
     inplace: bool = False,
 ):
     """
-    Reduce the number of snapshots in a PyPSA network and scale capital_costs.
+    Reduce the number of snapshots in a PyPSA network and optionally scale capital costs.
 
     Parameters
     ----------
@@ -176,6 +192,8 @@ def reduce_snapshots_and_scale_costs(
         If True, scale n.snapshot_weightings['objective'] by (old_len / new_len).
     evenly_spaced : bool, optional
         If True and `target` is int, select snapshots evenly spaced instead of the first ones.
+    scale_capital_costs : bool, optional
+        If True, scale component capital_cost by (new_len / old_len).
     inplace : bool, optional
         If False (default), operate on a copy and return it. If True, modify `n` in place.
 
@@ -212,7 +230,9 @@ def reduce_snapshots_and_scale_costs(
         new_snapshots = pd.Index(target)
         missing = new_snapshots.difference(old_snapshots)
         if len(missing) > 0:
-            raise ValueError(f"Some requested snapshots are not in the network: {missing[:5].tolist()} ...")
+            raise ValueError(
+                f"Some requested snapshots are not in the network: {missing[:5].tolist()} ..."
+            )
 
     new_len = len(new_snapshots)
     if new_len == 0:
@@ -231,7 +251,9 @@ def reduce_snapshots_and_scale_costs(
 
     # Optionally drop renewable generators
     if drop_renewables and hasattr(net, "generators"):
-        to_drop = net.generators.loc[net.generators["carrier"].isin(renewable_carriers)].index
+        to_drop = net.generators.loc[
+            net.generators["carrier"].isin(renewable_carriers)
+        ].index
         if len(to_drop) > 0:
             net.generators.drop(index=to_drop, inplace=True)
             if hasattr(net, "generators_t"):
@@ -239,20 +261,23 @@ def reduce_snapshots_and_scale_costs(
                     if hasattr(df, "drop"):
                         df.drop(columns=to_drop, inplace=True, errors="ignore")
 
-    # Scale capital_costs
-    scale_capex = new_len / old_len
-    capex_tables = ["generators", "links", "stores", "storage_units", "lines", "transformers"]
-    for tab in capex_tables:
-        if hasattr(net, tab):
-            df = getattr(net, tab)
-            if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
-                df["capital_cost"] = df["capital_cost"] * scale_capex
+    # Optionally scale capital_costs
+    if scale_capital_costs:
+        scale_capex = new_len / old_len
+        capex_tables = ["generators", "links", "stores", "storage_units", "lines", "transformers"]
+        for tab in capex_tables:
+            if hasattr(net, tab):
+                df = getattr(net, tab)
+                if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
+                    df["capital_cost"] = df["capital_cost"] * scale_capex
 
     # Optionally adjust snapshot_weightings
     if adjust_snapshot_weightings and hasattr(net, "snapshot_weightings"):
         sw = net.snapshot_weightings
         if "objective" in sw.columns:
-            sw.loc[new_snapshots, "objective"] = sw.loc[new_snapshots, "objective"] * (old_len / new_len)
+            sw.loc[new_snapshots, "objective"] = (
+                sw.loc[new_snapshots, "objective"] * (old_len / new_len)
+            )
 
     return net
 
@@ -413,72 +438,310 @@ def parse_txt_file(file_path):
 
     return data
 
+import pandas as pd
 
-def compare_static_components(comp1, comp2, comp_name):
-    differences = []
-    common_indices = comp1.index.intersection(comp2.index)
-    all_indices = comp1.index.union(comp2.index)
-    
-    for idx in all_indices:
-        if idx not in common_indices:
-            differences.append((comp_name, idx, "Missing in one network", None, None))
+
+def _normalize_index(idx):
+    """Return index as strings for safer comparison after Excel roundtrip."""
+    return pd.Index(idx).map(str)
+
+
+def _prepare_df(df):
+    """Return a sorted copy with stringified index/columns."""
+    out = df.copy()
+    out.index = _normalize_index(out.index)
+    out = out.sort_index()
+
+    out.columns = pd.Index(out.columns).map(str)
+    out = out.reindex(sorted(out.columns), axis=1)
+
+    return out
+
+
+def _is_numeric_series(s):
+    """Check whether a Series is numeric-like."""
+    return pd.api.types.is_numeric_dtype(s)
+
+
+def compare_dataframes(
+    df1,
+    df2,
+    name="dataframe",
+    rtol=1e-9,
+    atol=1e-12,
+    compare_dtypes=False,
+):
+    """
+    Compare two DataFrames robustly.
+
+    Returns a list of dictionaries describing differences.
+    """
+    diffs = []
+
+    df1 = _prepare_df(df1)
+    df2 = _prepare_df(df2)
+
+    all_index = df1.index.union(df2.index)
+    all_cols = df1.columns.union(df2.columns)
+
+    df1 = df1.reindex(index=all_index, columns=all_cols)
+    df2 = df2.reindex(index=all_index, columns=all_cols)
+
+    for col in all_cols:
+        s1 = df1[col]
+        s2 = df2[col]
+
+        if compare_dtypes and s1.dtype != s2.dtype:
+            diffs.append(
+                {
+                    "where": name,
+                    "kind": "dtype_mismatch",
+                    "row": None,
+                    "column": col,
+                    "value_1": str(s1.dtype),
+                    "value_2": str(s2.dtype),
+                }
+            )
+
+        if _is_numeric_series(s1) and _is_numeric_series(s2):
+            a1 = pd.to_numeric(s1, errors="coerce")
+            a2 = pd.to_numeric(s2, errors="coerce")
+
+            both_nan = a1.isna() & a2.isna()
+            close = np.isclose(a1.fillna(0.0), a2.fillna(0.0), rtol=rtol, atol=atol)
+            equal_mask = both_nan | close
+
+            bad_rows = equal_mask.index[~equal_mask]
+            for row in bad_rows:
+                diffs.append(
+                    {
+                        "where": name,
+                        "kind": "value_mismatch",
+                        "row": row,
+                        "column": col,
+                        "value_1": a1.loc[row],
+                        "value_2": a2.loc[row],
+                    }
+                )
+        else:
+            v1 = s1.astype("object")
+            v2 = s2.astype("object")
+
+            equal_mask = (v1 == v2) | (pd.isna(v1) & pd.isna(v2))
+            bad_rows = equal_mask.index[~equal_mask.fillna(False)]
+
+            for row in bad_rows:
+                diffs.append(
+                    {
+                        "where": name,
+                        "kind": "value_mismatch",
+                        "row": row,
+                        "column": col,
+                        "value_1": v1.loc[row],
+                        "value_2": v2.loc[row],
+                    }
+                )
+
+    return diffs
+
+
+def compare_time_dependent_panel(
+    panel1,
+    panel2,
+    comp_name,
+    rtol=1e-9,
+    atol=1e-12,
+    compare_dtypes=False,
+):
+    """
+    Compare a PyPSA *_t container (e.g. net.generators_t, net.links_t).
+    """
+    diffs = []
+
+    attrs1 = set(panel1.keys())
+    attrs2 = set(panel2.keys())
+    all_attrs = sorted(attrs1 | attrs2)
+
+    for attr in all_attrs:
+        if attr not in attrs1:
+            diffs.append(
+                {
+                    "where": f"{comp_name}_t",
+                    "kind": "missing_attribute",
+                    "row": None,
+                    "column": attr,
+                    "value_1": None,
+                    "value_2": "present_only_in_net2",
+                }
+            )
             continue
-        
-        row1 = comp1.loc[idx]
-        row2 = comp2.loc[idx]
-        for col in comp1.columns.union(comp2.columns):
-            val1 = row1[col] if col in row1 else np.nan
-            val2 = row2[col] if col in row2 else np.nan
 
-            if pd.isna(val1) and pd.isna(val2):
-                continue  # Both NaN, consider equal
-            try:
-                if isinstance(val1, (int, float, np.number)) and isinstance(val2, (int, float, np.number)):
-                    if not np.isclose(val1, val2, equal_nan=True):
-                        differences.append((comp_name, idx, col, val1, val2))
-                else:
-                    if val1 != val2:
-                        differences.append((comp_name, idx, col, val1, val2))
-            except Exception:
-                if val1 != val2:
-                    differences.append((comp_name, idx, col, val1, val2))
-    return differences
-
-
-def compare_dynamic_components(comp1_t, comp2_t, comp_name):
-    differences = []
-    for attr in comp1_t.keys() | comp2_t.keys():
-        if attr not in comp1_t or attr not in comp2_t:
-            differences.append((f"{comp_name}_t", attr, "Missing attribute", None, None))
+        if attr not in attrs2:
+            diffs.append(
+                {
+                    "where": f"{comp_name}_t",
+                    "kind": "missing_attribute",
+                    "row": None,
+                    "column": attr,
+                    "value_1": "present_only_in_net1",
+                    "value_2": None,
+                }
+            )
             continue
-        df1 = comp1_t[attr]
-        df2 = comp2_t[attr]
-        all_columns = df1.columns.union(df2.columns)
-        for col in all_columns:
-            if col not in df1 or col not in df2:
-                differences.append((f"{comp_name}_t", attr, col, "Missing", "Missing"))
-                continue
-            vals1 = df1[col]
-            vals2 = df2[col]
-            if not vals1.equals(vals2):
-                differences.append((f"{comp_name}_t", attr, col, vals1.values[:5], vals2.values[:5]))
-    return differences
 
-def compare_networks(net1, net2, components_to_check=["loads", "generators", "lines", "storage_units"]):
-    all_differences = []
-    for comp in components_to_check:
-        comp_df1 = getattr(net1, comp)
-        comp_df2 = getattr(net2, comp)
-        static_diff = compare_static_components(comp_df1, comp_df2, comp)
-        all_differences.extend(static_diff)
-        
-        comp_t_df1 = getattr(net1, f"{comp}_t")
-        comp_t_df2 = getattr(net2, f"{comp}_t")
-        dynamic_diff = compare_dynamic_components(comp_t_df1, comp_t_df2, comp)
-        all_differences.extend(dynamic_diff)
-    
-    df_diff = pd.DataFrame(all_differences, columns=["Component", "Element", "Attribute", "Network1", "Network2"])
-    return df_diff
+        df1 = panel1[attr]
+        df2 = panel2[attr]
+
+        diffs.extend(
+            compare_dataframes(
+                df1,
+                df2,
+                name=f"{comp_name}_t.{attr}",
+                rtol=rtol,
+                atol=atol,
+                compare_dtypes=compare_dtypes,
+            )
+        )
+
+    return diffs
+
+
+def compare_networks(
+    net1,
+    net2,
+    static_components=None,
+    compare_dynamic=True,
+    rtol=1e-9,
+    atol=1e-12,
+    compare_dtypes=False,
+    max_diffs_per_block=None,
+):
+    """
+    Robust comparison between two PyPSA networks.
+
+    Parameters
+    ----------
+    net1, net2 : pypsa.Network
+        Networks to compare.
+    static_components : list[str] | None
+        Components to compare statically. If None, a default broad set is used.
+    compare_dynamic : bool
+        Whether to compare *_t tables.
+    rtol, atol : float
+        Numeric tolerances.
+    compare_dtypes : bool
+        Whether to also report dtype differences.
+    max_diffs_per_block : int | None
+        If given, truncates reported differences for each block.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table of differences.
+    """
+    if static_components is None:
+        static_components = [
+            "buses",
+            "carriers",
+            "loads",
+            "generators",
+            "lines",
+            "links",
+            "transformers",
+            "shunt_impedances",
+            "storage_units",
+            "stores",
+            "global_constraints",
+        ]
+
+    all_diffs = []
+
+    # Compare snapshots explicitly
+    s1 = pd.DataFrame(index=_normalize_index(net1.snapshots))
+    s2 = pd.DataFrame(index=_normalize_index(net2.snapshots))
+    all_diffs.extend(
+        compare_dataframes(
+            s1,
+            s2,
+            name="snapshots",
+            rtol=rtol,
+            atol=atol,
+            compare_dtypes=compare_dtypes,
+        )
+    )
+
+    # Compare snapshot weightings
+    all_diffs.extend(
+        compare_dataframes(
+            net1.snapshot_weightings,
+            net2.snapshot_weightings,
+            name="snapshot_weightings",
+            rtol=rtol,
+            atol=atol,
+            compare_dtypes=compare_dtypes,
+        )
+    )
+
+    # Compare static components
+    for comp in static_components:
+        if not hasattr(net1, comp) or not hasattr(net2, comp):
+            all_diffs.append(
+                {
+                    "where": comp,
+                    "kind": "missing_component_table",
+                    "row": None,
+                    "column": None,
+                    "value_1": hasattr(net1, comp),
+                    "value_2": hasattr(net2, comp),
+                }
+            )
+            continue
+
+        df1 = getattr(net1, comp)
+        df2 = getattr(net2, comp)
+
+        all_diffs.extend(
+            compare_dataframes(
+                df1,
+                df2,
+                name=comp,
+                rtol=rtol,
+                atol=atol,
+                compare_dtypes=compare_dtypes,
+            )
+        )
+
+    # Compare dynamic components
+    if compare_dynamic:
+        for comp in static_components:
+            panel_name = f"{comp}_t"
+            if hasattr(net1, panel_name) and hasattr(net2, panel_name):
+                panel1 = getattr(net1, panel_name)
+                panel2 = getattr(net2, panel_name)
+                all_diffs.extend(
+                    compare_time_dependent_panel(
+                        panel1,
+                        panel2,
+                        comp_name=comp,
+                        rtol=rtol,
+                        atol=atol,
+                        compare_dtypes=compare_dtypes,
+                    )
+                )
+
+    df = pd.DataFrame(
+        all_diffs,
+        columns=["where", "kind", "row", "column", "value_1", "value_2"],
+    )
+
+    if max_diffs_per_block is not None and not df.empty:
+        df = (
+            df.groupby("where", group_keys=False)
+            .head(max_diffs_per_block)
+            .reset_index(drop=True)
+        )
+
+    return df
 
 def check_all_storages_balance(sut, n, name):
     """

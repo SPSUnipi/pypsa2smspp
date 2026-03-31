@@ -68,16 +68,17 @@ CONFIGFILE = "UCBlock/uc_solverconfig_grb.txt"
 # Optional: pass-through options for pySMSpp (all optional; defaults exist in pySMSpp)
 # Examples:
 #   PYSMSSP_OPTIONS = {"inner_block_name": "Block_0", "smspp_solver": "auto"}
-PYSMSSP_OPTIONS = {}
+PYSMSSP_OPTIONS = {"logging": False}
 
 # Cleaning toggles
 DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
-DO_REDUCE_SNAPSHOTS = True
-REDUCE_SNAPSHOTS_TO = 24
+DO_REDUCE_SNAPSHOTS = False
+REDUCE_SNAPSHOTS_TO = 8500
 DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
+DO_CLEAN_GLOBAL_CONSTRAINTS = True
 
 # Debug artifacts
 EXPORT_PYPSA_LP = True
@@ -115,6 +116,7 @@ from pypsa2smspp.network_correction import (
     reduce_snapshots_and_scale_costs,
     clean_storage_units,
     clean_stores,
+    clean_global_constraints
 )
 
 
@@ -226,7 +228,7 @@ try:
         n_smspp = clean_ciclicity_storage(n_smspp)
 
     if DO_REDUCE_SNAPSHOTS:
-        n_smspp = reduce_snapshots_and_scale_costs(n_smspp, REDUCE_SNAPSHOTS_TO)
+        n_smspp = reduce_snapshots_and_scale_costs(n_smspp, target=REDUCE_SNAPSHOTS_TO, scale_capital_costs=False)
 
     if DO_ADD_SLACK_UNIT:
         n_smspp = add_slack_unit(n_smspp)
@@ -236,6 +238,10 @@ try:
         n_smspp = clean_storage_units(n_smspp)
     if DO_CLEAN_STORES:
         n_smspp = clean_stores(n_smspp)
+    
+    if DO_CLEAN_GLOBAL_CONSTRAINTS:
+# %%
+        n_smspp = clean_global_constraints(n_smspp)
 
     # -------- PyPSA optimization (reference) --------
     network = n_smspp.copy()

@@ -67,10 +67,10 @@ class NetworkDefinition:
         Define the workflow for building the network.
         """
         self.n = pypsa.Network()
-
-        self.define_snapshots()
-
+        
         all_sheets = self.read_excel_components()
+
+        self.define_snapshots(all_sheets)
 
         static_sheets, ts_sheets = self.split_static_and_timeseries_sheets(all_sheets)
 
@@ -83,15 +83,81 @@ class NetworkDefinition:
 
         self.apply_timeseries_fallbacks(ts_sheets)
 
-    def define_snapshots(self):
+    def define_snapshots(self, all_sheets=None):
         """
-        Define network snapshots based on parser input.
+        Define network snapshots.
+    
+        Priority:
+        1. If an Excel sheet named 'snapshots' exists, use it.
+        2. Otherwise, fall back to parser-based snapshots.
+    
+        Supported Excel formats
+        -----------------------
+        Sheet name: 'snapshots'
+    
+        Accepted columns:
+        - 'snapshot'                -> snapshot labels
+        - 'objective' (optional)   -> snapshot objective weighting
+        - 'generators' (optional)  -> snapshot generator weighting
+        - 'stores' (optional)      -> snapshot store weighting
+    
+        If the sheet has only one column, it is interpreted as the snapshot labels.
+        Missing weighting columns fall back to parser.weight.
         """
-        self.n.snapshots = range(0, self.parser.n_snapshots)
-        self.n.snapshot_weightings.objective = self.parser.weight
-        self.n.snapshot_weightings.generators = self.parser.weight
-        # Uncomment only if you explicitly want to force store weightings too
-        # self.n.snapshot_weightings.stores = self.parser.weight
+        if all_sheets is not None and "snapshots" in all_sheets:
+            df = all_sheets["snapshots"].copy()
+    
+            # Drop fully empty rows/cols from Excel junk
+            df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    
+            if df.empty:
+                raise ValueError("The Excel sheet 'snapshots' is empty after cleaning.")
+    
+            # Case 1: explicit 'snapshot' column
+            if "snapshot" in df.columns:
+                snapshots = df["snapshot"].tolist()
+            # Case 2: single unnamed/other column -> use first column
+            elif df.shape[1] == 1:
+                snapshots = df.iloc[:, 0].tolist()
+            else:
+                raise ValueError(
+                    "Sheet 'snapshots' must either contain a 'snapshot' column "
+                    "or a single column with snapshot labels."
+                )
+    
+            self.n.set_snapshots(pd.Index(snapshots))
+    
+            # Weightings
+            default_weight = self.parser.weight
+    
+            if "objective" in df.columns:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "objective"] = df["objective"].to_numpy()
+            else:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "objective"] = default_weight
+    
+            if "generators" in df.columns:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "generators"] = df["generators"].to_numpy()
+            else:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "generators"] = default_weight
+    
+            if "stores" in df.columns:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "stores"] = df["stores"].to_numpy()
+    
+            LOGGER.info(
+                "Defined %d snapshots from Excel sheet 'snapshots'.",
+                len(self.n.snapshots),
+            )
+    
+        else:
+            self.n.snapshots = range(0, self.parser.n_snapshots)
+            self.n.snapshot_weightings.objective = self.parser.weight
+            self.n.snapshot_weightings.generators = self.parser.weight
+            # self.n.snapshot_weightings.stores = self.parser.weight
+    
+            LOGGER.info(
+                "Defined %d snapshots from parser fallback.",
+                len(self.n.snapshots),
+            )
 
     def read_excel_components(self):
         """
@@ -125,14 +191,17 @@ class NetworkDefinition:
         """
         static_sheets = {}
         ts_sheets = {}
-
+    
         for sheet_name, df in all_sheets.items():
+            if sheet_name == "snapshots":
+                continue
+    
             parsed = self.parse_timeseries_sheet_name(sheet_name)
             if parsed is None:
                 static_sheets[sheet_name] = df
             else:
                 ts_sheets[sheet_name] = df
-
+    
         return static_sheets, ts_sheets
 
     def parse_timeseries_sheet_name(self, sheet_name):
