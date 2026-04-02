@@ -171,3 +171,6 @@ test/investment*
 test/configs/data/~$components.xlsx
 test/gurobi*
 investment_candidates*
+
+# examples
+docs/examples/output/*
