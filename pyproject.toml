@@ -45,17 +45,12 @@ dev = [
     "mypy",
 ]
 docs=[
-    "numpydoc",
-    "sphinx",
-    "sphinx-book-theme",
-    "sphinx-rtd-theme",
-    "pydata-sphinx-theme",
-    "sphinx-reredirects",
-    "nbsphinx",
-    "nbsphinx-link",
-    "scikit-learn",
-    "ipython",
-    "ipykernel",
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-jupyter>=0.24",
+    "mkdocs-autorefs>=0.5",
+    "pymdown-extensions>=10.0",
 ]
 
 [tool.setuptools]
