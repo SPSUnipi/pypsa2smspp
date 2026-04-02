@@ -1,11 +1,11 @@
 # Installation
 
 !!! note
-    pySMSpp is a Python package under active development and current documentation aims to facilitate development of the package. Currently, there is not yet a stable release of the package on PyPI or Conda, so the installation can be performed by cloning the repository and installing the package locally.
+    pypsa2smspp is a Python package under active development and current documentation aims to facilitate development of the package. Currently, there is not yet a stable release of the package on PyPI or Conda, so the installation can be performed by cloning the repository and installing the package locally.
 
 ## Python
 
-To use pySMSpp we highly recommend to use a package manager such as [conda](https://docs.conda.io/en/latest/miniconda.html), [mamba](https://github.com/mamba-org/mamba) or [pip](https://pip.pypa.io/en/stable/) as easy-to-use package managers, available for Windows, Mac OS X and GNU/Linux.
+To use pypsa2smspp we highly recommend to use a package manager such as [conda](https://docs.conda.io/en/latest/miniconda.html), [mamba](https://github.com/mamba-org/mamba) or [pip](https://pip.pypa.io/en/stable/) as easy-to-use package managers, available for Windows, Mac OS X and GNU/Linux.
 
 As common practice, it is highly recommend to use dedicated [conda/mamba environments](https://mamba.readthedocs.io/en/latest/user_guide/mamba.html) or [virtual environments](https://pypi.python.org/pypi/virtualenv) to ensure proper dependency management and isolation.
 
@@ -14,10 +14,10 @@ As common practice, it is highly recommend to use dedicated [conda/mamba environ
 If you are using conda, you can create a new environment with:
 
 ```bash
-conda create -n pysmspp python=3.10 pip
+conda create -n pypsa2smspp python=3.13 pip
 ```
 
-This will create a new environment named `pysmspp` with Python 3.10 and pip package manager installed.
+This will create a new environment named `pypsa2smspp` with Python 3.13 and pip package manager installed.
 
 If you prefer mamba, please execute the same command with `mamba` instead of `conda`. For alternative package managers, please refer to their respective documentation.
 
@@ -27,17 +27,17 @@ To clone the package, you can use the following command:
 
 ```bash
 cd /path/to/your/folder
-git clone https://github.com/SPSUnipi/pySMSpp
+git clone https://github.com/SPSUnipi/pypsa2smspp
 ```
 
-This will create a new folder named `pySMSpp` in the directory `/path/to/your/folder`
+This will create a new folder named `pypsa2smspp` in the directory `/path/to/your/folder`
 
 ## Installing with pip
 
 You can now install the package locally using pip:
 
 ```bash
-cd /path/to/your/folder/pySMSpp
+cd /path/to/your/folder/pypsa2smspp
 pip install .
 ```
 
@@ -50,4 +50,4 @@ pre-commit install
 
 ## Getting SMS++
 
-To use pySMSpp, you need to have SMS++ installed on your system. You can install the latest version of SMS++ from the [official SMS++ website](https://gitlab.com/smspp/smspp-project).
+To use pypsa2smspp, you need to have SMS++ installed on your system. You can install the latest version of SMS++ from the [official SMS++ website](https://gitlab.com/smspp/smspp-project).

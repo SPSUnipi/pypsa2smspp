@@ -1,8 +1,8 @@
 # Introduction
 
-## What is pySMSpp?
+## What is pypsa2smspp?
 
-pySMSpp is a Python package to interface [Structured Modeling System for mathematical models (SMS++)](https://smspp.gitlab.io/smspp-project/) with Python. It provides a basic interface to interact with SMS++ and to perform simulations using SMS++.
+pypsa2smspp is a Python package to enable advanced mathematical decomposition in the energy modeling framework [PyPSA](https://github.com/PyPSA/pypsa). This package interfaces [PyPSA](https://github.com/PyPSA/pypsa) using [Structured Modeling System for mathematical models (SMS++)](https://smspp.gitlab.io/smspp-project/) and its python interface [pySMSpp](https://github.com/SPSUnipi/pySMSpp).
 
 The package is under active development and the current documentation aims to facilitate the development of the package. Currently, there is not yet a stable release of the package on PyPI or Conda, so the installation can be performed by cloning the repository and installing the package locally.
 
@@ -17,8 +17,8 @@ SMS++ supports a hierarchical model structure, where blocks may contain other bl
 
 For more information about SMS++, please refer to the [SMS++ website](https://smspp.gitlab.io/smspp-project/).
 
-## Why pySMSpp?
+## Why pypsa2smspp?
 
-As mentioned above SMS++ is a powerful tool for solving complex mathematical models. To facilitate user interaction with SMS++, we developed pySMSpp, a Python package that provides a basic interface to interact with SMS++ and to perform simulations using SMS++.
+As mentioned above SMS++ is a powerful tool for solving complex mathematical models. On the other hand, PyPSA is a powerful tool for modeling and optimizing energy systems. By interfacing PyPSA with SMS++, we can leverage the power of SMS++ to solve complex energy system models defined in PyPSA. This allows us to solve larger and more complex models than what is possible with the default solvers available in PyPSA, and to exploit the structure of the model to achieve faster solution times.
 
-pySMSpp relies on the input/output modelling interface of SMS++ using [netCDF4 data format](https://unidata.github.io/netcdf4-python/). The netCDF4 data format allows to preserve the hierarchical block structure of the model and to store the model data in a structured way. pySMSpp provides a set of classes and functions to define the model in Python, alongside interfaces to write, read and optimize SMS++ models.
+By leveraging on [pySMSpp](https://pysmspp.readthedocs.io/en/latest/), that is the Python interface to SMS++, pypsa2smspp allows to convert PyPSA models into SMS++ objects in Python, and to write, read and optimize SMS++ models. This allows us to leverage the power of SMS++ while still being able to define the model in Python, which is a widely used programming language in the energy modeling community.
