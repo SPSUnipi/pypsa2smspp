@@ -46,7 +46,7 @@ def safe_remove(p: Path):
 
 def create_test_config(xlsx_path: Path) -> TestConfig:
     """Create a TestConfig object pointing to the given Excel file."""
-    parser = TestConfig()
+    parser = TestConfig(fp="application_test.ini")
     parser.input_data_path = str(xlsx_path.parent)       # folder of the excel
     parser.input_name_components = xlsx_path.name        # excel filename
     if "sector" in xlsx_path.name:

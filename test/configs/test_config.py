@@ -9,13 +9,13 @@ from configparser import ConfigParser
 import os
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-FP_DEFAULT = os.path.join(DIR, "application.ini")
 
 # Class for the initial configuration of the project
 class TestConfig():
     __test__ = False  # disable test
 
-    def __init__(self, fp=FP_DEFAULT):
+    def __init__(self, fp="application.ini"):
+        fp = os.path.join(DIR, fp)
         self.parser = ConfigParser()
         self.parser.read(fp)
 

@@ -44,7 +44,7 @@ def safe_remove(p: Path) -> None:
 
 def create_test_config(xlsx_path: Path) -> TestConfig:
     """Create a TestConfig object pointing to the given Excel file."""
-    parser = TestConfig()
+    parser = TestConfig(fp="application_test.ini")
     parser.input_data_path = str(xlsx_path.parent)
     parser.input_name_components = xlsx_path.name
     if "sector" in xlsx_path.name.lower():
@@ -162,4 +162,4 @@ def test_investment(test_case_xlsx):
 
 
 if __name__ == "__main__":
-    run_case(test_cases[10], capacity_expansion_ucblock=False, solver_name="highs", verbose=True)
+    run_case(test_cases[12], capacity_expansion_ucblock=True, solver_name="highs", verbose=True)
