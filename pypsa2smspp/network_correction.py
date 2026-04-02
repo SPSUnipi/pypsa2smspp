@@ -71,10 +71,17 @@ def clean_storage_units(n):
 #         n.stores_t[key].drop(columns=n.stores_t[key].columns, inplace=True)
 #     return n
 
-def clean_stores(n, carriers=None):
+def clean_stores(
+    n,
+    carriers=None,
+    *,
+    remove_store_buses=True,
+    remove_generators_on_removed_buses=False,
+):
     """
     Remove Stores (optionally filtered by carrier) and all incident charge/discharge
-    Links from a PyPSA network. Also drops the dedicated store buses.
+    Links from a PyPSA network. Optionally also remove the dedicated store buses and
+    generators connected to those buses.
 
     Parameters
     ----------
@@ -82,7 +89,12 @@ def clean_stores(n, carriers=None):
         The network to clean.
     carriers : list[str] or None
         If provided, only stores with carrier in this list are removed
-        (e.g., ["battery"], ["H2"]). If None, remove all stores.
+        (e.g. ["battery"], ["H2"]). If None, remove all stores.
+    remove_store_buses : bool, optional
+        If True, also remove the buses associated with the removed stores.
+    remove_generators_on_removed_buses : bool, optional
+        If True, also remove generators connected to buses that are removed.
+        This flag is only relevant if remove_store_buses=True.
 
     Returns
     -------
@@ -96,32 +108,44 @@ def clean_stores(n, carriers=None):
         store_idx = n.stores.index[n.stores["carrier"].isin(carriers)]
 
     if len(store_idx) == 0:
-        return n  # nothing to do
+        return n
 
-    # --- Buses dedicated to those stores
-    store_buses = n.stores.loc[store_idx, "bus"].unique()
+    # --- Buses associated with those stores
+    store_buses = pd.Index(n.stores.loc[store_idx, "bus"].unique())
 
-    # --- Remove links incident to any store bus (charge/discharge, electrolysis/FC, etc.)
-    mask_links = n.links["bus0"].isin(store_buses) | n.links["bus1"].isin(store_buses)
-    link_idx = n.links.index[mask_links]
+    # --- Remove links incident to any store bus
+    if hasattr(n, "links") and not n.links.empty:
+        mask_links = n.links["bus0"].isin(store_buses) | n.links["bus1"].isin(store_buses)
+        link_idx = n.links.index[mask_links]
 
-    if len(link_idx):
-        n.links.drop(link_idx, inplace=True)
-        # Drop link time-series columns safely if present
-        for key, df in n.links_t.items():
-            cols = df.columns.intersection(link_idx)
-            if len(cols):
-                df.drop(columns=cols, inplace=True)
+        if len(link_idx):
+            n.links.drop(link_idx, inplace=True)
+            for key, df in n.links_t.items():
+                cols = df.columns.intersection(link_idx)
+                if len(cols):
+                    df.drop(columns=cols, inplace=True)
 
-    # --- Remove stores and their time-series
+    # --- Remove stores and store time series
     n.stores.drop(store_idx, inplace=True)
     for key, df in n.stores_t.items():
         cols = df.columns.intersection(store_idx)
         if len(cols):
             df.drop(columns=cols, inplace=True)
 
-    # --- Remove the now-unneeded store buses
-    n.buses.drop(store_buses, errors="ignore", inplace=True)
+    # --- Optionally remove generators connected to removed store buses
+    if remove_store_buses and remove_generators_on_removed_buses:
+        if hasattr(n, "generators") and not n.generators.empty:
+            gen_idx = n.generators.index[n.generators["bus"].isin(store_buses)]
+            if len(gen_idx):
+                n.generators.drop(gen_idx, inplace=True)
+                for key, df in n.generators_t.items():
+                    cols = df.columns.intersection(gen_idx)
+                    if len(cols):
+                        df.drop(columns=cols, inplace=True)
+
+    # --- Optionally remove store buses
+    if remove_store_buses:
+        n.buses.drop(store_buses, errors="ignore", inplace=True)
 
     return n
 

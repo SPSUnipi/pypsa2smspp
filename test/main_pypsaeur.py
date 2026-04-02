@@ -26,10 +26,10 @@ import pypsa
 
 # Inputs
 # NETWORK_NC = Path(r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_5_elec_.nc")
-# NETWORK_NC = Path(
-#     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_20_elec_.nc"
-# )
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_giga_small.nc")
+NETWORK_NC = Path(
+     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp_italy_very_small_fewsectors/networks/base_s_2___2050.nc"
+)
+# NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_giga_small.nc")
 
 
 # Output
@@ -68,16 +68,18 @@ CONFIGFILE = "UCBlock/uc_solverconfig_grb.txt"
 # Optional: pass-through options for pySMSpp (all optional; defaults exist in pySMSpp)
 # Examples:
 #   PYSMSSP_OPTIONS = {"inner_block_name": "Block_0", "smspp_solver": "auto"}
-PYSMSSP_OPTIONS = {"logging": False}
+PYSMSSP_OPTIONS = {"logging": True}
 
 # Cleaning toggles
 DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
-DO_REDUCE_SNAPSHOTS = False
-REDUCE_SNAPSHOTS_TO = 8500
-DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
+DO_REDUCE_SNAPSHOTS = True
+REDUCE_SNAPSHOTS_TO = 24
+DO_CLEAN_STORAGE_UNITS = True  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
+REMOVE_STORE_BUSES = True
+REMOVE_GENERATORS_ON_REMOVED_BUSES = True
 DO_CLEAN_GLOBAL_CONSTRAINTS = True
 
 # Debug artifacts
@@ -237,7 +239,7 @@ try:
     if DO_CLEAN_STORAGE_UNITS:
         n_smspp = clean_storage_units(n_smspp)
     if DO_CLEAN_STORES:
-        n_smspp = clean_stores(n_smspp)
+        n_smspp = clean_stores(n_smspp, remove_store_buses=REMOVE_STORE_BUSES, remove_generators_on_removed_buses=REMOVE_GENERATORS_ON_REMOVED_BUSES)
     
     if DO_CLEAN_GLOBAL_CONSTRAINTS:
 # %%

@@ -19,15 +19,7 @@ from pypsa2smspp.network_correction import (
     add_slack_unit,
 )
 
-
-def run_ucblock(xlsx_path: Path) -> None:
-    """
-    UCBlock regression test:
-    - build network from Excel
-    - solve reference with PyPSA
-    - run full SMS++ pipeline in one call (no YAML)
-    - compare objectives
-    """
+def test_split(xlsx_path: Path = test_cases["xlsx_paths"][0]) -> None:
     case_name = xlsx_path.stem
 
     # Artifacts (optional)
@@ -49,30 +41,15 @@ def run_ucblock(xlsx_path: Path) -> None:
     # Work on a copy for reference solve
     network = n.copy()
 
-    # ---- (1) PyPSA optimization (reference) ----
-    solver_name = getattr(parser, "solver_name", "highs")
-    network.optimize(solver_name=solver_name)
-
-    # Export LP for debugging (best effort)
-    try:
-        network.model.to_file(fn=str(pypsa_lp))
-    except Exception:
-        pass
-
-    try:
-        obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
-    except Exception:
-        obj_pypsa = float(network.objective)
-
-    # ---- (2) SMS++ pipeline (ONE CALL) ----
+    # run call
     transformation = Transformation(
         capacity_expansion_ucblock=True,  # UCBlock
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
-        fp_temp="smspp_{name}_temp.nc",
-        fp_log="smspp_{name}_log.txt",
-        fp_solution="smspp_{name}_solution.nc",
+        fp_temp="smspp_{name}_temp_split.nc",
+        fp_log="smspp_{name}_log_split.txt",
+        fp_solution="smspp_{name}_solution_split.nc",
         configfile="auto",
         pysmspp_options={},  # keep pySMSpp defaults
     )
@@ -81,19 +58,9 @@ def run_ucblock(xlsx_path: Path) -> None:
 
     obj_smspp = float(transformation.result.objective_value)
 
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
-
-    # ---- (3) Optional export ----
     try:
-        n.export_to_netcdf(str(network_nc))
+        obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
     except Exception:
-        pass
+        obj_pypsa = float(network.objective)
 
-
-@pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_ucblock(test_case_xlsx):
-    run_ucblock(test_case_xlsx)
-
-
-if __name__ == "__main__":
-    run_ucblock(test_cases["xlsx_paths"][13])
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)

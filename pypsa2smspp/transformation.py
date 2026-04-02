@@ -262,6 +262,17 @@ class Transformation:
 ##################################################################################################
     
     def run(self, n, verbose: bool = True):
+        
+        self.create_model(n, verbose=verbose)
+        self.optimize(verbose=verbose)
+        self.retrieve_solution(n, verbose=verbose)
+
+        if verbose:
+            self.timer.print_summary()
+
+        return n
+    
+    def create_model(self, n, verbose: bool = True):
         # Keep timings accessible after the run
         self.timer = StepTimer()
         n.calculate_dependent_values()
@@ -279,10 +290,18 @@ class Transformation:
 
         with step(self.timer, "convert_to_blocks", verbose=verbose):
             self.sms_network = self.convert_to_blocks()
-
+        
+        return self.sms_network
+    
+    def optimize(self, verbose: bool = True):
+        if self.sms_network is None:
+            raise ValueError("Model must be created before optimization. Call create_model(n) first.")
         with step(self.timer, "optimize", verbose=verbose, extra={"mode": "auto"}):
-            self.optimize()
-
+            return self._optimize()
+    
+    def retrieve_solution(self, n, verbose: bool = True):
+        if self.result is None:
+            raise ValueError("Optimization must be run before retrieving solution. Call optimize() first.")
         with step(self.timer, "parse_solution_to_unitblocks", verbose=verbose):
             self.parse_solution_to_unitblocks(self.result.solution, n)
 
@@ -293,7 +312,6 @@ class Transformation:
             self.timer.print_summary()
 
         return n
-    
     
     def direct(self, n):
         """
@@ -1753,7 +1771,7 @@ class Transformation:
 #############################################################################################
 
     
-    def optimize(self):
+    def _optimize(self):
         """
         Optimize the already-built SMSNetwork.
     

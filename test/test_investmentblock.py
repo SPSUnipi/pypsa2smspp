@@ -77,7 +77,7 @@ def run_investment_block(xlsx_path: Path) -> None:
         pysmspp_options={},  # keep pySMSpp defaults
     )
 
-    n = transformation.run(network, verbose=False)
+    n = transformation.run(n, verbose=False)
 
     obj_smspp = float(transformation.result.objective_value)
 
