@@ -49,6 +49,7 @@ nav:
   - Quick Start: getting-started/quick-start.md
 - Examples:
   - Simple capacity expansion (2 bus): examples/capacity_expansion_2bus.ipynb
+  - Conversion step by step: examples/conversion_step_by_step.ipynb
 - User Guide:
   - API Reference: api_reference.md
 - Release Notes: release_notes.md

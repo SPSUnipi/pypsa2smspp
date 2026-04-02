@@ -28,6 +28,8 @@ pypsa2smspp is a Python package to enable advanced mathematical decomposition in
 
     [:octicons-arrow-right-24: Simple capacity expansion (2 bus)](examples/capacity_expansion_2bus.ipynb)
 
+    [:octicons-arrow-right-24: PyPSA to SMS++ conversion step by step](examples/conversion_step_by_step.ipynb)
+
 </div>
 
 ## Sections
