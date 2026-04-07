@@ -29,7 +29,7 @@ class TransformationConfig:
         self.IntermittentUnitBlock_parameters = {
             # "Gamma": 0.0,
             # "Kappa": 1.0,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable, capital_cost, p_nom_max: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu.where(capital_cost.abs() > 1e-12, p_nom_max * p_max_pu)),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
@@ -42,7 +42,7 @@ class TransformationConfig:
             "MinDownTime": lambda min_down_time: min_down_time, 
             "DeltaRampUp": lambda ramp_limit_up, p_nom: ramp_limit_up * p_nom if not np.isnan(ramp_limit_up.values[0]) else p_nom, # Di default MaxPower
             "DeltaRampDown": lambda ramp_limit_down, p_nom: ramp_limit_down * p_nom if not np.isnan(ramp_limit_down.values[0]) else p_nom,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable, capital_cost, p_nom_max: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu.where(capital_cost.abs() > 1e-12, p_nom_max * p_max_pu)),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             "PrimaryRho": 0.0,
             "SecondaryRho": 0.0,
@@ -60,7 +60,7 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_parameters = {
             # "Kappa": 1.0,
-            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu),
+            "MaxPower": lambda p_nom, p_max_pu, p_nom_extendable, capital_cost, p_nom_max: (p_nom * p_max_pu).where(~p_nom_extendable, p_max_pu.where(capital_cost.abs() > 1e-12, p_nom_max * p_max_pu)),
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
@@ -73,7 +73,7 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
             "InitialStorage": lambda cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else 0,
-            "Cost": lambda marginal_cost: marginal_cost,
+            "Cost": lambda marginal_cost: abs(marginal_cost),
             # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
             # "ConverterInvestmentCost": 0.0,
             # "BatteryMaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item(),
@@ -82,7 +82,7 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_store_parameters = {
             # "Kappa": 1.0,
-            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable, capital_cost, e_nom_max: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu.where(capital_cost != 0, e_nom_max * e_max_pu / max_hours)),
             "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "DeltaRampUp": np.nan,
@@ -96,7 +96,7 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours).iloc[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
-            "Cost": lambda marginal_cost: marginal_cost,
+            "Cost": lambda marginal_cost: abs(marginal_cost),
             }
 
         self.Lines_parameters = {

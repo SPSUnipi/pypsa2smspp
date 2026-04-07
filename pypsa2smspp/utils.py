@@ -833,106 +833,146 @@ def explode_multilinks_into_branches(
 ):
     """
     Split multi-output links into separate branches, keeping track of efficiencies.
-    If `return_efficiencies=True`, returns (exploded_df, efficiencies_dict),
-    where efficiencies_dict maps each physical link -> [eff1, eff2, ...].
-    Missing efficiencyN values are padded with 0.0 to ensure uniform length.
+
+    If return_efficiencies=True, returns:
+        exploded_df, efficiencies_dict, number_branches, number_branches_expandable
+
+    Otherwise returns:
+        exploded_df, number_branches, number_branches_expandable
+
+    efficiencies_dict maps each physical link to a list:
+        [efficiency, efficiency2, efficiency3, ...]
+
+    Important rule:
+    An efficiency is considered valid only if the corresponding bus exists.
+    If the bus is empty/missing, the efficiency is forced to 0.0 even if a
+    non-zero value is present in the dataframe.
     """
     if links_merged_df.empty:
-        return (links_merged_df.copy(), {}) if return_efficiencies else links_merged_df.copy()
+        if return_efficiencies:
+            return links_merged_df.copy(), {}, 0, 0
+        return links_merged_df.copy(), 0, 0
 
     df = links_merged_df.copy()
     efficiencies_dict = {}
 
-    # Identify extra bus/eff columns dynamically
+    # Identify extra bus columns dynamically: bus2, bus3, ...
     bus_extra_cols = []
     k = 2
     while f"bus{k}" in df.columns:
         bus_extra_cols.append(f"bus{k}")
         k += 1
 
-    # Determine total number of efficiency columns present in the DF
-    eff_cols = [c for c in df.columns if c.startswith("efficiency")]
-    max_eff_count = 1 + sum([f"efficiency{i}" in df.columns for i in range(2, k)])  # e.g. efficiency, efficiency2, efficiency3...
+    # Total number of efficiency slots expected: efficiency, efficiency2, ...
+    max_eff_count = 1 + len(bus_extra_cols)
 
     def _non_empty(val) -> bool:
+        """Return True if value is not NaN and not an empty string."""
         return pd.notna(val) and str(val).strip() != ""
+
+    def _get_valid_efficiency(row, bus_col: str, eff_col: str) -> float:
+        """
+        Return efficiency only if the corresponding bus exists.
+        Otherwise force it to 0.0.
+        """
+        if not _non_empty(row.get(bus_col, np.nan)):
+            return 0.0
+
+        val = row.get(eff_col, np.nan)
+        if not _non_empty(val):
+            return 0.0
+
+        try:
+            return float(val)
+        except Exception:
+            return 0.0
 
     new_rows = []
 
     for link_name, row in df.iterrows():
+        # ------------------------------------------------------------------
+        # Build efficiencies_dict consistently with actual bus existence
+        # ------------------------------------------------------------------
         eff_list = []
 
-        # Primary efficiency always exists (fill NaN with 0)
-        try:
-            eff_list.append(float(row.get("efficiency", 0.0)))
-        except Exception:
-            eff_list.append(0.0)
+        # Primary branch: bus1 <-> efficiency
+        eff_list.append(_get_valid_efficiency(row, "bus1", "efficiency"))
 
-        # Extra efficiencies (efficiency2, efficiency3, ...)
+        # Extra branches: bus2 <-> efficiency2, bus3 <-> efficiency3, ...
         for idx, bcol in enumerate(bus_extra_cols, start=2):
             ecol = f"efficiency{idx}"
-            if ecol in df.columns:
-                val = row.get(ecol, np.nan)
-                if _non_empty(val):
-                    eff_list.append(float(val))
-                else:
-                    eff_list.append(0.0)
-            else:
-                eff_list.append(0.0)
+            eff_list.append(_get_valid_efficiency(row, bcol, ecol))
 
-        # Pad with zeros if needed (so all lists have equal length)
+        # Pad just in case, though normally already correct
         if len(eff_list) < max_eff_count:
             eff_list += [0.0] * (max_eff_count - len(eff_list))
 
         efficiencies_dict[link_name] = eff_list
 
-        # ---- build exploded rows ----
-        extra_outputs = [(bcol, f"efficiency{idx}")
-                         for idx, bcol in enumerate(bus_extra_cols, start=2)
-                         if _non_empty(row.get(bcol, np.nan))]
+        # ------------------------------------------------------------------
+        # Build exploded rows
+        # Only create extra outputs for buses that actually exist
+        # ------------------------------------------------------------------
+        extra_outputs = []
+        for idx, bcol in enumerate(bus_extra_cols, start=2):
+            if _non_empty(row.get(bcol, np.nan)):
+                ecol = f"efficiency{idx}"
+                eff_val = _get_valid_efficiency(row, bcol, ecol)
+                extra_outputs.append((bcol, ecol, eff_val))
 
         is_multilink = len(extra_outputs) > 0
 
+        # If there are no extra outputs, keep the row as a single branch
         if not is_multilink:
             out_row = row.copy()
             out_row["hyper"] = hyper_id
             out_row["is_primary_branch"] = True
+
+            # Force primary efficiency to 0.0 if bus1 is missing
+            out_row["efficiency"] = _get_valid_efficiency(row, "bus1", "efficiency")
+
             new_rows.append(out_row)
             hyper_id += 1
             continue
 
-        # true multilink
-        primary_bus = row["bus1"]
-        primary_eff = row["efficiency"]
+        # True multilink: create explicit primary branch
+        primary_bus = row.get("bus1", np.nan)
+        primary_eff = _get_valid_efficiency(row, "bus1", "efficiency")
 
         pr = row.copy()
         pr["bus1"] = primary_bus
-        pr["efficiency"] = float(primary_eff)
-        pr.name = f"{link_name}__to_{primary_bus}"
+        pr["efficiency"] = primary_eff
+        pr.name = f"{link_name}__to_{primary_bus}" if _non_empty(primary_bus) else f"{link_name}__to_bus1"
         pr["hyper"] = hyper_id
         pr["is_primary_branch"] = True
         new_rows.append(pr)
 
-        for bcol, ecol in extra_outputs:
+        # Create one child per valid extra bus
+        for bcol, ecol, eff_val in extra_outputs:
             child = row.copy()
-            child["bus1"] = row[bcol]
-            child["efficiency"] = float(row[ecol])
-            child.name = f"{link_name}__to_{child['bus1']}"
+            child_bus = row[bcol]
+
+            child["bus1"] = child_bus
+            child["efficiency"] = eff_val
+            child.name = f"{link_name}__to_{child_bus}"
             child["hyper"] = hyper_id
             child["is_primary_branch"] = False
+
             new_rows.append(child)
 
         hyper_id += 1
 
     exploded = pd.DataFrame(new_rows)
 
-    # Drop redundant bus/eff columns
-    cols_to_drop = [c for c in exploded.columns
-                    if (c.startswith("bus") and c not in ("bus0", "bus1"))
-                    or (c.startswith("efficiency") and c != "efficiency")]
+    # Drop redundant bus/efficiency columns after explosion
+    cols_to_drop = [
+        c for c in exploded.columns
+        if (c.startswith("bus") and c not in ("bus0", "bus1"))
+        or (c.startswith("efficiency") and c != "efficiency")
+    ]
     exploded = exploded.drop(columns=cols_to_drop, errors="ignore")
 
-    # ---- QUI il conteggio dei branches espandibili (poche righe) ----
+    # Count branches
     n_phys = len(df)
     number_branches = len(exploded)
 
@@ -944,6 +984,7 @@ def explode_multilinks_into_branches(
         number_branches_expandable = 0
 
     extra = number_branches - n_phys
+
     if callable(logger):
         logger(
             f"[multilink] Exploded {n_phys} physical links into "
@@ -953,6 +994,7 @@ def explode_multilinks_into_branches(
 
     if return_efficiencies:
         return exploded, efficiencies_dict, number_branches, number_branches_expandable
+
     return exploded, number_branches, number_branches_expandable
 
 

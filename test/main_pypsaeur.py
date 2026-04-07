@@ -26,10 +26,10 @@ import pypsa
 
 # Inputs
 # NETWORK_NC = Path(r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_5_elec_.nc")
-NETWORK_NC = Path(
-     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp_italy_very_small_fewsectors/networks/base_s_2___2050.nc"
-)
-# NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_giga_small.nc")
+# NETWORK_NC = Path(
+#      r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp_italy_very_small_fewsectors/networks/base_s_2___2050.nc"
+# )
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small_fewsectors.nc")
 
 
 # Output
@@ -78,8 +78,8 @@ DO_REDUCE_SNAPSHOTS = True
 REDUCE_SNAPSHOTS_TO = 24
 DO_CLEAN_STORAGE_UNITS = True  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
-REMOVE_STORE_BUSES = True
-REMOVE_GENERATORS_ON_REMOVED_BUSES = True
+REMOVE_STORE_BUSES = False
+REMOVE_GENERATORS_ON_REMOVED_BUSES = False
 DO_CLEAN_GLOBAL_CONSTRAINTS = True
 
 # Debug artifacts
@@ -290,7 +290,7 @@ try:
     obj_smspp = float(transformation.result.objective_value)
     metrics["Obj_SMSpp"] = obj_smspp
     if obj_pypsa != 0.0:
-        metrics["Obj_rel_error_pct"] = (obj_pypsa - obj_smspp) / obj_pypsa * 100.0
+        metrics["Obj_rel_error_pct"] = (obj_smspp - obj_pypsa) / obj_pypsa * 100.0
 
     # -------- Print quick sanity info --------
     print("\n[DEBUG] Network sizes after SMS++ inverse transformation:")

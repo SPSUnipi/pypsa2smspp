@@ -72,7 +72,7 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'sector_coupled_pypsaeur'
+name = 'sector_coupled_complete'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -89,25 +89,25 @@ nd = NetworkDefinition(config)
 
 # if "sector" not in config.input_name_components:
 #     nd.n = add_slack_unit(nd.n)
-# nd.n = add_slack_unit(nd.n)
+nd.n = add_slack_unit(nd.n)
 # nd.n = clean_storage_units(nd.n)
 
 network = nd.n.copy()
-n = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_pypsa_network_giga_small.nc")
+# n = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_pypsa_network_giga_small.nc")
 
-df_diff = compare_networks(
-    n,
-    network,
-    rtol=1e-9,
-    atol=1e-12,
-    compare_dtypes=True,
-)
+# df_diff = compare_networks(
+#     n,
+#     network,
+#     rtol=1e-9,
+#     atol=1e-12,
+#     compare_dtypes=True,
+# )
 
 network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
 
-# network.export_to_netcdf(f"output/pypsa_{name}.nc")
+network.export_to_netcdf(f"output/develop/sector_coupled/pypsa_{name}.nc")
 
-network.model.to_file(fn = f"output/develop/pypsa_{name}.lp")
+network.model.to_file(fn = f"output/develop/sector_coupled/pypsa_{name}.lp")
 
 #%% Transformation class
 
