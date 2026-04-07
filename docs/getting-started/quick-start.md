@@ -2,70 +2,70 @@
 
 To install the package, please refer to [Installation](installation.md).
 
-In the following, we provide a quick example on how to add a simple optimization model with SMS++.
-The problem that follows optimizes the dispatch of a single thermal generator of 100kW to meet the demand of a constant load over 24 hours in one bus.
+In the following, we provide a quick example on how to add execute a simple example with pysmspp.
+The problem that follows optimizes the capacity expansion a single thermal generator.
 
-A sample SMS++ network can be created with the following code. After python imports, the code creates a new SMS++ network `sn` with the block file format. The block file format is a text file that contains only the model data in a structured way, with no solver information. The solver information is provided in a separate configuration file.
+First, we need to import the required packages:
 
 ```python
-from pysmspp import SMSNetwork, Variable, Block, SMSFileType, SMSConfig
-import numpy as np
-
-sn = SMSNetwork(file_type=SMSFileType.eBlockFile)
+import pypsa
+import pandas as pd
+import pypsa2smspp
 ```
 
-After an empty network is created, we can populate it with blocks. In particular, it is critical to add a first inner block that describes
-the type of model to be optimized. In this case, we are adding a `UCBlock` suitable for unit commitment problems, see the [UCBlock SMS documentation](https://gitlab.com/smspp/ucblock) for details. A `UCBlock` is a block that describes unit commitment problems. In particular, we specify 24 time steps (one day) and a constant demand of 50kW for each time step. The block is added to the network with the following code:
+Second, we create a simple PyPSA network with 2 buses, 1 line, 2 loads and 1 generator.
 
 ```python
-sn.add(
-    "UCBlock",  # block type
-    "Block_0",  # block name
-    id="0",  # block id
-    TimeHorizon=24,  # number of time steps
-    NumberUnits=1,  # number of units
-    NumberElectricalGenerators=1,  # number of electrical generators
-    NumberNodes=1,  # number of nodes
-    ActivePowerDemand=Variable(  # active power demand
-        "ActivePowerDemand",
-        "float",
-        ("NumberNodes", "TimeHorizon"),
-        np.full((1, 24), 50.),  # constant demand of 50kW
-    ),
+n = pypsa.Network()
+n.set_snapshots(pd.date_range("2024-01-01T00:00", "2024-01-01T23:00", freq="h"))
+
+# Add carriers
+n.add("Carrier", "AC")
+
+# Add buses
+n_buses = 2
+for b in range(n_buses):
+    n.add("Bus", f"bus{b}", carrier="AC")
+
+# Add lines in a radial topology using bidirectional links
+n_lines = n_buses - 1
+for l in range(n_lines):
+    n.add(
+        "Link",
+        f"line{l}",
+        bus0=f"bus{l}",
+        bus1=f"bus{l+1}",
+        length=1,
+        capital_cost=1000,
+        p_min_pu=-1,
+        p_nom_extendable=True,
+    )
+
+# Add a load to each bus
+n_loads = n_buses
+for l in range(n_loads):
+    n.add("Load", f"load{l}", bus=f"bus{l}", p_set=pd.Series(100, index=n.snapshots))
+
+# Add a generator to the first bus
+n.add(
+    "Generator",
+    "gen0",
+    bus="bus0",
+    p_nom_extendable=True,
+    capital_cost=1000,
+    marginal_cost=1,
 )
 ```
 
-In the unit commitment block stated above, no generator is yet added. To add a generator, we first create a `ThermalUnitBlock` block using the code below and we add it to the network. The following code adds a thermal unit block to the network. The block is added to the network with the following code:
+Third, we create a transformation object to convert the PyPSA network into an SMS++ model. The transformation object has several configuration options, but we will use the default settings for this example.
 
 ```python
-thermal_unit_block = Block().from_kwargs(
-    block_type="ThermalUnitBlock",
-    MinPower=Variable("MinPower", "float", (), 0.0),
-    MaxPower=Variable("MaxPower", "float", (), 100.),
-    LinearTerm=Variable("LinearTerm", "float", (), 0.3),
-    InitUpDownTime=Variable("InitUpDownTime", "int", (), 1),
-)
-
-sn.blocks["Block_0"].add("ThermalUnitBlock", "UnitBlock_0", block=thermal_unit_block)
+tran = pypsa2smspp.Transformation()
 ```
 
-Finally, the network is optimized with the following code:
+Finally, the network is automatically converted into a SMS++ object, optimized, and the reconstructed back from the results of SMS++ using the following code. The variable `n_smspp` contains the optimized PyPSA network repopulated of the solution from SMS++:
 
 ```python
-configfile = SMSConfig(template="uc_solverconfig")  # path to the template solver config file "uc_solverconfig"
-temporary_smspp_file = "./smspp_temp_file.nc"  # path to the temporary SMS++ file used as intermediate file to launch SMS++
-output_file = "./smspp_output.txt"  # path to the output file (optional)
-
-result = sn.optimize(
-    configfile,
-    temporary_smspp_file,
-    output_file,
-)
-```
-
-Finally, basic information are stored in the result object, see:
-
-```python
-print("Status: ", result.status)
-print("Objective value: ", result.objective_value)
+n_smspp = tran.run(n, verbose=False)
+n_smspp
 ```
