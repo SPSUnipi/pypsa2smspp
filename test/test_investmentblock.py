@@ -70,9 +70,9 @@ def run_investment_block(xlsx_path: Path) -> None:
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
-        fp_temp="smspp_{name}_temp.nc",
-        fp_log="smspp_{name}_log.txt",
-        fp_solution="smspp_{name}_solution.nc",
+        fp_temp="investmentblock/smspp_{name}_temp.nc",
+        fp_log="investmentblock/smspp_{name}_log.txt",
+        fp_solution="investmentblock/smspp_{name}_solution.nc",
         configfile="auto",
         pysmspp_options={},  # keep pySMSpp defaults
     )

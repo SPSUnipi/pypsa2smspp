@@ -41,6 +41,7 @@ from .utils import (
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
     build_dc_index,
+    get_param_as_dense
 )
 
 from .pip_utils import (
@@ -644,11 +645,21 @@ class Transformation:
         
     ### 6 ###
     def add_demand(self, n):
-       demand = n.loads_t.p_set.rename(columns=n.loads.bus)
-       # To be sure index of demand matches with buses (probably useless since SMS++ does not care)
-       demand = demand.T.reindex(n.buses.index).fillna(0.)
-       self.demand = {'name': 'ActivePowerDemand', 'type': 'float', 'size': ("NumberNodes", "TimeHorizon"), 'value': demand}        
+        """
+        Build nodal active power demand for SMS++.
     
+        This includes both dynamic and static loads.
+        """
+        demand_by_load = get_param_as_dense(n, "Load", "p_set", weights=False)
+        demand = demand_by_load.rename(columns=n.loads.bus).groupby(level=0, axis=1).sum()
+        demand = demand.T.reindex(n.buses.index).fillna(0.0)
+    
+        self.demand = {
+            "name": "ActivePowerDemand",
+            "type": "float",
+            "size": ("NumberNodes", "TimeHorizon"),
+            "value": demand,
+        }
     ### 7 ###
     def lines_links(self):
         """

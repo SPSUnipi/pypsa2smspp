@@ -29,7 +29,7 @@ import pypsa
 # NETWORK_NC = Path(
 #      r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp_italy_very_small_fewsectors/networks/base_s_2___2050.nc"
 # )
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small_fewsectors.nc")
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small.nc")
 
 
 # Output

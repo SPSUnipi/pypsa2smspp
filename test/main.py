@@ -72,7 +72,7 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'sector_coupled_complete'
+name = 'sector_coupled_maxpowerflow'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -115,7 +115,7 @@ transformation = Transformation(name=name,
                                 workdir="output/develop/sector_coupled",
                                 enable_thermal_units=False,
                                 capacity_expansion_ucblock=True,
-                                configfile="UCBlock/uc_solverconfig_grb.txt",
+                                configfile="UCBlock/uc_solverconfig_grb_lp.txt",
                                 merge_links=False)
 nd.n = transformation.run(nd.n)
 

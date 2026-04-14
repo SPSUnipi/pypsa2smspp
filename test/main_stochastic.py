@@ -59,7 +59,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_load_dif'
+name = 'stochastic_base_load_equi'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -73,7 +73,7 @@ nd.n = add_slack_unit(nd.n)
 SCENARIOS = ["low", "med", "high"]
 load = nd.n.loads_t.p_set
 LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
-PROB = {"low": 0.5, "med": 0.3, "high": 0.2}  # Scenario probabilities
+PROB = {"low": 0.333333333333, "med": 0.333333333333, "high": 0.333333333333}  # Scenario probabilities
 
 nd.n.set_scenarios(PROB)
 
