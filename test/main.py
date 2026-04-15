@@ -72,7 +72,7 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'sector_coupled_maxpowerflow'
+name = 'e_min_pu_0'
 
 #%% Network definition with PyPSA
 config = TestConfig()
