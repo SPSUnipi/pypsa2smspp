@@ -72,7 +72,8 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'e_min_pu_0'
+name = 'problem'
+folder = 'develop/investmentblock'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -93,33 +94,24 @@ nd.n = add_slack_unit(nd.n)
 # nd.n = clean_storage_units(nd.n)
 
 network = nd.n.copy()
-# n = pypsa.Network(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_pypsa_network_giga_small.nc")
-
-# df_diff = compare_networks(
-#     n,
-#     network,
-#     rtol=1e-9,
-#     atol=1e-12,
-#     compare_dtypes=True,
-# )
 
 network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
-
-network.export_to_netcdf(f"output/develop/sector_coupled/pypsa_{name}.nc")
-
-network.model.to_file(fn = f"output/develop/sector_coupled/pypsa_{name}.lp")
 
 #%% Transformation class
 
 transformation = Transformation(name=name,
-                                workdir="output/develop/sector_coupled",
+                                workdir=f"output/{folder}",
                                 enable_thermal_units=False,
                                 capacity_expansion_ucblock=True,
-                                configfile="UCBlock/uc_solverconfig_grb_lp.txt",
+                                configfile='auto',
                                 merge_links=False)
 nd.n = transformation.run(nd.n)
 
 # nd.n = nd.n.smspp(verbose=True)
+
+network.export_to_netcdf(f"output/{folder}/pypsa_{name}.nc")
+
+network.model.to_file(fn = f"output/{folder}/pypsa_{name}.lp")
 
 objective_pypsa = network.objective + network.objective_constant
 objective_smspp = nd.n.objective
