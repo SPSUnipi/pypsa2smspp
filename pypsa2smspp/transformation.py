@@ -41,7 +41,8 @@ from .utils import (
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
     build_dc_index,
-    get_param_as_dense
+    get_param_as_dense,
+    ucblock_variables
 )
 
 from .pip_utils import (
@@ -247,6 +248,7 @@ class Transformation:
         self.networkblock = {}
         self.investmentblock = {"Blocks": []}
         self.dimensions = {}
+        self.ucblock_variables = {}
 
         self.sms_network = None
         self.result = None
@@ -309,8 +311,6 @@ class Transformation:
         with step(self.timer, "inverse_transformation", verbose=verbose):
             self.inverse_transformation(self.result.objective_value, n)
 
-        if verbose:
-            self.timer.print_summary()
 
         return n
     
@@ -347,6 +347,7 @@ class Transformation:
         """
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
         """
+        self.ucblock_variables = ucblock_variables(n)
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.capacity_expansion_ucblock)
         self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.capacity_expansion_ucblock, nominal_attrs)
@@ -508,7 +509,7 @@ class Transformation:
             "size": ("NumberDesignLines")
         }
         
-        self.generator_node = {
+        self.ucblock_variables['generator_node'] = {
             "name": "GeneratorNode",
             "type": "int",
             "size": ("NumberElectricalGenerators",),
@@ -635,6 +636,7 @@ class Transformation:
                 "BatteryDesign" if "BatteryUnitBlock" in name else
                 "DesignVariable")   # fallback
             )
+        
             self.unitblocks[name] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], design_key: components_df[nom].values, "Extendable":ext, "variables": converted_dict}
         
         if attr_name == 'HydroUnitBlock_parameters':
@@ -1619,43 +1621,43 @@ class Transformation:
         """
     
         # UCBlock dimensions (NumberUnits, NumberNodes, etc.)
-        ucblock_dims = self.dimensions['UCBlock']
+        ucblock_dims = self.dimensions["UCBlock"]
     
         # -----------------
         # Demand (load)
         # -----------------
         demand_var = {
-            self.demand['name']: Variable(
-                self.demand['name'],
-                self.demand['type'],
-                self.demand['size'],
-                self.demand['value']
+            self.demand["name"]: Variable(
+                self.demand["name"],
+                self.demand["type"],
+                self.demand["size"],
+                self.demand["value"],
             )
         }
     
         # -----------------
-        # GeneratorNode
+        # UCBlock variables
         # -----------------
-        gen_node_var = {
-            self.generator_node['name']: Variable(
-                self.generator_node['name'],
-                self.generator_node['type'],
-                self.generator_node['size'],
-                self.generator_node['value']
+        ucblock_vars = {}
+        for _, var in self.ucblock_variables.items():
+            ucblock_vars[var["name"]] = Variable(
+                var["name"],
+                var["type"],
+                var["size"],
+                var["value"],
             )
-        }
     
         # -----------------
         # Network lines (Lines block only, merged with Links if needed)
         # -----------------
         line_vars = {}
         if ucblock_dims.get("NumberLines", 0) > 0:
-            for var_name, var in self.networkblock['Lines']['variables'].items():
+            for var_name, var in self.networkblock["Lines"]["variables"].items():
                 line_vars[var_name] = Variable(
                     var_name,
-                    var['type'],
-                    var['size'],
-                    var['value']
+                    var["type"],
+                    var["size"],
+                    var["value"],
                 )
     
         # -----------------
@@ -1664,8 +1666,8 @@ class Transformation:
         block_kwargs = {
             **ucblock_dims,
             **demand_var,
-            **gen_node_var,
-            **line_vars
+            **ucblock_vars,
+            **line_vars,
         }
     
         # -----------------
@@ -1675,7 +1677,7 @@ class Transformation:
             "UCBlock",
             name_id,
             id=f"{index_id}",
-            **block_kwargs
+            **block_kwargs,
         )
     
         # -----------------
@@ -1683,28 +1685,32 @@ class Transformation:
         # -----------------
         for ub_name, unit_block in self.unitblocks.items():
             ub_kwargs = {}
-            for var_name, var in unit_block['variables'].items():
+            for var_name, var in unit_block["variables"].items():
                 ub_kwargs[var_name] = Variable(
                     var_name,
-                    var['type'],
-                    var['size'],
-                    var['value']
+                    var["type"],
+                    var["size"],
+                    var["value"],
                 )
     
             # Add also any special dimensions
-            if 'dimensions' in unit_block:
-                for dim_name, dim_value in unit_block['dimensions'].items():
+            if "dimensions" in unit_block:
+                for dim_name, dim_value in unit_block["dimensions"].items():
                     ub_kwargs[dim_name] = dim_value
     
-            # create Block
+            # Create Block
             unit_block_obj = Block().from_kwargs(
-                block_type=unit_block['block'],
-                **ub_kwargs
+                block_type=unit_block["block"],
+                name=unit_block["name"],
+                **ub_kwargs,
             )
     
-            # attach to UCBlock
-            master.blocks[name_id].add_block(unit_block['enumerate'], block=unit_block_obj)
-            
+            # Attach to UCBlock
+            master.blocks[name_id].add_block(
+                unit_block["enumerate"],
+                block=unit_block_obj,
+            )
+    
         # -----------------
         # Optionally add DesignNetworkBlock (only in capacity_expansion_ucblock mode)
         # -----------------
@@ -2204,7 +2210,7 @@ class Transformation:
             self.dimensions['UCBlock']['NumberUnits'] += 1
             self.dimensions['UCBlock']['NumberElectricalGenerators'] += 1
             
-            self.generator_node['value'].append(bus)
+            self.ucblock_variables['generator_node']['value'].append(bus)
             index += 1
 
 
