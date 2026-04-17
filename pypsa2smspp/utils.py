@@ -274,6 +274,43 @@ def _normalize_selector(x: Union[bool, str, Sequence[str]]) -> Union[bool, list[
 ############################### Dimensions for SMS++ ############################################
 #################################################################################################
 
+def ucblock_variables(n):
+    """
+    Build UCBlock variables related to names and topology indexing.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network.
+
+    Returns
+    -------
+    dict
+        Dictionary with UCBlock variables.
+    """
+    node_names = np.array(n.buses.index.astype(str), dtype=object)
+    line_names = np.array(
+        list(n.lines.index.astype(str)) + list(n.links.index.astype(str)),
+        dtype=object,
+    )
+
+    variables = {
+        "node_name": {
+            "name": "NodeName",
+            "type": "str",
+            "size": ("NumberNodes",),
+            "value": node_names,
+        },
+        "line_name": {
+            "name": "LineName",
+            "type": "str",
+            "size": ("NumberLines",),
+            "value": line_names,
+        },
+    }
+
+    return variables
+
 def ucblock_dimensions(n):
     """
     Computes the dimensions of the UCBlock from the PyPSA network.
