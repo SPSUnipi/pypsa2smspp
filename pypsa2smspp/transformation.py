@@ -42,7 +42,8 @@ from .utils import (
     apply_expansion_overrides,
     build_dc_index,
     get_param_as_dense,
-    ucblock_variables
+    ucblock_variables,
+    preprocess_zero_capital_cost_extendable_generators
 )
 
 from .pip_utils import (
@@ -371,6 +372,12 @@ class Transformation:
         self._dc_names = []
         self._dc_types = []
     
+        n = preprocess_zero_capital_cost_extendable_generators(
+            n,
+            fixed_capacity=1e6,
+            update_bounds=True,
+            logger=logger,
+        )  
         
         stores_df, links_merged_df, self.dimensions["NetworkBlock"]["merged_links_ext"] = build_store_and_merged_links(
             n,
@@ -662,6 +669,7 @@ class Transformation:
             "size": ("NumberNodes", "TimeHorizon"),
             "value": demand,
         }
+        
     ### 7 ###
     def lines_links(self):
         """

@@ -33,6 +33,8 @@ class TransformationConfig:
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "InertiaPower": 1.0,
             "ActivePowerCost": lambda marginal_cost: marginal_cost,
+            "MinGeneration": lambda e_sum_min: e_sum_min,
+            "MaxGeneration": lambda e_sum_max: e_sum_max,
         }
 
         # Parameters for thermal units

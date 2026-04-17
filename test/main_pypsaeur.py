@@ -71,11 +71,11 @@ CONFIGFILE = "UCBlock/uc_solverconfig_grb.txt"
 PYSMSSP_OPTIONS = {"logging": True}
 
 # Cleaning toggles
-DO_CLEAN_E_SUM = False
+DO_CLEAN_E_SUM = True
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
 DO_REDUCE_SNAPSHOTS = True
-REDUCE_SNAPSHOTS_TO = 700
+REDUCE_SNAPSHOTS_TO = 1000
 DO_CLEAN_STORAGE_UNITS = True  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False

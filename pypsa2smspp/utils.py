@@ -556,6 +556,74 @@ def get_attr_name(
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
 # ------------------------ Pre-processing functions --------------------------------
 
+def preprocess_zero_capital_cost_extendable_generators(
+    n,
+    fixed_capacity: float = 1e6,
+    update_bounds: bool = True,
+    logger=print,
+):
+    """
+    Preprocess extendable generators with zero capital cost.
+
+    Generators matching:
+    - p_nom_extendable == True
+    - capital_cost == 0
+
+    are converted to non-extendable generators with a large fixed capacity.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network to preprocess.
+    fixed_capacity : float, default 1e6
+        Capacity assigned to matching generators.
+    update_bounds : bool, default True
+        If True, also set p_nom_min and p_nom_max to fixed_capacity when present.
+    logger : callable, default print
+        Logging function.
+
+    Returns
+    -------
+    pypsa.Network
+        The modified network (same object, modified in place).
+    """
+    if n.generators.empty:
+        return n
+
+    required_cols = {"p_nom_extendable", "capital_cost", "p_nom"}
+    missing_cols = required_cols - set(n.generators.columns)
+    if missing_cols:
+        logger(
+            "Skipping generator preprocessing: missing columns "
+            f"{sorted(missing_cols)}."
+        )
+        return n
+
+    mask = (
+        n.generators["p_nom_extendable"].fillna(False).astype(bool)
+        & n.generators["capital_cost"].fillna(np.nan).eq(0)
+    )
+
+    matched = n.generators.index[mask]
+
+    if len(matched) == 0:
+        return n
+
+    n.generators.loc[matched, "p_nom_extendable"] = False
+    n.generators.loc[matched, "p_nom"] = fixed_capacity
+
+    if update_bounds:
+        if "p_nom_min" in n.generators.columns:
+            n.generators.loc[matched, "p_nom_min"] = fixed_capacity
+        if "p_nom_max" in n.generators.columns:
+            n.generators.loc[matched, "p_nom_max"] = fixed_capacity
+
+    # logger(
+    #     f"Preprocessed {len(matched)} extendable generators with zero capital_cost: "
+    #     f"set p_nom={fixed_capacity} and p_nom_extendable=False."
+    # )
+
+    return n
 
 def build_store_and_merged_links(n, merge_links=False, logger=None, merge_selector=None):
     """

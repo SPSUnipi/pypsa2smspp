@@ -103,7 +103,7 @@ transformation = Transformation(name=name,
                                 workdir=f"output/{folder}",
                                 enable_thermal_units=False,
                                 capacity_expansion_ucblock=True,
-                                configfile='auto',
+                                configfile='UCBlock/uc_solverconfig_grb.txt',
                                 merge_links=False)
 nd.n = transformation.run(nd.n)
 
