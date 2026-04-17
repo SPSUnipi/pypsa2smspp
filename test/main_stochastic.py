@@ -41,6 +41,7 @@ from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
+import pypsa
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -60,6 +61,7 @@ def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
 name = 'stochastic_base_load_equi'
+folder = 'develop/tssb'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -92,7 +94,7 @@ statistics_pypsa = n_pypsa.statistics()
 transformation = Transformation(name=name,
                                 configfile="TSSBlock/TSSBSCfg_grb.txt",
                                 enable_thermal_units=False,
-                                workdir="output/develop/tssb",
+                                workdir=f"output/{folder}",
                                 stochastic_parameters={
                                     "stochastic_type": "tssb",
                                     "parameters": ["demand"]
@@ -104,5 +106,9 @@ statistics_smspp = nd.n.statistics()
 obj_smspp = nd.n.objective
 error = (obj_smspp - obj_pypsa) / obj_pypsa * 100
 print(f"Error PyPSA-SMS++ of {error}%")
+
+n_pypsa.export_to_netcdf(f"output/{folder}/pypsa_{name}.nc")
+
+n_pypsa.model.to_file(fn = f"output/{folder}/pypsa_{name}.lp")
 
 

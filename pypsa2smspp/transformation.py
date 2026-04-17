@@ -2143,7 +2143,7 @@ class Transformation:
         if self.problem_structure.get("stochastic_demand", False):
             data_mappings.append(
                 build_stochastic_mapping_demand(
-                    scenario_size=self.dimensions['UCBlock']['TimeHorizon']
+                    scenario_size=self.dimensions['UCBlock']['TimeHorizon'] * self.dimensions['UCBlock']['NumberNodes']
                 )
             )
 
