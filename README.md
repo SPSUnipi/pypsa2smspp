@@ -1,6 +1,8 @@
 # pypsa2smspp
 
 [![Tests](https://github.com/SPSUnipi/pypsa2smspp/actions/workflows/test.yml/badge.svg)](https://github.com/SPSUnipi/pypsa2smspp/actions/workflows/test.yml)
+[![Documentation Status](https://readthedocs.org/projects/pypsa2smspp/badge/?version=latest)](https://pypsa2smspp.readthedocs.io/en/latest/?badge=latest)
+![Size](https://img.shields.io/github/repo-size/SPSUnipi/pypsa2smspp)
  
 This package aims at providing a python interface between [PyPSA](https://github.com/PyPSA/pypsa) and [SMS++](https://gitlab.com/smspp/smspp-project) models using a simple python interface.
 The package aims to support:
