@@ -288,8 +288,11 @@ def ucblock_variables(n):
     dict
         Dictionary with UCBlock variables.
     """
-    node_names = n.buses.index.astype(str).tolist()
-    line_names = list(n.lines.index.astype(str)) + list(n.links.index.astype(str))
+    node_names = np.array(n.buses.index.astype(str), dtype=object)
+    line_names = np.array(
+        list(n.lines.index.astype(str)) + list(n.links.index.astype(str)),
+        dtype=object,
+    )
 
     variables = {
         "node_name": {
