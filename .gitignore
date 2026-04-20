@@ -168,3 +168,6 @@ test/investment*
 test/configs/data/~$components.xlsx
 test/gurobi*
 investment_candidates*
+
+# VS Code
+.vscode/*
