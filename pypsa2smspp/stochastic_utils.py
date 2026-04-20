@@ -15,6 +15,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .utils import get_bus_demand_matrix
+
 
 def is_stochastic_network(n) -> bool:
     """Return True if the network exposes stochastic scenarios."""
@@ -209,25 +211,6 @@ def describe_problem_structure(
         "stochastic_renewables": "renewables" in stochastic_parameter_set,
     }
 
-
-def get_bus_demand_matrix(n) -> pd.DataFrame:
-    """Aggregate load time series by bus.
-
-    Returns
-    -------
-    pd.DataFrame
-        Index = buses, columns = snapshots.
-    """
-    if getattr(n, "loads", None) is None or n.loads.empty:
-        return pd.DataFrame(index=n.buses.index, columns=n.snapshots, dtype=float).fillna(0.0)
-
-    demand = n.loads_t.p_set.rename(columns=n.loads.bus)
-    demand = demand.T.groupby(level=0).sum()
-    demand = demand.reindex(index=n.buses.index, fill_value=0.0)
-    demand = demand.reindex(columns=n.snapshots, fill_value=0.0)
-    demand = demand.fillna(0.0)
-
-    return demand
 
 
 def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:

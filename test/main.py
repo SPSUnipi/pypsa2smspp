@@ -73,7 +73,7 @@ def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
 name = 'problem'
-folder = 'develop/investmentblock'
+folder = 'develop/sector_coupled'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -95,7 +95,7 @@ nd.n = add_slack_unit(nd.n)
 
 network = nd.n.copy()
 
-network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
+network.optimize(solver_name='gurobi') #, solver_options=SOLVER_OPTIONS)
 
 #%% Transformation class
 

@@ -43,7 +43,8 @@ from .utils import (
     build_dc_index,
     get_param_as_dense,
     ucblock_variables,
-    preprocess_zero_capital_cost_extendable_generators
+    preprocess_zero_capital_cost_extendable_generators,
+    get_bus_demand_matrix,
 )
 
 from .pip_utils import (
@@ -374,7 +375,7 @@ class Transformation:
     
         n = preprocess_zero_capital_cost_extendable_generators(
             n,
-            fixed_capacity=1e6,
+            fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
         )  
@@ -659,9 +660,7 @@ class Transformation:
     
         This includes both dynamic and static loads.
         """
-        demand_by_load = get_param_as_dense(n, "Load", "p_set", weights=False)
-        demand = demand_by_load.rename(columns=n.loads.bus).groupby(level=0, axis=1).sum()
-        demand = demand.T.reindex(n.buses.index).fillna(0.0)
+        demand = get_bus_demand_matrix(n)
     
         self.demand = {
             "name": "ActivePowerDemand",

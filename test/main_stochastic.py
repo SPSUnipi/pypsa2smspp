@@ -35,6 +35,15 @@ if not os.access(OUT, os.W_OK):
 # print(">>> Output target:", OUTPUT_NC)
 # ---------------------------------------------------------------------------
 
+SOLVER_OPTIONS = {
+    "Threads": 32,
+    "Method": 2,       # barrier
+    "Crossover": 0,
+    # "BarConvTol": 1e-6,
+    "Seed": 123,
+    "AggFill": 0,
+    "PreDual": 0,
+}
 
 from configs.test_config import TestConfig
 from network_definition import NetworkDefinition
@@ -64,7 +73,7 @@ name = 'stochastic_base_load_equi'
 folder = 'develop/tssb'
 
 #%% Network definition with PyPSA
-config = TestConfig()
+config = TestConfig(fp="application_stochastic.ini")
 
 nd = NetworkDefinition(config)
 
@@ -84,7 +93,7 @@ for scenario in SCENARIOS:
 
 n_pypsa = nd.n.copy()
 
-n_pypsa.optimize(solver_name='gurobi')
+n_pypsa.optimize(solver_name='gurobi') # , solver_options=SOLVER_OPTIONS)
 obj_pypsa = n_pypsa.objective + n_pypsa.objective_constant
 
 # n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")

@@ -214,6 +214,28 @@ def get_bus_idx(n, components_df, bus_series, column_name, dtype="uint32"):
         components_df[column_name] = bus_series.map(n.buses.index.get_loc).astype(dtype).values
 
 
+def get_bus_demand_matrix(n) -> pd.DataFrame:
+    """
+    Aggregate load demand by bus, including both dynamic and static loads.
+
+    Returns
+    -------
+    pd.DataFrame
+        Index = buses, columns = snapshots.
+    """
+    if getattr(n, "loads", None) is None or n.loads.empty:
+        return pd.DataFrame(index=n.buses.index, columns=n.snapshots, dtype=float).fillna(0.0)
+
+    demand_by_load = get_param_as_dense(n, "Load", "p_set", weights=False)
+
+    demand_by_bus = demand_by_load.T.groupby(n.loads.bus).sum()
+
+    demand_by_bus = demand_by_bus.reindex(index=n.buses.index, fill_value=0.0)
+    demand_by_bus = demand_by_bus.reindex(columns=n.snapshots, fill_value=0.0)
+    demand_by_bus = demand_by_bus.fillna(0.0)
+
+    return demand_by_bus
+
 
 def get_nominal_aliases(component_type, nominal_attrs):
     """
