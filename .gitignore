@@ -71,10 +71,6 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# documentation
-docs/_build/
-docs/examples/output
-
 # PyBuilder
 .pybuilder/
 target/
@@ -174,8 +170,9 @@ test/gurobi*
 investment_candidates*
 test/configs/data/develop/*
 
-# examples
-docs/examples/output/*
+# Documentation
+docs/_build/
+docs/examples/output
 
 # VS Code
 .vscode/*
