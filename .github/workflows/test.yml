@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test_with_smspp_conda:
+  test_with_conda_smspp:
     # Test package with SMS++ installed from conda-forge
     name: Test package with SMSpp from conda-forge (Linux)
     runs-on: ubuntu-latest
@@ -69,11 +69,9 @@ jobs:
           test/output/test
         retention-days: 14
   
-  test_with_smspp:
+  test_with_latest_smspp:
     # Test package build in matrix of OS and Python versions
     name: Test package with SMSpp
-    needs:
-    - test_with_smspp_conda
     runs-on: ${{ matrix.os }}
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
