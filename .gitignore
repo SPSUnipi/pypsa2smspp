@@ -175,3 +175,6 @@ test/configs/data/develop/*
 
 # examples
 docs/examples/output/*
+
+# VS Code
+.vscode/*
