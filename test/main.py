@@ -62,7 +62,7 @@ SOLVER_OPTIONS = {
     "Threads": 32,
     "Method": 2,       # barrier
     "Crossover": 0,
-    "BarConvTol": 1e-5,
+    # "BarConvTol": 1e-5,
     "Seed": 123,
     "AggFill": 0,
     "PreDual": 0,
@@ -72,7 +72,7 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'problem'
+name = 'no_standing_losses'
 folder = 'develop/sector_coupled'
 
 #%% Network definition with PyPSA
@@ -95,7 +95,7 @@ nd.n = add_slack_unit(nd.n)
 
 network = nd.n.copy()
 
-network.optimize(solver_name='gurobi') #, solver_options=SOLVER_OPTIONS)
+network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
 
 #%% Transformation class
 

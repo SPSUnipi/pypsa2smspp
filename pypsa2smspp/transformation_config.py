@@ -91,6 +91,7 @@ class TransformationConfig:
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch: 1 / efficiency_dispatch.iloc[0],
             "StoringBatteryRho": lambda efficiency_store: efficiency_store.iloc[0],
+            "StandingBatteryRho": lambda standing_loss: (1 - standing_loss.iloc[0]),
             "Demand": 0.0,
             "MinStorage": lambda e_nom, e_min_pu, e_nom_extendable: (e_nom * e_min_pu).where(~e_nom_extendable, e_min_pu),
             "MaxStorage": lambda e_nom, e_max_pu, e_nom_extendable: (e_nom * e_max_pu).where(~e_nom_extendable, e_max_pu),
