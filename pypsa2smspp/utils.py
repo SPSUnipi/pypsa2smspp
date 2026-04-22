@@ -1174,29 +1174,10 @@ def add_sectorcoupled_parameters(
     if inverse_dict is None:
         return  # nothing to patch
 
-    # Special rule for p2..pn
-    def _p_rule(flowvalue, efficiency):
-        """Return zeros if efficiency==1, else -flowvalue*efficiency. Handles arrays/scalars."""
-        fv = np.asarray(flowvalue)
-        ef = np.asarray(efficiency)
-
-        # Try to broadcast ef to fv shape (covers fv:(T,E) vs ef:(T,) cases)
-        if ef.shape != fv.shape:
-            try:
-                ef = np.broadcast_to(ef, fv.shape)
-            except ValueError:
-                if ef.ndim == 1 and fv.ndim > 1 and ef.shape[0] == fv.shape[0]:
-                    ef = ef.reshape((fv.shape[0],) + (1,) * (fv.ndim - 1))
-                else:
-                    ef = np.broadcast_to(ef, fv.shape)  # will raise if impossible
-
-        mask_one = np.isclose(ef, 1.0)
-        return np.where(mask_one, 0.0, -fv * ef)
-
     # Add/override p2..pn
     max_eff_len = int(max(1, max_eff_len))
     for k in range(2, max_eff_len + 1):
-        inverse_dict[f"p{k}"] = _p_rule
+        inverse_dict[f"p{k}"] = lambda flowvalue, efficiency: -flowvalue * efficiency
 
 
     

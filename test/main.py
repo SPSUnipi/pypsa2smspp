@@ -72,7 +72,7 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'no_standing_losses'
+name = 'co2_sequestred_no_cyclic'
 folder = 'develop/sector_coupled'
 
 #%% Network definition with PyPSA
@@ -110,6 +110,7 @@ nd.n = transformation.run(nd.n)
 # nd.n = nd.n.smspp(verbose=True)
 
 network.export_to_netcdf(f"output/{folder}/pypsa_{name}.nc")
+nd.n.export_to_netcdf(f"output/{folder}/smspp_{name}.nc")
 
 network.model.to_file(fn = f"output/{folder}/pypsa_{name}.lp")
 

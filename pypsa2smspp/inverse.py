@@ -49,18 +49,56 @@ def component_definition(n, unit_block: dict) -> str:
             raise ValueError(f"Unknown unit block type: {block}")
 
 
-def evaluate_function(func, normalized_keys, unit_block, df):
+def evaluate_function(func, normalized_keys, unit_block, df, key=None):
     """
-    Evaluates a callable inverse function by extracting arguments from unit block or network.
+    Evaluates a callable inverse function by extracting arguments from unit block
+    or network static dataframe.
+
+    Special handling is included for Link/DCNetworkBlock inverse variables p1..pn:
+    if the function requests `efficiency` and the reconstructed variable is `p{k}`,
+    then the corresponding dataframe column is:
+        - `efficiency`  for p1
+        - `efficiency2` for p2
+        - `efficiency3` for p3
+        - etc.
     """
     param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
     args = []
+
+    row = df.loc[unit_block["name"]]
+
     for param in param_names:
-        param = normalize_key(param)
-        if param in normalized_keys:
-            args.append(unit_block[normalized_keys[param]])
+        param_norm = normalize_key(param)
+
+        if param_norm in normalized_keys:
+            value = unit_block[normalized_keys[param_norm]]
+            if isinstance(value, dict) and "value" in value:
+                value = value["value"]
+            args.append(value)
+            continue
+
+        # Special handling for link inverse p1..pn efficiencies
+        if param_norm == "efficiency" and key is not None and key.startswith("p") and key[1:].isdigit():
+            k = int(key[1:])
+            eff_col = "efficiency" if k == 1 else f"efficiency{k}"
+
+            if eff_col not in df.columns:
+                raise KeyError(
+                    f"Column '{eff_col}' not found in dataframe for component '{unit_block['name']}' "
+                    f"while reconstructing '{key}'."
+                )
+
+            args.append(row[eff_col])
+            continue
+
+        if param_norm in df.columns:
+            args.append(row[param_norm])
         else:
-            args.append(df.loc[unit_block['name']][param])
+            raise KeyError(
+                f"Parameter '{param_norm}' could not be resolved for component '{unit_block['name']}' "
+                f"while evaluating inverse variable '{key}'."
+            )
+
     return func(*args)
 
 
@@ -133,7 +171,7 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config) -> dict:
 
     for key, func in unitblock_parameters.items():
         if callable(func):
-            value = evaluate_function(func, normalized_keys, unit_block, df)
+            value = evaluate_function(func, normalized_keys, unit_block, df, key=key)
             if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
                 value = value.sum(axis=0)
             value, dims, coords, var_name = dataarray_components(n, value, component, unit_block, key)
