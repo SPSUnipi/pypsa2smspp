@@ -647,6 +647,73 @@ def preprocess_zero_capital_cost_extendable_generators(
 
     return n
 
+def preprocess_dynamic_link_parameters_to_static_means(
+    n,
+    fields=("efficiency", "p_min_pu", "p_max_pu"),
+    logger=None,
+):
+    """
+    Convert selected dynamic link parameters from n.links_t into static mean
+    values stored in n.links.
+
+    This is a temporary approximation used when the downstream model does not
+    support time-varying link parameters.
+    """
+
+    def _log(msg, level="info"):
+        """Log messages using either a Logger object or a callable."""
+        if logger is None:
+            return
+        if hasattr(logger, level):
+            getattr(logger, level)(msg)
+        elif callable(logger):
+            logger(msg)
+
+    if n.links.empty:
+        _log("No links found: skipping dynamic-to-static link preprocessing.")
+        return n
+
+    links_t = getattr(n, "links_t", None)
+    if links_t is None:
+        _log("No links_t attribute found: skipping dynamic-to-static link preprocessing.")
+        return n
+
+    for field in fields:
+        dynamic_df = getattr(links_t, field, None)
+
+        if dynamic_df is None:
+            _log(f"links_t.{field} not found: skipping.")
+            continue
+
+        if dynamic_df.empty:
+            _log(f"links_t.{field} is empty: skipping.")
+            continue
+
+        valid_cols = dynamic_df.columns.intersection(n.links.index)
+        if len(valid_cols) == 0:
+            _log(f"links_t.{field} has no columns matching n.links.index: skipping.")
+            continue
+
+        mean_values = dynamic_df[valid_cols].mean(axis=0, skipna=True)
+        mean_values = mean_values.dropna()
+
+        if mean_values.empty:
+            _log(f"links_t.{field} contains only NaN values for matching links: skipping.")
+            continue
+
+        if field not in n.links.columns:
+            n.links[field] = np.nan
+
+        n.links.loc[mean_values.index, field] = mean_values
+
+        _log(
+            f"Collapsed dynamic link field '{field}' to static means "
+            f"for {len(mean_values)} links."
+        )
+
+    return n
+
+
 def build_store_and_merged_links(n, merge_links=False, logger=None, merge_selector=None):
     """
     Build enriched stores_df (adds efficiency_store/efficiency_dispatch)

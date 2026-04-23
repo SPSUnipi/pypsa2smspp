@@ -45,6 +45,7 @@ from .utils import (
     ucblock_variables,
     preprocess_zero_capital_cost_extendable_generators,
     get_bus_demand_matrix,
+    preprocess_dynamic_link_parameters_to_static_means
 )
 
 from .pip_utils import (
@@ -358,73 +359,166 @@ class Transformation:
         
         
     ### 3 ###
-    def iterate_components(self, n):
+    def _initialize_component_iteration_state(self):
         """
-        Iterates over the network components and adds them as unit blocks.
+        Initialize local state used during component iteration.
+    
+        Returns
+        -------
+        dict
+            Dictionary containing mutable state used by iterate_components.
         """
-        
-        # ------------- Preprocessing ----------------
-        # Probably useful to group this part as 'preprocessing' as it is independent from the rest
-        generator_node = []
-        investment_meta = {"Blocks": [], "index_extendable": [], "asset_type": [], 'design_lines': []}
         self.unitblock_design_data = []
-        unitblock_index = 0
-        lines_index = 0
         self._dc_names = []
         self._dc_types = []
+    
+        return {
+            "generator_node": [],
+            "investment_meta": {
+                "Blocks": [],
+                "index_extendable": [],
+                "asset_type": [],
+                "design_lines": [],
+            },
+            "unitblock_index": 0,
+            "lines_index": 0,
+        }
+    
+    
+    def _preprocess_network_for_iteration(self, n):
+        """
+        Apply preprocessing steps to the input network before iterating over
+        components and building SMS++ blocks.
+    
+        Parameters
+        ----------
+        n : pypsa.Network
+            Input PyPSA network.
+    
+        Returns
+        -------
+        dict
+            Dictionary containing the preprocessed network and auxiliary
+            dataframes needed during iteration.
+        """
     
         n = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
-        )  
-        
+        )
+    
+        n = preprocess_dynamic_link_parameters_to_static_means(
+            n,
+            fields=("efficiency", "p_min_pu", "p_max_pu"),
+            logger=logger,
+        )
+    
         stores_df, links_merged_df, self.dimensions["NetworkBlock"]["merged_links_ext"] = build_store_and_merged_links(
             n,
             merge_links=self.merge_links,
             logger=logger,
             merge_selector=getattr(self, "merge_selector", None),
         )
-        
+    
         links_before = links_merged_df.copy()
-        
-        if "bus2" in n.links.columns and bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any()):
-            # hyper alle linee
+    
+        has_multilinks = (
+            "bus2" in n.links.columns
+            and bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any())
+        )
+    
+        if has_multilinks:
             n.lines["hyper"] = np.arange(0, len(n.lines), dtype=int)
-            links_after, self.networkblock['efficiencies'], self.dimensions['NetworkBlock']['NumberBranches'], self.dimensions['NetworkBlock']['NumberBranches_ext'] = explode_multilinks_into_branches(links_merged_df, len(n.lines), logger=logger)
-            self.networkblock["max_eff_len"] = max((len(v) for v in self.networkblock['efficiencies'].values()), default=1)
-            add_sectorcoupled_parameters(self.config.Lines_parameters, self.config.Links_parameters, self.config.DCNetworkBlock_links_inverse, self.networkblock['max_eff_len'])
+    
+            (
+                links_after,
+                self.networkblock["efficiencies"],
+                self.dimensions["NetworkBlock"]["NumberBranches"],
+                self.dimensions["NetworkBlock"]["NumberBranches_ext"],
+            ) = explode_multilinks_into_branches(
+                links_merged_df,
+                len(n.lines),
+                logger=logger,
+            )
+    
+            self.networkblock["max_eff_len"] = max(
+                (len(v) for v in self.networkblock["efficiencies"].values()),
+                default=1,
+            )
+    
+            add_sectorcoupled_parameters(
+                self.config.Lines_parameters,
+                self.config.Links_parameters,
+                self.config.DCNetworkBlock_links_inverse,
+                self.networkblock["max_eff_len"],
+            )
         else:
             links_after = links_merged_df.copy()
-            # assicura colonne per coerenza (no split): un solo branch per link
+    
             if "hyper" not in links_after.columns:
-                links_after["hyper"] = np.arange(len(n.lines), len(n.lines) + len(links_after), dtype=int)
+                links_after["hyper"] = np.arange(
+                    len(n.lines),
+                    len(n.lines) + len(links_after),
+                    dtype=int,
+                )
+    
             if "is_primary_branch" not in links_after.columns:
                 links_after["is_primary_branch"] = True
-        
-        correct_dimensions(self.dimensions, stores_df, links_merged_df, n, self.capacity_expansion_ucblock)
-        
+    
+        correct_dimensions(
+            self.dimensions,
+            stores_df,
+            links_merged_df,
+            n,
+            self.capacity_expansion_ucblock,
+        )
+    
         self._dc_index = build_dc_index(n, links_before, links_after)
-        
-        # TODO remove when necessary
-        self._dc_names  = list(self._dc_index['physical']['names'])
-        self._dc_types  = list(self._dc_index['physical']['types'])
-
-
+    
+        # TODO remove when no longer needed
+        self._dc_names = list(self._dc_index["physical"]["names"])
+        self._dc_types = list(self._dc_index["physical"]["types"])
+    
         if self.capacity_expansion_ucblock:
-            apply_expansion_overrides(self.config.IntermittentUnitBlock_parameters, self.config.BatteryUnitBlock_store_parameters, self.config.IntermittentUnitBlock_inverse, self.config.BatteryUnitBlock_inverse, self.config.InvestmentBlock_parameters)
-        
-        # ------------- Main loop over components ----------------
-        
-        # Iterate in the same order as before
+            apply_expansion_overrides(
+                self.config.IntermittentUnitBlock_parameters,
+                self.config.BatteryUnitBlock_store_parameters,
+                self.config.IntermittentUnitBlock_inverse,
+                self.config.BatteryUnitBlock_inverse,
+                self.config.InvestmentBlock_parameters,
+            )
+    
+        return {
+            "n": n,
+            "stores_df": stores_df,
+            "links_after": links_after,
+        }
+    
+    
+    def iterate_components(self, n):
+        """
+        Iterates over the network components and adds them as unit blocks.
+        """
+    
+        state = self._initialize_component_iteration_state()
+        prep = self._preprocess_network_for_iteration(n)
+    
+        n = prep["n"]
+        stores_df = prep["stores_df"]
+        links_after = prep["links_after"]
+    
+        generator_node = state["generator_node"]
+        investment_meta = state["investment_meta"]
+        unitblock_index = state["unitblock_index"]
+        lines_index = state["lines_index"]
+    
         for components in n.components[["Generator", "Store", "StorageUnit", "Line", "Link"]]:
-
+    
             if components.empty:
                 continue
     
-            # --- CHANGED: pick the right dataframe per component ---
-            # TODO build a proper definition to define the DataFrame
             if components.list_name == "stores":
                 components_df = stores_df
                 components_t = components.dynamic
@@ -441,21 +535,21 @@ class Transformation:
                 not self.capacity_expansion_ucblock
                 or components_type in ["lines", "links"]
             )
-
+    
             if use_investmentblock:
                 df_investment = self.add_InvestmentBlock(n, components_df, components.name)
     
-            # Lines and Links path unchanged
             if components_type in ["lines", "links"]:
                 self._dc_names.extend(list(components_df.index))
                 self._dc_types.extend(
                     ["line" if components_type == "lines" else "link"] * len(components_df)
                 )
+    
                 get_bus_idx(
                     n,
                     components_df,
                     [components_df.bus0, components_df.bus1],
-                    ["start_line_idx", "end_line_idx"]
+                    ["start_line_idx", "end_line_idx"],
                 )
     
                 attr_name = get_attr_name(components.name)
@@ -472,7 +566,6 @@ class Transformation:
                 )
                 continue
     
-            # StorageUnits path unchanged (special hydro/PHS handling)
             elif components_type == "storage_units":
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 for bus, carrier in zip(components_df["bus_idx"].values, components_df["carrier"]):
@@ -481,15 +574,24 @@ class Transformation:
                     else:
                         generator_node.append(bus)
     
-            # Generators / Stores
             else:
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 generator_node.extend(components_df["bus_idx"].values)
     
-            # iterate each component one by one (unchanged)
             for component in components_df.index:
-                carrier = components_df.loc[component].carrier if "carrier" in components_df.columns else None
-                attr_name = get_attr_name(components.name, carrier, enable_thermal_units=self.enable_thermal_units, intermittent_carriers=self.intermittent_carriers, default_intermittent=renewable_carriers)
+                carrier = (
+                    components_df.loc[component].carrier
+                    if "carrier" in components_df.columns
+                    else None
+                )
+    
+                attr_name = get_attr_name(
+                    components.name,
+                    carrier,
+                    enable_thermal_units=self.enable_thermal_units,
+                    intermittent_carriers=self.intermittent_carriers,
+                    default_intermittent=renewable_carriers,
+                )
     
                 self.add_UnitBlock(
                     attr_name,
@@ -498,7 +600,7 @@ class Transformation:
                     components.name,
                     n,
                     component,
-                    unitblock_index
+                    unitblock_index,
                 )
     
                 if is_extendable(components_df.loc[[component]], components.name, nominal_attrs):
@@ -509,30 +611,30 @@ class Transformation:
     
                 unitblock_index += 1
     
-        # finalize (unchanged)
-        self.networkblock['Design'] = self.investmentblock.copy()
-        self.networkblock['Design']['DesignLines'] = {
+        self.networkblock["Design"] = self.investmentblock.copy()
+        self.networkblock["Design"]["DesignLines"] = {
             "value": np.array(investment_meta["design_lines"]),
             "type": "uint",
-            "size": ("NumberDesignLines")
+            "size": ("NumberDesignLines"),
         }
-        
-        self.ucblock_variables['generator_node'] = {
+    
+        self.ucblock_variables["generator_node"] = {
             "name": "GeneratorNode",
             "type": "int",
             "size": ("NumberElectricalGenerators",),
-            "value": generator_node
+            "value": generator_node,
         }
+    
         self.investmentblock["Blocks"] = investment_meta["Blocks"]
         self.investmentblock["Assets"] = {
             "value": np.array(investment_meta["index_extendable"]),
             "type": "uint",
-            "size": "NumAssets"
+            "size": "NumAssets",
         }
         self.investmentblock["AssetType"] = {
             "value": np.array(investment_meta["asset_type"]),
             "type": "int",
-            "size": "NumAssets"
+            "size": "NumAssets",
         }
 
     ### 4 ###  
