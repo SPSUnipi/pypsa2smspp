@@ -25,9 +25,9 @@ dependencies = [
     "numpy",
     "pandas>=0.24, <3",
     "pypsa>=1",
-    "xarray",
+    "xarray<2026.4",
     "openpyxl",
-    "pysmspp>=0.0.3",
+    "pysmspp>=0.0.4",
 ]
 
 [project.urls]

@@ -71,9 +71,6 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
-
 # PyBuilder
 .pybuilder/
 target/
@@ -173,5 +170,9 @@ test/gurobi*
 investment_candidates*
 test/configs/data/develop/*
 
-# examples
-docs/examples/output/*
+# Documentation
+docs/_build/
+docs/examples/output
+
+# VS Code
+.vscode/*
