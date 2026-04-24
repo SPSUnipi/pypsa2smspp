@@ -39,9 +39,8 @@ if not os.access(OUT, os.W_OK):
 from configs.test_config import TestConfig
 from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
-from datetime import datetime
-import pysmspp
-import pypsa
+
+from pypsa2smspp.utils import preprocess_dynamic_link_parameters_to_static_means
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -85,6 +84,8 @@ if name == None:
 #     config.load_sign = -1
 
 nd = NetworkDefinition(config)
+
+nd.n = preprocess_dynamic_link_parameters_to_static_means(nd.n, drop_dynamic=True)
 
 # nd.n = clean_ciclicity_storage(nd.n)
 
