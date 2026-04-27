@@ -1353,7 +1353,7 @@ class Transformation:
     
         for name, unit_block in self.unitblocks.items():
             component = component_definition(n, unit_block)
-            dataarrays = block_to_dataarrays(n, name, unit_block, component, self.config)
+            dataarrays = block_to_dataarrays(n, name, unit_block, component, self.config, scenario_name=None)
             if dataarrays:  # No emptry dicts
                 ds = xr.Dataset(dataarrays)
                 datasets.append(ds)

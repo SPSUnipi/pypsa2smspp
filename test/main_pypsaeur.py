@@ -42,7 +42,7 @@ SOLVER_OPTIONS = {
     "Threads": 32,
     "Method": 2,       # barrier
     "Crossover": 0,
-    "BarConvTol": 1e-5,
+    # "BarConvTol": 1e-5,
     "Seed": 123,
     "AggFill": 0,
     "PreDual": 0,
@@ -74,9 +74,9 @@ PYSMSSP_OPTIONS = {"logging": True}
 DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
-DO_REDUCE_SNAPSHOTS = True
+DO_REDUCE_SNAPSHOTS = False
 REDUCE_SNAPSHOTS_TO = 1800
-DO_CLEAN_STORAGE_UNITS = True  # optional, kept off by default
+DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False
 REMOVE_GENERATORS_ON_REMOVED_BUSES = False
@@ -120,6 +120,8 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     clean_global_constraints
 )
+
+from pypsa2smspp.utils import preprocess_dynamic_link_parameters_to_static_means
 
 
 # =============================================================================
@@ -242,8 +244,9 @@ try:
         n_smspp = clean_stores(n_smspp, remove_store_buses=REMOVE_STORE_BUSES, remove_generators_on_removed_buses=REMOVE_GENERATORS_ON_REMOVED_BUSES)
     
     if DO_CLEAN_GLOBAL_CONSTRAINTS:
-# %%
         n_smspp = clean_global_constraints(n_smspp)
+        
+    n_smspp = preprocess_dynamic_link_parameters_to_static_means(n_smspp, drop_dynamic=True)
 
     # -------- PyPSA optimization (reference) --------
     network = n_smspp.copy()

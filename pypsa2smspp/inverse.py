@@ -16,6 +16,7 @@ assign_solution in PyPSA.
 
 import numpy as np
 import xarray as xr
+import pandas as pd
 
 
 def normalize_key(key: str) -> str:
@@ -49,10 +50,14 @@ def component_definition(n, unit_block: dict) -> str:
             raise ValueError(f"Unknown unit block type: {block}")
 
 
-def evaluate_function(func, normalized_keys, unit_block, df, key=None):
+def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_name=None):
     """
     Evaluates a callable inverse function by extracting arguments from unit block
     or network static dataframe.
+
+    Supports both deterministic and stochastic cases:
+    - deterministic df index: Index(name)
+    - stochastic df index: MultiIndex(scenario, name)
 
     Special handling is included for Link/DCNetworkBlock inverse variables p1..pn:
     if the function requests `efficiency` and the reconstructed variable is `p{k}`,
@@ -65,11 +70,36 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None):
     param_names = func.__code__.co_varnames[:func.__code__.co_argcount]
     args = []
 
-    row = df.loc[unit_block["name"]]
+    unit_name = unit_block["name"]
+
+    # Resolve correct row from dataframe
+    if isinstance(df.index, pd.MultiIndex):
+        if scenario_name is None:
+            raise KeyError(
+                f"DataFrame has MultiIndex but no scenario_name was provided "
+                f"for component '{unit_name}' while evaluating inverse variable '{key}'."
+            )
+
+        try:
+            row = df.loc[(scenario_name, unit_name)]
+        except KeyError as e:
+            raise KeyError(
+                f"Could not find row ({scenario_name}, {unit_name}) in dataframe "
+                f"while evaluating inverse variable '{key}'."
+            ) from e
+    else:
+        try:
+            row = df.loc[unit_name]
+        except KeyError as e:
+            raise KeyError(
+                f"Could not find row '{unit_name}' in dataframe while evaluating "
+                f"inverse variable '{key}'."
+            ) from e
 
     for param in param_names:
         param_norm = normalize_key(param)
 
+        # First try unit_block values
         if param_norm in normalized_keys:
             value = unit_block[normalized_keys[param_norm]]
             if isinstance(value, dict) and "value" in value:
@@ -77,26 +107,27 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None):
             args.append(value)
             continue
 
-        # Special handling for link inverse p1..pn efficiencies
+        # Special handling for p1..pn efficiencies in multi-output links
         if param_norm == "efficiency" and key is not None and key.startswith("p") and key[1:].isdigit():
             k = int(key[1:])
             eff_col = "efficiency" if k == 1 else f"efficiency{k}"
 
-            if eff_col not in df.columns:
+            if eff_col not in row.index:
                 raise KeyError(
-                    f"Column '{eff_col}' not found in dataframe for component '{unit_block['name']}' "
+                    f"Column '{eff_col}' not found for component '{unit_name}' "
                     f"while reconstructing '{key}'."
                 )
 
             args.append(row[eff_col])
             continue
 
-        if param_norm in df.columns:
+        # Standard dataframe lookup
+        if param_norm in row.index:
             args.append(row[param_norm])
         else:
             raise KeyError(
-                f"Parameter '{param_norm}' could not be resolved for component '{unit_block['name']}' "
-                f"while evaluating inverse variable '{key}'."
+                f"Parameter '{param_norm}' could not be resolved for component "
+                f"'{unit_name}' while evaluating inverse variable '{key}'."
             )
 
     return func(*args)
@@ -153,7 +184,7 @@ def dataarray_components(n, value, component, unit_block, key):
 
 
 
-def block_to_dataarrays(n, unit_name, unit_block, component, config) -> dict:
+def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_name=None) -> dict:
     """
     Transforms a unit block into a dictionary of DataArrays.
     """
@@ -171,7 +202,14 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config) -> dict:
 
     for key, func in unitblock_parameters.items():
         if callable(func):
-            value = evaluate_function(func, normalized_keys, unit_block, df, key=key)
+            value = evaluate_function(
+                func,
+                normalized_keys,
+                unit_block,
+                df,
+                key=key,
+                scenario_name=scenario_name,
+            )
             if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
                 value = value.sum(axis=0)
             value, dims, coords, var_name = dataarray_components(n, value, component, unit_block, key)
@@ -250,6 +288,7 @@ def block_to_dataarrays_stochastic(
             temp_block,
             component,
             config,
+            scenario_name=scenario_name,
         )
 
         for var_name, da in scenario_dataarrays.items():
