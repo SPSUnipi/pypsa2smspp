@@ -69,7 +69,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_load_equi_thermal'
+name = 'stochastic_base_load_equi_demand_maxpower'
 folder = 'develop/tssb'
 
 #%% Network definition with PyPSA
@@ -82,14 +82,23 @@ nd = NetworkDefinition(config)
 nd.n = add_slack_unit(nd.n)
 
 SCENARIOS = ["low", "med", "high"]
-load = nd.n.loads_t.p_set
-LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
 PROB = {"low": 0.333333333333, "med": 0.333333333333, "high": 0.333333333333}  # Scenario probabilities
+
+load = nd.n.loads_t.p_set
+pmaxpu = nd.n.generators_t.p_max_pu
 
 nd.n.set_scenarios(PROB)
 
-for scenario in SCENARIOS:
-    nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
+for st_p in config.stochastic_parameters:
+    if st_p == "demand":
+        LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
+        for scenario in SCENARIOS:
+            nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
+    elif st_p == "renewables":
+        PMAXPU_VALUE = {"low": pmaxpu / 2, "med": pmaxpu, "high": pmaxpu * 2/3}
+        for scenario in SCENARIOS:
+            nd.n.generators_t.p_max_pu[scenario] = PMAXPU_VALUE[scenario]
+
 
 n_pypsa = nd.n.copy()
 
@@ -106,7 +115,7 @@ transformation = Transformation(name=name,
                                 workdir=f"output/{folder}",
                                 stochastic_parameters={
                                     "stochastic_type": "tssb",
-                                    "parameters": ["demand"]
+                                    "parameters": config.stochastic_parameters,
                                 }
                                 )
 nd.n = transformation.run(nd.n)
@@ -117,6 +126,7 @@ error = (obj_smspp - obj_pypsa) / obj_pypsa * 100
 print(f"Error PyPSA-SMS++ of {error}%")
 
 n_pypsa.export_to_netcdf(f"output/{folder}/pypsa_{name}.nc")
+nd.n.export_to_netcdf(f"output/{folder}/smspp_{name}.nc")
 
 n_pypsa.model.to_file(fn = f"output/{folder}/pypsa_{name}.lp")
 

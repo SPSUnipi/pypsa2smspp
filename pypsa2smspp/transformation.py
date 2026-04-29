@@ -80,6 +80,7 @@ from .stochastic_utils import (
     build_tssb_static_abstract_path,
     build_stochastic_mapping_demand,
     build_tssb_stochastic_block_data,
+    build_stochastic_mapping_renewables_maxpower,
 )
 
 NP_DOUBLE = np.float64
@@ -2048,7 +2049,7 @@ class Transformation:
     
             if not (
                 self.problem_structure["stochastic_demand"]
-                or self.problem_structure["stochastic_price"]
+                or self.problem_structure["stochastic_marginal"]
                 or self.problem_structure["stochastic_renewables"]
             ):
                 raise ValueError(
@@ -2096,7 +2097,7 @@ class Transformation:
             "TotalLength": sap_data["TotalLength"],
         }
 
-        stochastic_block = self.build_tssb_stochastic_block()
+        stochastic_block = self.build_tssb_stochastic_block(n)
 
         self.tssb_data = {
             "enabled": True,
@@ -2112,7 +2113,9 @@ class Transformation:
         Build the payload for the DiscreteScenarioSet of a TSSB problem.
     
         The stochastic sources are selected from self.problem_structure.
-        For now only stochastic demand is implemented.
+        Implemented sources:
+        - stochastic demand
+        - stochastic renewable maximum power profiles from Generator.p_max_pu
         """
         dss_parts = []
     
@@ -2123,7 +2126,12 @@ class Transformation:
             dss_parts.append(build_dss_marginal(n))
     
         if self.problem_structure.get("stochastic_renewables", False):
-            dss_parts.append(build_dss_renewables(n))
+            dss_parts.append(
+                build_dss_renewables(
+                    n=n,
+                    intermittent_carriers=self.intermittent_carriers if self.intermittent_carriers is not None else renewable_carriers,
+                )
+            )
     
         dss_data = merge_tssb_dss_parts(dss_parts)
     
@@ -2131,6 +2139,15 @@ class Transformation:
         self.dimensions["tssb"]["dss"] = {
             "NumberScenarios": int(dss_data["number_scenarios"]),
             "ScenarioSize": int(dss_data["scenario_size"]),
+        }
+    
+        self.tssb_dss_offsets = {
+            part["parameter"]: {
+                "start": int(part["offset_start"]),
+                "end": int(part["offset_end"]),
+                "size": int(part["scenario_size"]),
+            }
+            for part in dss_data["parts"]
         }
     
         return dss_data
@@ -2239,44 +2256,69 @@ class Transformation:
         return self.design_variables
 
     
-    def build_tssb_stochastic_block(self):
+    def build_tssb_stochastic_block(self, n):
         """
         Build the StochasticBlock payload for TSSB.
-
-        Notes
-        -----
-        For now only stochastic demand is implemented.
-        Future stochastic mappings (e.g. marginal costs, renewables)
-        can be appended to the data_mappings list.
+    
+        Implemented mappings:
+        - stochastic demand -> UCBlock::set_active_power_demand
+        - stochastic renewables -> IntermittentUnitBlock::set_maximum_power
         """
-        # TODO:
-        # Future mappings for marginal costs and renewables may require one mapping
-        # per modified unit / variable, depending on how the scenario vector is encoded.
-        
         data_mappings = []
-
+    
         if self.problem_structure.get("stochastic_demand", False):
+            demand_offset = self.tssb_dss_offsets["demand"]
+    
             data_mappings.append(
                 build_stochastic_mapping_demand(
-                    scenario_size=self.dimensions['UCBlock']['TimeHorizon'] * self.dimensions['UCBlock']['NumberNodes']
+                    set_from_start=demand_offset["start"],
+                    set_from_end=demand_offset["end"],
+                    scenario_size=demand_offset["size"],
                 )
             )
-
+    
         if self.problem_structure.get("stochastic_marginal", False):
-            # TODO: add mapping(s) for set_linear when implemented
+            # TODO: add mapping(s) for set_linear when implemented.
             pass
-
+    
         if self.problem_structure.get("stochastic_renewables", False):
-            # TODO: add mapping(s) for set_max_power when implemented
-            pass
-
+            renewables_offset = self.tssb_dss_offsets["renewables"]
+        
+            renewable_unitblock_indices = self._collect_renewable_generator_unitblock_indices(
+                n=n,
+                intermittent_carriers=self.intermittent_carriers if self.intermittent_carriers is not None else renewable_carriers,
+            )
+        
+            expected_size = (
+                len(renewable_unitblock_indices)
+                * int(self.dimensions["UCBlock"]["TimeHorizon"])
+            )
+        
+            if renewables_offset["size"] != expected_size:
+                raise ValueError(
+                    "Mismatch between stochastic renewable DSS size and renewable "
+                    f"generator UnitBlock paths. DSS size is {renewables_offset['size']}, "
+                    f"while {len(renewable_unitblock_indices)} renewable generators "
+                    f"and TimeHorizon={self.dimensions['UCBlock']['TimeHorizon']} imply "
+                    f"{expected_size}."
+                )
+        
+            data_mappings.append(
+                build_stochastic_mapping_renewables_maxpower(
+                    set_from_start=renewables_offset["start"],
+                    set_from_end=renewables_offset["end"],
+                    scenario_size=renewables_offset["size"],
+                    unitblock_indices=renewable_unitblock_indices,
+                )
+            )
+    
         if not data_mappings:
             raise ValueError(
                 "No stochastic data mappings were built for the TSSB StochasticBlock."
             )
-
+    
         stochastic_block = build_tssb_stochastic_block_data(data_mappings)
-
+    
         self.dimensions["tssb"]["sb"] = {
             "NumberDataMappings": stochastic_block["NumberDataMappings"],
             "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
@@ -2286,8 +2328,61 @@ class Transformation:
                 "TotalLength": int(stochastic_block["AbstractPath"]["TotalLength"]),
             },
         }
-
+    
         return stochastic_block
+    
+    def _collect_renewable_generator_unitblock_indices(self, n, intermittent_carriers):
+        """
+        Collect UnitBlock indices corresponding to renewable PyPSA generators.
+    
+        Assumption
+        ----------
+        Generator-derived UnitBlocks are created first and preserve the order of
+        the physical generator index, i.e. without the scenario level.
+    
+        Therefore, the physical generator at position i maps to UnitBlock_i.
+    
+        This deliberately does not select all IntermittentUnitBlock objects, because
+        in SMS++ IntermittentUnitBlock means non-UC generator block, not necessarily
+        renewable generator.
+        """
+        if intermittent_carriers is None:
+            raise ValueError("intermittent_carriers must be provided.")
+    
+        intermittent_carriers = set(intermittent_carriers)
+    
+        generators = n.generators.copy()
+    
+        if isinstance(generators.index, pd.MultiIndex):
+            if "name" in generators.index.names:
+                name_level = generators.index.names.index("name")
+            else:
+                name_level = -1
+    
+            generators.index = generators.index.get_level_values(name_level)
+            generators = generators.loc[~generators.index.duplicated(keep="first")]
+    
+        renewable_generators = generators.index[
+            generators["carrier"].isin(intermittent_carriers)
+        ].tolist()
+    
+        if not renewable_generators:
+            raise ValueError(
+                "stochastic_renewables=True, but no PyPSA generators with carriers in "
+                f"intermittent_carriers={sorted(intermittent_carriers)} were found."
+            )
+    
+        unitblock_indices = [
+            int(generators.index.get_loc(generator_name))
+            for generator_name in renewable_generators
+        ]
+    
+        self.tssb_renewable_generator_order = renewable_generators
+        self.tssb_renewable_unitblock_indices = unitblock_indices
+    
+        return unitblock_indices
+    
+    
 #############################################################################################
 ############################## Backup #######################################################
 #############################################################################################

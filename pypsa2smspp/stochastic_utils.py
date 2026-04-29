@@ -15,8 +15,9 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .utils import get_bus_demand_matrix
-
+from .utils import (get_bus_demand_matrix,
+                    get_param_as_dense,
+                    )
 
 def is_stochastic_network(n) -> bool:
     """Return True if the network exposes stochastic scenarios."""
@@ -267,6 +268,55 @@ def get_base_scenario_network(n):
 
     return n
 
+def _unique_component_names(component_index):
+    """
+    Return unique physical component names from a possibly scenario-expanded index.
+    """
+    if isinstance(component_index, pd.MultiIndex):
+        if "name" in component_index.names:
+            name_level = component_index.names.index("name")
+        else:
+            name_level = -1
+
+        names = component_index.get_level_values(name_level)
+        return pd.Index(names).drop_duplicates()
+
+    return pd.Index(component_index).drop_duplicates()
+
+
+def _drop_scenario_level_from_columns(df):
+    """
+    Collapse scenario-expanded columns to physical component names.
+
+    This is useful after get_param_as_dense() on scenario networks where columns
+    may still be a MultiIndex such as (scenario, name).
+    """
+    if not isinstance(df.columns, pd.MultiIndex):
+        return df
+
+    if "name" in df.columns.names:
+        name_level = df.columns.names.index("name")
+    else:
+        name_level = -1
+
+    out = df.copy()
+    out.columns = out.columns.get_level_values(name_level)
+    out = out.loc[:, ~out.columns.duplicated(keep="first")]
+    return out
+
+
+def flatten_generator_timeseries_generator_major(p_max_pu):
+    """
+    Flatten a snapshot x generator DataFrame as generator-major, time-minor.
+
+    Input shape:
+        index   = snapshots
+        columns = generators
+
+    Output:
+        gen_0 all snapshots, then gen_1 all snapshots, etc.
+    """
+    return p_max_pu.T.to_numpy(dtype=float).reshape(-1)
 
 # Build Discrete Scenario Set
 
@@ -338,32 +388,176 @@ def build_dss_marginal(n) -> Dict[str, Any] | None:
     return None
 
 
-def build_dss_renewables(n) -> Dict[str, Any] | None:
-    """Placeholder builder for stochastic renewable profiles."""
-    warnings.warn(
-        "build_dss_renewables was called, but stochastic renewables are not implemented yet.",
-        UserWarning,
-    )
-    return None
-
-
-def merge_tssb_dss_parts(dss_parts: List[Dict[str, Any] | None]) -> Dict[str, Any]:
+def build_dss_renewables(
+    n,
+    intermittent_carriers,
+) -> Dict[str, Any]:
     """
-    Merge DSS parts into a single DiscreteScenarioSet payload.
+    Build DSS data for stochastic renewable maximum power profiles.
 
-    For now only one stochastic source is supported.
+    Source:
+        Generator.p_max_pu
+
+    Flattening:
+        generator-major, time-minor
+
+    For each scenario:
+        gen_0[t0], ..., gen_0[tT],
+        gen_1[t0], ..., gen_1[tT],
+        ...
     """
-    valid_parts = [part for part in dss_parts if part is not None]
+    scenario_names = get_scenario_names(n)
+    if not scenario_names:
+        raise ValueError("DSS renewable extraction requested on a deterministic network.")
 
-    if not valid_parts:
-        raise ValueError("No DSS parts were built for the TSSB interface.")
+    if intermittent_carriers is None:
+        raise ValueError("intermittent_carriers must be provided for stochastic renewables.")
 
-    if len(valid_parts) > 1:
-        raise NotImplementedError(
-            "Merging multiple stochastic DSS parts is not implemented yet."
+    intermittent_carriers = set(intermittent_carriers)
+
+    physical_generator_names = _unique_component_names(n.generators.index)
+
+    generators_static = n.generators.copy()
+    if isinstance(generators_static.index, pd.MultiIndex):
+        if "name" in generators_static.index.names:
+            name_level = generators_static.index.names.index("name")
+        else:
+            name_level = -1
+
+        generators_static = generators_static.copy()
+        generators_static.index = generators_static.index.get_level_values(name_level)
+        generators_static = generators_static.loc[
+            ~generators_static.index.duplicated(keep="first")
+        ]
+
+    generators_static = generators_static.reindex(physical_generator_names)
+
+    renewable_generators = generators_static.index[
+        generators_static["carrier"].isin(intermittent_carriers)
+    ].tolist()
+
+    if not renewable_generators:
+        raise ValueError(
+            "stochastic_renewables=True, but no generators with carriers in "
+            f"intermittent_carriers={sorted(intermittent_carriers)} were found."
         )
 
-    return valid_parts[0]
+    scenarios = []
+    generator_order = None
+    snapshot_order = None
+
+    for scenario_name in scenario_names:
+        n_s = n.get_scenario(scenario_name)
+
+        p_max_pu = get_param_as_dense(
+            n_s,
+            component="Generator",
+            field="p_max_pu",
+            weights=False,
+        )
+
+        p_max_pu = _drop_scenario_level_from_columns(p_max_pu)
+        p_max_pu = p_max_pu.reindex(columns=renewable_generators)
+
+        if generator_order is None:
+            generator_order = list(p_max_pu.columns)
+            snapshot_order = list(p_max_pu.index)
+        else:
+            p_max_pu = p_max_pu.reindex(
+                index=snapshot_order,
+                columns=generator_order,
+            )
+
+        if p_max_pu.isna().any().any():
+            missing = p_max_pu.columns[p_max_pu.isna().any(axis=0)].tolist()
+            raise ValueError(
+                "Missing p_max_pu values after reindexing renewable generators. "
+                f"Missing/invalid generators: {missing}"
+            )
+
+        scenarios.append(flatten_generator_timeseries_generator_major(p_max_pu))
+
+    scenario_matrix = np.vstack(scenarios).astype(float)
+    pool_weights = get_scenario_probabilities(n).astype(float)
+
+    return {
+        "parameter": "renewables",
+        "variable": "MaxPower",
+        "source": "Generator.p_max_pu",
+        "scenarios": scenario_matrix,
+        "pool_weights": pool_weights,
+        "generator_order": generator_order,
+        "snapshot_order": snapshot_order,
+        "flattening": "generator_major_time_minor",
+        "scenario_size": int(scenario_matrix.shape[1]),
+        "number_scenarios": int(scenario_matrix.shape[0]),
+    }
+
+
+def merge_tssb_dss_parts(dss_parts):
+    """
+    Merge DSS parts by concatenating their scenario vectors horizontally.
+
+    Each part must have:
+    - scenarios: shape = (NumberScenarios, part_scenario_size)
+    - pool_weights: shape = (NumberScenarios,)
+    - scenario_size
+    - number_scenarios
+
+    The returned parts include offset_start and offset_end, used by the
+    StochasticBlock data mappings.
+    """
+    dss_parts = [part for part in dss_parts if part is not None]
+
+    if not dss_parts:
+        raise ValueError("No DSS parts were provided.")
+
+    number_scenarios = int(dss_parts[0]["number_scenarios"])
+    pool_weights = np.asarray(dss_parts[0]["pool_weights"], dtype=float)
+
+    checked_parts = []
+    scenario_arrays = []
+
+    offset = 0
+
+    for part in dss_parts:
+        part_number_scenarios = int(part["number_scenarios"])
+        if part_number_scenarios != number_scenarios:
+            raise ValueError(
+                "All DSS parts must have the same NumberScenarios. "
+                f"Expected {number_scenarios}, got {part_number_scenarios} "
+                f"for parameter {part.get('parameter')!r}."
+            )
+
+        part_pool_weights = np.asarray(part["pool_weights"], dtype=float)
+        if not np.allclose(part_pool_weights, pool_weights):
+            raise ValueError(
+                "All DSS parts must have the same PoolWeights. "
+                f"Mismatch found for parameter {part.get('parameter')!r}."
+            )
+
+        scenarios = np.asarray(part["scenarios"], dtype=float)
+        scenario_size = int(scenarios.shape[1])
+
+        part = dict(part)
+        part["scenario_size"] = scenario_size
+        part["offset_start"] = int(offset)
+        part["offset_end"] = int(offset + scenario_size)
+
+        checked_parts.append(part)
+        scenario_arrays.append(scenarios)
+
+        offset += scenario_size
+
+    scenario_matrix = np.hstack(scenario_arrays)
+
+    return {
+        "scenarios": scenario_matrix,
+        "pool_weights": pool_weights,
+        "parts": checked_parts,
+        "scenario_size": int(scenario_matrix.shape[1]),
+        "number_scenarios": int(number_scenarios),
+    }
 
 
 # Build Abstract Path
@@ -453,14 +647,16 @@ def build_tssb_static_abstract_path(design_variables):
 
 # Build stochastic block
 
-def build_stochastic_mapping_demand(scenario_size):
+def build_stochastic_mapping_demand(
+    set_from_start,
+    set_from_end,
+    scenario_size,
+):
     """
     Build the stochastic data mapping for demand.
 
-    Notes
-    -----
-    The full scenario vector is passed to UCBlock::set_active_power_demand
-    through a single Range/Range mapping.
+    The scenario slice [set_from_start, set_from_end) is passed to
+    UCBlock::set_active_power_demand through a Range/Range mapping.
     """
     return {
         "target": "demand",
@@ -468,7 +664,63 @@ def build_stochastic_mapping_demand(scenario_size):
         "caller": "B",
         "data_type": "D",
         "set_size": [0, 0],
-        "set_elements": [0, int(scenario_size), 0, int(scenario_size)],
+        "set_elements": [
+            int(set_from_start),
+            int(set_from_end),
+            0,
+            int(scenario_size),
+        ],
+        "abstract_paths": [
+            {
+                "node_types": "",
+                "group_indices": [],
+                "element_indices": [],
+                "range_indices": [],
+            }
+        ],
+    }
+
+def build_stochastic_mapping_renewables_maxpower(
+    set_from_start,
+    set_from_end,
+    scenario_size,
+    unitblock_indices,
+):
+    """
+    Build the stochastic data mapping for renewable MaxPower.
+
+    A single data mapping is used for all intermittent unit blocks. The target
+    blocks are specified by concatenating one AbstractPath per UnitBlock_i:
+
+        B("i")
+
+    where i is the nested UnitBlock index inside the UCBlock.
+    """
+    abstract_paths = []
+
+    for unitblock_index in unitblock_indices:
+        abstract_paths.append(
+            {
+                "node_types": "B",
+                "group_indices": [str(int(unitblock_index))],
+                "element_indices": [None],
+                "range_indices": [None],
+            }
+        )
+
+    return {
+        "target": "renewables",
+        "function_name": "IntermittentUnitBlock::set_maximum_power",
+        "caller": "B",
+        "data_type": "D",
+        "set_size": [0, 0],
+        "set_elements": [
+            int(set_from_start),
+            int(set_from_end),
+            0,
+            int(scenario_size),
+        ],
+        "abstract_paths": abstract_paths,
     }
 
 
@@ -492,11 +744,10 @@ def build_tssb_stochastic_block_data(data_mappings):
         set_size.extend(mapping["set_size"])
         set_elements.extend(mapping["set_elements"])
 
-    number_mappings = len(data_mappings)
-    abstract_path = build_tssb_stochastic_block_abstract_path(number_mappings)
+    abstract_path = build_tssb_stochastic_block_abstract_path(data_mappings)
 
     stochastic_block = {
-        "NumberDataMappings": number_mappings,
+        "NumberDataMappings": len(data_mappings),
         "FunctionName": np.array(function_names, dtype="object"),
         "Caller": np.array(callers, dtype="object"),
         "DataType": np.array(data_types, dtype="object"),
@@ -508,33 +759,110 @@ def build_tssb_stochastic_block_data(data_mappings):
     return stochastic_block
 
 
-def build_tssb_stochastic_block_abstract_path(number_mappings):
+def build_tssb_stochastic_block_abstract_path(data_mappings):
     """
     Build the AbstractPath for the StochasticBlock mappings.
 
-    Notes
-    -----
-    For now each mapping uses an empty path, meaning that the caller block
-    is the inner block reference passed by StochasticBlock at deserialization.
+    The AbstractPath is built by concatenating all paths declared by each
+    mapping. Demand normally contributes one empty path. Renewable MaxPower
+    contributes one B("UnitBlock_i") path per intermittent UnitBlock.
     """
+    path_start = []
+    node_types = []
+    group_indices = []
+    element_indices = []
+    range_indices = []
+
+    cursor = 0
+
+    for mapping in data_mappings:
+        mapping_paths = mapping.get("abstract_paths", None)
+
+        if mapping_paths is None:
+            mapping_paths = [
+                {
+                    "node_types": "",
+                    "group_indices": [],
+                    "element_indices": [],
+                    "range_indices": [],
+                }
+            ]
+
+        for path in mapping_paths:
+            path_node_types = path.get("node_types", "")
+            path_group_indices = path.get("group_indices", [])
+            path_element_indices = path.get("element_indices", [])
+            path_range_indices = path.get("range_indices", [])
+
+            path_length = len(path_node_types)
+
+            if len(path_group_indices) != path_length:
+                raise ValueError(
+                    "Invalid AbstractPath: group_indices length does not match "
+                    f"node_types length for mapping {mapping['target']!r}."
+                )
+
+            if len(path_element_indices) != path_length:
+                raise ValueError(
+                    "Invalid AbstractPath: element_indices length does not match "
+                    f"node_types length for mapping {mapping['target']!r}."
+                )
+
+            if len(path_range_indices) != path_length:
+                raise ValueError(
+                    "Invalid AbstractPath: range_indices length does not match "
+                    f"node_types length for mapping {mapping['target']!r}."
+                )
+
+            path_start.append(cursor)
+
+            for k in range(path_length):
+                node_types.append(path_node_types[k])
+                group_indices.append(path_group_indices[k])
+                element_indices.append(path_element_indices[k])
+                range_indices.append(path_range_indices[k])
+
+            cursor += path_length
+
+    path_dim = len(path_start)
+    total_length = len(node_types)
+
     return {
-        "PathDim": int(number_mappings),
-        "TotalLength": 0,
-        "PathStart": np.zeros(int(number_mappings), dtype=np.uint32),
+        "PathDim": int(path_dim),
+        "TotalLength": int(total_length),
+        "PathStart": np.array(path_start, dtype=np.uint32),
         "PathNodeTypes": np.ma.masked_array(
-            np.array([], dtype="S1"),
-            mask=np.array([], dtype=bool),
+            np.array(node_types, dtype="S1"),
+            mask=np.zeros(total_length, dtype=bool),
         ),
         "PathGroupIndices": np.ma.masked_array(
-            np.array([], dtype=object),
-            mask=np.array([], dtype=bool),
+            np.array(group_indices, dtype=object),
+            mask=np.zeros(total_length, dtype=bool),
         ),
         "PathElementIndices": np.ma.masked_array(
-            np.array([], dtype=np.uint32),
-            mask=np.array([], dtype=bool),
+            np.array(
+                [
+                    0 if value is None else int(value)
+                    for value in element_indices
+                ],
+                dtype=np.uint32,
+            ),
+            mask=np.array(
+                [value is None for value in element_indices],
+                dtype=bool,
+            ),
         ),
         "PathRangeIndices": np.ma.masked_array(
-            np.array([], dtype=np.uint32),
-            mask=np.array([], dtype=bool),
+            np.array(
+                [
+                    0 if value is None else int(value)
+                    for value in range_indices
+                ],
+                dtype=np.uint32,
+            ),
+            mask=np.array(
+                [value is None for value in range_indices],
+                dtype=bool,
+            ),
         ),
     }

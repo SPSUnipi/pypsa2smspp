@@ -81,6 +81,7 @@ DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False
 REMOVE_GENERATORS_ON_REMOVED_BUSES = False
 DO_CLEAN_GLOBAL_CONSTRAINTS = True
+DO_MEAN_EFFICIENCIES = True
 
 # Debug artifacts
 EXPORT_PYPSA_LP = True
@@ -245,8 +246,9 @@ try:
     
     if DO_CLEAN_GLOBAL_CONSTRAINTS:
         n_smspp = clean_global_constraints(n_smspp)
-        
-    n_smspp = preprocess_dynamic_link_parameters_to_static_means(n_smspp, drop_dynamic=True)
+    
+    if DO_MEAN_EFFICIENCIES:
+        n_smspp = preprocess_dynamic_link_parameters_to_static_means(n_smspp, drop_dynamic=True)
 
     # -------- PyPSA optimization (reference) --------
     network = n_smspp.copy()
