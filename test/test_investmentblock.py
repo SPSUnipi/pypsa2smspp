@@ -180,5 +180,5 @@ def test_investment(test_case_xlsx):
 
 if __name__ == "__main__":
     safe_remove(OBJECTIVES_CSV)
-    run_investment_block(test_cases["xlsx_paths"][6])
+    run_investment_block(test_cases["xlsx_paths"][7])
     print(f"Objective report written to: {OBJECTIVES_CSV}")

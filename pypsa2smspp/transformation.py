@@ -351,7 +351,7 @@ class Transformation:
         """
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
         """
-        self.ucblock_variables = ucblock_variables(n)
+
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.capacity_expansion_ucblock)
         self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.capacity_expansion_ucblock, nominal_attrs)
@@ -424,6 +424,8 @@ class Transformation:
         )
     
         links_before = links_merged_df.copy()
+        
+        self.ucblock_variables = ucblock_variables(n, links_before)
     
         has_multilinks = (
             "bus2" in n.links.columns
@@ -502,14 +504,17 @@ class Transformation:
         """
         Iterates over the network components and adds them as unit blocks.
         """
+        
     
         state = self._initialize_component_iteration_state()
         prep = self._preprocess_network_for_iteration(n)
+        
     
         n = prep["n"]
+
         stores_df = prep["stores_df"]
         links_after = prep["links_after"]
-    
+        
         generator_node = state["generator_node"]
         investment_meta = state["investment_meta"]
         unitblock_index = state["unitblock_index"]

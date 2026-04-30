@@ -51,7 +51,8 @@ if not os.access(OUT, os.W_OK):
 # User settings
 # =============================================================================
 
-NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/stochastic_eth/test_europe/networks/base_s_stoch_adm___2050.nc"
+# NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/stochastic_eth/test_europe/networks/base_s_stoch_adm___2050.nc"
+NETWORK_PATH = r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_stoch_adm___2050.nc"
 
 NAME = "stochastic_network"
 FOLDER = "develop/tssb_loaded"

@@ -296,7 +296,7 @@ def _normalize_selector(x: Union[bool, str, Sequence[str]]) -> Union[bool, list[
 ############################### Dimensions for SMS++ ############################################
 #################################################################################################
 
-def ucblock_variables(n):
+def ucblock_variables(n, links_after):
     """
     Build UCBlock variables related to names and topology indexing.
 
@@ -312,7 +312,7 @@ def ucblock_variables(n):
     """
     node_names = np.array(n.buses.index.astype(str), dtype=object)
     line_names = np.array(
-        list(n.lines.index.astype(str)) + list(n.links.index.astype(str)),
+        list(n.lines.index.astype(str)) + list(links_after.index.astype(str)),
         dtype=object,
     )
 
@@ -580,7 +580,7 @@ def get_attr_name(
 
 def preprocess_zero_capital_cost_extendable_generators(
     n,
-    fixed_capacity: float = 1e6,
+    fixed_capacity: float = 1e8,
     update_bounds: bool = True,
     logger=print,
 ):
@@ -1294,7 +1294,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     if "MaxCapacityDesign" not in d:
         # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
         def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            p_nom_max_safe = p_nom_max.replace(np.inf, 1e7)
+            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
             return (first_scalar(p_nom_max_safe)
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
@@ -1323,7 +1323,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
         def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
+            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
             return (first_scalar(e_nom_max_safe)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
@@ -1341,7 +1341,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "ConverterMaxCapacityDesign"
     if "ConverterMaxCapacityDesign" not in b:
         def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e7)
+            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
             # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
             return (10.0 * first_scalar(e_nom_max_safe)
                     if bool(first_scalar(e_nom_extendable))
@@ -1352,7 +1352,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "ConverterMinCapacityDesign"
     if "ConverterMinCapacityDesign" not in b:
         def _conv_min_cap_design(e_nom, e_nom_extendable, e_nom_min):
-            e_nom_min_safe = e_nom_min.replace(np.inf, 1e7)
+            e_nom_min_safe = e_nom_min.replace(np.inf, 1e9)
             # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
             return (10.0 * first_scalar(e_nom_min_safe)
                     if bool(first_scalar(e_nom_extendable))
