@@ -283,13 +283,13 @@ class Transformation:
         # Keep timings accessible after the run
         self.timer = StepTimer()
         n.calculate_dependent_values()
+        n.stores['max_hours'] = self.config.max_hours_stores
         n_direct = get_base_scenario_network(n)
 
         with step(self.timer, "consistency_check", verbose=verbose):
             self.consistency_check(n)
 
         with step(self.timer, "direct", verbose=verbose):
-            n.stores['max_hours'] = self.config.max_hours_stores
             self.direct(n_direct)
 
         with step(self.timer, "prepare_tssb_interface", verbose=verbose):
