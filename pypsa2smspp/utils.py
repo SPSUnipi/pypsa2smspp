@@ -333,6 +333,19 @@ def ucblock_variables(n, links_after):
 
     return variables
 
+def has_time_dependent_link_data(n):
+    """
+    Return True if at least one supported Link time-dependent attribute
+    is explicitly provided.
+    """
+    for attr in ("efficiency", "p_min_pu", "p_max_pu"):
+        df = getattr(n.links_t, attr, None)
+
+        if df is not None and not df.empty and df.notna().to_numpy().any():
+            return True
+
+    return False
+
 def ucblock_dimensions(n):
     """
     Computes the dimensions of the UCBlock from the PyPSA network.
@@ -352,8 +365,12 @@ def ucblock_dimensions(n):
         **{
             name: sum(len(getattr(n, comp)) for comp in comps)
             for name, comps in components.items()
-        }
+        },
     }
+
+    if has_time_dependent_link_data(n):
+        dimensions["NumberInstants"] = dimensions["TimeHorizon"]
+
     return dimensions
 
 
@@ -1051,23 +1068,15 @@ def explode_multilinks_into_branches(
     hyper_id,
     logger=print,
     return_efficiencies: bool = True,
+    n=None,
 ):
     """
     Split multi-output links into separate branches, keeping track of efficiencies.
 
-    If return_efficiencies=True, returns:
-        exploded_df, efficiencies_dict, number_branches, number_branches_expandable
+    If n.links_t.efficiency is provided, efficiencies_dict maps each physical
+    link to a list of dense arrays with shape (NumberInstants,).
 
-    Otherwise returns:
-        exploded_df, number_branches, number_branches_expandable
-
-    efficiencies_dict maps each physical link to a list:
-        [efficiency, efficiency2, efficiency3, ...]
-
-    Important rule:
-    An efficiency is considered valid only if the corresponding bus exists.
-    If the bus is empty/missing, the efficiency is forced to 0.0 even if a
-    non-zero value is present in the dataframe.
+    Otherwise, efficiencies_dict maps each physical link to scalar efficiencies.
     """
     if links_merged_df.empty:
         if return_efficiencies:
@@ -1077,98 +1086,141 @@ def explode_multilinks_into_branches(
     df = links_merged_df.copy()
     efficiencies_dict = {}
 
-    # Identify extra bus columns dynamically: bus2, bus3, ...
+    has_dense_efficiency = (
+        n is not None
+        and getattr(n.links_t, "efficiency", None) is not None
+        and not n.links_t.efficiency.empty
+        and n.links_t.efficiency.notna().to_numpy().any()
+    )
+
+    if has_dense_efficiency:
+        efficiency_dense = get_param_as_dense(
+            n,
+            "Link",
+            "efficiency",
+            weights=False,
+        )
+    else:
+        efficiency_dense = None
+
     bus_extra_cols = []
     k = 2
     while f"bus{k}" in df.columns:
         bus_extra_cols.append(f"bus{k}")
         k += 1
 
-    # Total number of efficiency slots expected: efficiency, efficiency2, ...
     max_eff_count = 1 + len(bus_extra_cols)
 
     def _non_empty(val) -> bool:
         """Return True if value is not NaN and not an empty string."""
         return pd.notna(val) and str(val).strip() != ""
 
-    def _get_valid_efficiency(row, bus_col: str, eff_col: str) -> float:
+    def _zero_efficiency():
+        """Return a zero efficiency with the correct scalar/dense shape."""
+        if has_dense_efficiency:
+            return np.zeros(len(n.snapshots), dtype=float)
+        return 0.0
+
+    def _scalar_or_dense(value):
+        """Return scalar value or a dense constant array."""
+        value = float(value)
+
+        if has_dense_efficiency:
+            return np.full(len(n.snapshots), value, dtype=float)
+
+        return value
+
+    def _get_valid_efficiency(row, link_name, bus_col: str, eff_col: str):
         """
         Return efficiency only if the corresponding bus exists.
-        Otherwise force it to 0.0.
+
+        Primary efficiency can be time-dependent through n.links_t.efficiency.
+        Secondary efficiencies remain static and are expanded to dense constants
+        if primary efficiency is time-dependent.
         """
         if not _non_empty(row.get(bus_col, np.nan)):
-            return 0.0
+            return _zero_efficiency()
+
+        if has_dense_efficiency and eff_col == "efficiency":
+            return efficiency_dense[link_name].to_numpy(dtype=float)
 
         val = row.get(eff_col, np.nan)
+
         if not _non_empty(val):
-            return 0.0
+            return _zero_efficiency()
 
         try:
-            return float(val)
+            return _scalar_or_dense(val)
         except Exception:
-            return 0.0
+            return _zero_efficiency()
 
     new_rows = []
 
     for link_name, row in df.iterrows():
-        # ------------------------------------------------------------------
-        # Build efficiencies_dict consistently with actual bus existence
-        # ------------------------------------------------------------------
         eff_list = []
 
-        # Primary branch: bus1 <-> efficiency
-        eff_list.append(_get_valid_efficiency(row, "bus1", "efficiency"))
+        eff_list.append(
+            _get_valid_efficiency(row, link_name, "bus1", "efficiency")
+        )
 
-        # Extra branches: bus2 <-> efficiency2, bus3 <-> efficiency3, ...
         for idx, bcol in enumerate(bus_extra_cols, start=2):
             ecol = f"efficiency{idx}"
-            eff_list.append(_get_valid_efficiency(row, bcol, ecol))
+            eff_list.append(
+                _get_valid_efficiency(row, link_name, bcol, ecol)
+            )
 
-        # Pad just in case, though normally already correct
         if len(eff_list) < max_eff_count:
-            eff_list += [0.0] * (max_eff_count - len(eff_list))
+            eff_list += [
+                _zero_efficiency()
+                for _ in range(max_eff_count - len(eff_list))
+            ]
 
         efficiencies_dict[link_name] = eff_list
 
-        # ------------------------------------------------------------------
-        # Build exploded rows
-        # Only create extra outputs for buses that actually exist
-        # ------------------------------------------------------------------
         extra_outputs = []
         for idx, bcol in enumerate(bus_extra_cols, start=2):
             if _non_empty(row.get(bcol, np.nan)):
                 ecol = f"efficiency{idx}"
-                eff_val = _get_valid_efficiency(row, bcol, ecol)
+                eff_val = _get_valid_efficiency(row, link_name, bcol, ecol)
                 extra_outputs.append((bcol, ecol, eff_val))
 
         is_multilink = len(extra_outputs) > 0
 
-        # If there are no extra outputs, keep the row as a single branch
         if not is_multilink:
             out_row = row.copy()
             out_row["hyper"] = hyper_id
             out_row["is_primary_branch"] = True
-
-            # Force primary efficiency to 0.0 if bus1 is missing
-            out_row["efficiency"] = _get_valid_efficiency(row, "bus1", "efficiency")
+            out_row["efficiency"] = _get_valid_efficiency(
+                row,
+                link_name,
+                "bus1",
+                "efficiency",
+            )
 
             new_rows.append(out_row)
             hyper_id += 1
             continue
 
-        # True multilink: create explicit primary branch
         primary_bus = row.get("bus1", np.nan)
-        primary_eff = _get_valid_efficiency(row, "bus1", "efficiency")
+        primary_eff = _get_valid_efficiency(
+            row,
+            link_name,
+            "bus1",
+            "efficiency",
+        )
 
         pr = row.copy()
         pr["bus1"] = primary_bus
         pr["efficiency"] = primary_eff
-        pr.name = f"{link_name}__to_{primary_bus}" if _non_empty(primary_bus) else f"{link_name}__to_bus1"
+        pr.name = (
+            f"{link_name}__to_{primary_bus}"
+            if _non_empty(primary_bus)
+            else f"{link_name}__to_bus1"
+        )
         pr["hyper"] = hyper_id
         pr["is_primary_branch"] = True
         new_rows.append(pr)
 
-        # Create one child per valid extra bus
         for bcol, ecol, eff_val in extra_outputs:
             child = row.copy()
             child_bus = row[bcol]
@@ -1185,7 +1237,6 @@ def explode_multilinks_into_branches(
 
     exploded = pd.DataFrame(new_rows)
 
-    # Drop redundant bus/efficiency columns after explosion
     cols_to_drop = [
         c for c in exploded.columns
         if (c.startswith("bus") and c not in ("bus0", "bus1"))
@@ -1193,8 +1244,6 @@ def explode_multilinks_into_branches(
     ]
     exploded = exploded.drop(columns=cols_to_drop, errors="ignore")
 
-    # Count branches
-    n_phys = len(df)
     number_branches = len(exploded)
 
     if "p_nom_extendable" in exploded.columns:
@@ -1204,12 +1253,11 @@ def explode_multilinks_into_branches(
     else:
         number_branches_expandable = 0
 
-    extra = number_branches - n_phys
-
     if callable(logger):
         logger(
-            f"[multilink] Exploded {n_phys} physical links into "
-            f"{number_branches} branches (+{extra}). "
+            f"[multilink] Exploded {len(df)} physical links into "
+            f"{number_branches} branches "
+            f"(+{number_branches - len(df)}). "
             f"Expandable branches: {number_branches_expandable}."
         )
 
@@ -1806,5 +1854,184 @@ def rename_links_to_lines(networkblock: dict) -> None:
     networkblock["Lines"] = networkblock.pop("Links")
     for key, var in networkblock["Lines"]["variables"].items():
         var["size"] = tuple("NumberLines" if x == "Links" else x for x in var["size"])
+        
+
+import numpy as np
 
 
+def _has_dynamic_link_attr(n, attr: str) -> bool:
+    """
+    Return True if n.links_t.<attr> exists and contains at least one non-NaN value.
+    """
+    df = getattr(n.links_t, attr, None)
+    return df is not None and not df.empty and df.notna().to_numpy().any()
+
+
+def _dense_from_static(value, time_horizon: int):
+    """
+    Repeat a static SMS++ vector over NumberInstants.
+    """
+    arr = np.asarray(value, dtype=float)
+
+    if arr.ndim == 2:
+        return arr
+
+    return np.tile(arr[:, None], (1, time_horizon))
+
+
+def _flatten_saved_efficiencies(efficiencies_dict):
+    """
+    Flatten networkblock['efficiencies'] into branch order.
+
+    Supports both:
+        {'link': [0.9, 0.5]}
+    and:
+        {'link': [array([...]), array([...])]}
+
+    Returns
+    -------
+    np.ndarray
+        Shape:
+        - (NumberBranches,)
+        - (NumberBranches, NumberInstants)
+    """
+    values = []
+
+    for eff_list in efficiencies_dict.values():
+        for eff in eff_list:
+            values.append(np.asarray(eff, dtype=float))
+
+    if not values:
+        return np.asarray([], dtype=float)
+
+    is_dynamic = any(v.ndim > 0 for v in values)
+
+    if not is_dynamic:
+        return np.asarray([float(v) for v in values], dtype=float)
+
+    return np.vstack([
+        v if v.ndim > 0 else np.full(values[0].shape[0], float(v), dtype=float)
+        for v in values
+    ])
+
+
+def apply_time_dependent_link_data_to_lines(n, networkblock):
+    """
+    Overwrite time-dependent Link data in the already merged/renamed Lines block.
+
+    If links_t.p_max_pu exists:
+        MaxPowerFlow -> size ("NumberLines", "NumberInstants")
+
+    If links_t.p_min_pu exists:
+        MinPowerFlow -> size ("NumberLines", "NumberInstants")
+
+    If links_t.efficiency exists:
+        Efficiency -> size ("NumberBranches", "NumberInstants")
+
+    Efficiency values are taken from networkblock["efficiencies"], which must
+    have been saved during multilink explosion.
+    """
+    if "Lines" not in networkblock:
+        return
+
+    variables = networkblock["Lines"]["variables"]
+    time_horizon = len(n.snapshots)
+    link_offset = len(n.lines)
+
+    p_nom = n.links["p_nom"].astype(float)
+    p_nom_extendable = n.links["p_nom_extendable"].fillna(False).astype(bool)
+
+    for attr, smspp_name in (
+        ("p_max_pu", "MaxPowerFlow"),
+        ("p_min_pu", "MinPowerFlow"),
+    ):
+        if not _has_dynamic_link_attr(n, attr):
+            continue
+
+        pu = get_param_as_dense(
+            n,
+            "Link",
+            attr,
+            weights=False,
+        )
+
+        values = pu.copy()
+        fixed = ~p_nom_extendable
+
+        values.loc[:, fixed] = values.loc[:, fixed].multiply(
+            p_nom.loc[fixed],
+            axis=1,
+        )
+
+        link_values = values.T.to_numpy(dtype=float)
+
+        old = _dense_from_static(
+            variables[smspp_name]["value"],
+            time_horizon=time_horizon,
+        )
+
+        old[link_offset:link_offset + len(n.links), :] = link_values
+
+        variables[smspp_name]["value"] = old
+        variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")
+
+    if _has_dynamic_link_attr(n, "efficiency"):
+        efficiency_values = _flatten_saved_efficiencies(
+            networkblock["efficiencies"],
+            drop_zero=True,
+        )
+    
+        variables["Efficiency"]["value"] = efficiency_values
+        variables["Efficiency"]["size"] = ("NumberBranches", "NumberInstants")
+
+
+def _is_zero_efficiency(eff) -> bool:
+    """
+    Return True if an efficiency value/array is entirely zero.
+    """
+    arr = np.asarray(eff, dtype=float)
+    return np.all(arr == 0.0)
+
+
+def _flatten_saved_efficiencies(efficiencies_dict, drop_zero=True):
+    """
+    Flatten networkblock['efficiencies'] into SMS++ branch order.
+
+    If drop_zero=True, efficiencies that are entirely zero are skipped.
+    This removes dummy efficiency slots associated with missing multilink buses.
+
+    Supports both:
+        {'link': [0.9, 0.5]}
+    and:
+        {'link': [array([...]), array([...])]}
+
+    Returns
+    -------
+    np.ndarray
+        Shape:
+        - (NumberBranches,)
+        - (NumberBranches, NumberInstants)
+    """
+    values = []
+
+    for eff_list in efficiencies_dict.values():
+        for eff in eff_list:
+            if drop_zero and _is_zero_efficiency(eff):
+                continue
+
+            values.append(np.asarray(eff, dtype=float))
+
+    if not values:
+        return np.asarray([], dtype=float)
+
+    is_dynamic = any(v.ndim > 0 for v in values)
+
+    if not is_dynamic:
+        return np.asarray([float(v) for v in values], dtype=float)
+
+    time_horizon = next(v.shape[0] for v in values if v.ndim > 0)
+
+    return np.vstack([
+        v if v.ndim > 0 else np.full(time_horizon, float(v), dtype=float)
+        for v in values
+    ])

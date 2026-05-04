@@ -71,8 +71,8 @@ SOLVER_OPTIONS = {
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'co2_sequestred_no_cyclic'
-folder = 'develop/sector_coupled'
+name = 'time_dependent'
+folder = 'develop/time_dependent'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -85,7 +85,7 @@ if name == None:
 
 nd = NetworkDefinition(config)
 
-nd.n = preprocess_dynamic_link_parameters_to_static_means(nd.n, drop_dynamic=True)
+# nd.n = preprocess_dynamic_link_parameters_to_static_means(nd.n, drop_dynamic=True)
 
 # nd.n = clean_ciclicity_storage(nd.n)
 

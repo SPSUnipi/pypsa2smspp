@@ -45,7 +45,8 @@ from .utils import (
     ucblock_variables,
     preprocess_zero_capital_cost_extendable_generators,
     get_bus_demand_matrix,
-    preprocess_dynamic_link_parameters_to_static_means
+    preprocess_dynamic_link_parameters_to_static_means,
+    apply_time_dependent_link_data_to_lines
 )
 
 from .pip_utils import (
@@ -328,7 +329,7 @@ class Transformation:
         self.add_dimensions(n) # 2
         self.iterate_components(n) # 3
         self.add_demand(n) # 4
-        self.lines_links() # 5
+        self.lines_links(n) # 5
 
 
     
@@ -410,11 +411,11 @@ class Transformation:
             logger=logger,
         )
     
-        n = preprocess_dynamic_link_parameters_to_static_means(
-            n,
-            fields=("efficiency", "p_min_pu", "p_max_pu"),
-            logger=logger,
-        )
+        # n = preprocess_dynamic_link_parameters_to_static_means(
+        #     n,
+        #     fields=("efficiency", "p_min_pu", "p_max_pu"),
+        #     logger=logger,
+        # )
     
         stores_df, links_merged_df, self.dimensions["NetworkBlock"]["merged_links_ext"] = build_store_and_merged_links(
             n,
@@ -444,6 +445,7 @@ class Transformation:
                 links_merged_df,
                 len(n.lines),
                 logger=logger,
+                n=n
             )
     
             self.networkblock["max_eff_len"] = max(
@@ -778,26 +780,26 @@ class Transformation:
         }
         
     ### 7 ###
-    def lines_links(self):
+    def lines_links(self, n):
         """
         Merge or rename network blocks to ensure a single 'Lines' block for SMS++.
-    
-        Explanation:
-        ------------
-        SMS++ currently only supports DCNetworkBlock for electrical lines.
-        Links are interpreted as lines with efficiencies < 1 and merged
-        into the Lines block. If no true Lines exist, Links are renamed to Lines.
         """
         if (
             self.dimensions["NetworkBlock"]["Lines"] > 0
             and self.dimensions["NetworkBlock"]["Links"] > 0
         ):
             merge_lines_and_links(self.networkblock)
+    
         elif (
             self.dimensions["NetworkBlock"]["Lines"] == 0
             and self.dimensions["NetworkBlock"]["Links"] > 0
         ):
             rename_links_to_lines(self.networkblock)
+    
+        apply_time_dependent_link_data_to_lines(
+            n=n,
+            networkblock=self.networkblock,
+        )
 
 
             

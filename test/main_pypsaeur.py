@@ -154,7 +154,7 @@ def print_kv(d: Dict[str, Any], title: str = "") -> None:
 def pypsa_reference_objective(network: "pypsa.Network") -> float:
     """Robust reference objective extraction."""
     try:
-        return float(network.objective + getattr(network, "objective_constant", 0.0))
+        return float(network.objective + network.objective_constant)
     except Exception:
         return float(network.objective)
 
