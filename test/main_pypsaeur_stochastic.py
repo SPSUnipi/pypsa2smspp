@@ -54,7 +54,7 @@ if not os.access(OUT, os.W_OK):
 # NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/stochastic_eth/test_europe/networks/base_s_stoch_adm___2050.nc"
 NETWORK_PATH = r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_stoch_adm___2050.nc"
 
-NAME = "stochastic_network"
+NAME = "stochastic_2intermittent_1mapping"
 FOLDER = "develop/tssb_loaded"
 
 WORKDIR = OUT / FOLDER
@@ -565,6 +565,7 @@ if __name__ == "__main__":
         configfile=SMSPP_CONFIGFILE,
         enable_thermal_units=False,
         workdir=str(WORKDIR),
+        merge_links=False,
         stochastic_parameters={
             "stochastic_type": "tssb",
             "parameters": stochastic_parameters,

@@ -680,34 +680,24 @@ def build_stochastic_mapping_demand(
         ],
     }
 
-def build_stochastic_mapping_renewables_maxpower(
+def build_stochastic_mapping_renewable_maxpower_single_unit(
     set_from_start,
     set_from_end,
-    scenario_size,
-    unitblock_indices,
+    time_horizon,
+    unitblock_index,
 ):
     """
-    Build the stochastic data mapping for renewable MaxPower.
+    Build one stochastic data mapping for one renewable UnitBlock MaxPower.
 
-    A single data mapping is used for all intermittent unit blocks. The target
-    blocks are specified by concatenating one AbstractPath per UnitBlock_i:
+    The mapping applies one contiguous slice of the DSS scenario vector to one
+    IntermittentUnitBlock::set_maximum_power call.
 
-        B("i")
+    DSS layout for renewables is assumed to be generator-major, time-minor:
 
-    where i is the nested UnitBlock index inside the UCBlock.
+        gen_0[t0:tT], gen_1[t0:tT], ...
+
+    Therefore, each renewable UnitBlock receives exactly TimeHorizon values.
     """
-    abstract_paths = []
-
-    for unitblock_index in unitblock_indices:
-        abstract_paths.append(
-            {
-                "node_types": "B",
-                "group_indices": [str(int(unitblock_index))],
-                "element_indices": [None],
-                "range_indices": [None],
-            }
-        )
-
     return {
         "target": "renewables",
         "function_name": "IntermittentUnitBlock::set_maximum_power",
@@ -718,9 +708,16 @@ def build_stochastic_mapping_renewables_maxpower(
             int(set_from_start),
             int(set_from_end),
             0,
-            int(scenario_size),
+            int(time_horizon),
         ],
-        "abstract_paths": abstract_paths,
+        "abstract_paths": [
+            {
+                "node_types": "B",
+                "group_indices": [str(int(unitblock_index))],
+                "element_indices": [None],
+                "range_indices": [None],
+            }
+        ],
     }
 
 

@@ -1138,6 +1138,10 @@ def explode_multilinks_into_branches(
         Secondary efficiencies remain static and are expanded to dense constants
         if primary efficiency is time-dependent.
         """
+        
+        # TODO with merge_links it does not work because it starts from the original links
+        # It should work on links after merging
+        
         if not _non_empty(row.get(bus_col, np.nan)):
             return _zero_efficiency()
 
@@ -1680,12 +1684,16 @@ def resolve_param_value(
         ]
         arg = get_param_as_dense(n, components_type, param, weight)[[component]]
     elif param in components_df.index or param in components_df.columns:
-        arg = components_df.get(param)
+        if param in ['marginal_cost', 'marginal_cost_quadratic','start_up_cost', 'stand_by_cost']:
+            arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
+        else:
+            arg = components_df.get(param)
     elif param in components_t.keys():
         df = components_t[param]
         arg = df[components_df.index].values
     else:
         arg = None  # fallback
+    
     return arg
 
 

@@ -69,7 +69,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_base_load_equi_demand_maxpower'
+name = 'stochastic_2intermittent_2datamapping'
 folder = 'develop/tssb'
 
 #%% Network definition with PyPSA

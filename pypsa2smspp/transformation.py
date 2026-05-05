@@ -81,7 +81,7 @@ from .stochastic_utils import (
     build_tssb_static_abstract_path,
     build_stochastic_mapping_demand,
     build_tssb_stochastic_block_data,
-    build_stochastic_mapping_renewables_maxpower,
+    build_stochastic_mapping_renewable_maxpower_single_unit,
 )
 
 NP_DOUBLE = np.float64
@@ -2296,28 +2296,31 @@ class Transformation:
                 intermittent_carriers=self.intermittent_carriers if self.intermittent_carriers is not None else renewable_carriers,
             )
         
-            expected_size = (
-                len(renewable_unitblock_indices)
-                * int(self.dimensions["UCBlock"]["TimeHorizon"])
-            )
+            time_horizon = int(self.dimensions["UCBlock"]["TimeHorizon"])
+            number_renewable_units = len(renewable_unitblock_indices)
+        
+            expected_size = number_renewable_units * time_horizon
         
             if renewables_offset["size"] != expected_size:
                 raise ValueError(
                     "Mismatch between stochastic renewable DSS size and renewable "
-                    f"generator UnitBlock paths. DSS size is {renewables_offset['size']}, "
-                    f"while {len(renewable_unitblock_indices)} renewable generators "
-                    f"and TimeHorizon={self.dimensions['UCBlock']['TimeHorizon']} imply "
-                    f"{expected_size}."
+                    f"generator UnitBlock mappings. DSS size is {renewables_offset['size']}, "
+                    f"while {number_renewable_units} renewable generators and "
+                    f"TimeHorizon={time_horizon} imply {expected_size}."
                 )
         
-            data_mappings.append(
-                build_stochastic_mapping_renewables_maxpower(
-                    set_from_start=renewables_offset["start"],
-                    set_from_end=renewables_offset["end"],
-                    scenario_size=renewables_offset["size"],
-                    unitblock_indices=renewable_unitblock_indices,
+            for local_idx, unitblock_index in enumerate(renewable_unitblock_indices):
+                set_from_start = renewables_offset["start"] + local_idx * time_horizon
+                set_from_end = set_from_start + time_horizon
+        
+                data_mappings.append(
+                    build_stochastic_mapping_renewable_maxpower_single_unit(
+                        set_from_start=set_from_start,
+                        set_from_end=set_from_end,
+                        time_horizon=time_horizon,
+                        unitblock_index=unitblock_index,
+                    )
                 )
-            )
     
         if not data_mappings:
             raise ValueError(
