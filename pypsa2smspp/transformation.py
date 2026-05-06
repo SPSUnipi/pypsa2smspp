@@ -411,11 +411,12 @@ class Transformation:
             logger=logger,
         )
     
-        # n = preprocess_dynamic_link_parameters_to_static_means(
-        #     n,
-        #     fields=("efficiency", "p_min_pu", "p_max_pu"),
-        #     logger=logger,
-        # )
+        n = preprocess_dynamic_link_parameters_to_static_means(
+            n,
+            fields=("efficiency", "p_min_pu", "p_max_pu"),
+            logger=logger,
+            drop_dynamic=True
+        )
     
         stores_df, links_merged_df, self.dimensions["NetworkBlock"]["merged_links_ext"] = build_store_and_merged_links(
             n,

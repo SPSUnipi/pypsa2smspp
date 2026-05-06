@@ -1817,31 +1817,133 @@ def determine_size_type(
     return variable_type, variable_size
 
 
-def merge_lines_and_links(networkblock: dict) -> None:
+def _is_scalar_value(value) -> bool:
     """
-    Merge the variables of 'Lines' and 'Links' into a single block 'Lines'.
-    This is required because SMS++ expects a unified DCNetworkBlock for 
-    all transmission elements, treating links as lines with efficiencies < 1.
-
-    Parameters
-    ----------
-    networkblock : dict
-        The Transformation.networkblock dictionary.
-
-    Notes
-    -----
-    If both Lines and Links exist, their variables are concatenated.
+    Return True if value is a scalar SMS++ value.
     """
-    for key, value in networkblock["Lines"]["variables"].items():
+    return isinstance(value, (int, float, np.integer, np.floating))
+
+
+def _as_numeric_array(value):
+    """
+    Convert SMS++ variable value to a numeric numpy array.
+
+    This also converts lists of arrays into a 2D array when possible.
+    """
+    return np.asarray(value, dtype=float)
+
+
+def _to_time_dependent(arr: np.ndarray, time_horizon: int) -> np.ndarray:
+    """
+    Promote a static 1D array to a dense 2D array over NumberInstants.
+
+    Input:
+        shape (N,)
+
+    Output:
+        shape (N, NumberInstants)
+    """
+    if arr.ndim == 2:
+        return arr
+
+    if arr.ndim == 1:
+        return np.tile(arr[:, None], (1, time_horizon))
+
+    return arr
+
+
+def _add_number_instants_to_size(size):
+    """
+    Add NumberInstants to an SMS++ size declaration.
+    """
+    if isinstance(size, tuple):
+        if "NumberInstants" in size:
+            return size
+        return (*size, "NumberInstants")
+
+    return (size, "NumberInstants")
+
+
+def _infer_time_horizon_from_variable_values(*values):
+    """
+    Infer NumberInstants from the first 2D value among the provided values.
+    """
+    for value in values:
+        arr = _as_numeric_array(value)
+        if arr.ndim == 2:
+            return arr.shape[1]
+
+    return None
+
+
+def merge_lines_and_links(networkblock: dict, n=None) -> None:
+    """
+    Merge the variables of 'Lines' and 'Links' into a single 'Lines' block.
+
+    If a variable is time-dependent in one block and static in the other,
+    the static side is expanded to shape:
+
+        (N, NumberInstants)
+
+    before concatenation.
+
+    This is needed, for example, when:
+        Lines.Efficiency has shape (NumberLineBranches,)
+        Links.Efficiency has shape (NumberLinkBranches, NumberInstants)
+    """
+    lines_vars = networkblock["Lines"]["variables"]
+    links_vars = networkblock["Links"]["variables"]
+
+    for key, line_var in lines_vars.items():
+        if key not in links_vars:
+            continue
+
+        link_var = links_vars[key]
+
+        line_value = line_var["value"]
+        link_value = link_var["value"]
+
+        if _is_scalar_value(line_value) or _is_scalar_value(link_value):
+            continue
+
         try:
-            if not isinstance(value["value"], (int, float, np.integer)):
-                networkblock["Lines"]["variables"][key]["value"] = np.concatenate([
-                    networkblock["Lines"]["variables"][key]["value"],
-                    networkblock["Links"]["variables"][key]["value"]
-                ])
+            line_arr = _as_numeric_array(line_value)
+            link_arr = _as_numeric_array(link_value)
+
+            time_horizon = None
+
+            if n is not None:
+                time_horizon = len(n.snapshots)
+
+            if time_horizon is None:
+                time_horizon = _infer_time_horizon_from_variable_values(
+                    line_value,
+                    link_value,
+                )
+
+            if line_arr.ndim == 2 or link_arr.ndim == 2:
+                if time_horizon is None:
+                    raise ValueError(
+                        f"Cannot infer NumberInstants for variable {key}."
+                    )
+
+                line_arr = _to_time_dependent(line_arr, time_horizon)
+                link_arr = _to_time_dependent(link_arr, time_horizon)
+
+                line_var["size"] = _add_number_instants_to_size(
+                    line_var["size"]
+                )
+
+            line_var["value"] = np.concatenate(
+                [line_arr, link_arr],
+                axis=0,
+            )
+
         except ValueError as e:
-            logger.warning(f"Could not merge variable {key} due to shape mismatch: {e}")
-    # after merging, drop the separate Links block
+            logger.warning(
+                f"Could not merge variable {key} due to shape mismatch: {e}"
+            )
+
     networkblock.pop("Links", None)
 
 
@@ -1864,7 +1966,6 @@ def rename_links_to_lines(networkblock: dict) -> None:
         var["size"] = tuple("NumberLines" if x == "Links" else x for x in var["size"])
         
 
-import numpy as np
 
 
 def _has_dynamic_link_attr(n, attr: str) -> bool:
@@ -1886,41 +1987,6 @@ def _dense_from_static(value, time_horizon: int):
 
     return np.tile(arr[:, None], (1, time_horizon))
 
-
-def _flatten_saved_efficiencies(efficiencies_dict):
-    """
-    Flatten networkblock['efficiencies'] into branch order.
-
-    Supports both:
-        {'link': [0.9, 0.5]}
-    and:
-        {'link': [array([...]), array([...])]}
-
-    Returns
-    -------
-    np.ndarray
-        Shape:
-        - (NumberBranches,)
-        - (NumberBranches, NumberInstants)
-    """
-    values = []
-
-    for eff_list in efficiencies_dict.values():
-        for eff in eff_list:
-            values.append(np.asarray(eff, dtype=float))
-
-    if not values:
-        return np.asarray([], dtype=float)
-
-    is_dynamic = any(v.ndim > 0 for v in values)
-
-    if not is_dynamic:
-        return np.asarray([float(v) for v in values], dtype=float)
-
-    return np.vstack([
-        v if v.ndim > 0 else np.full(values[0].shape[0], float(v), dtype=float)
-        for v in values
-    ])
 
 
 def apply_time_dependent_link_data_to_lines(n, networkblock):
@@ -1982,15 +2048,6 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
         variables[smspp_name]["value"] = old
         variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")
-
-    if _has_dynamic_link_attr(n, "efficiency"):
-        efficiency_values = _flatten_saved_efficiencies(
-            networkblock["efficiencies"],
-            drop_zero=True,
-        )
-    
-        variables["Efficiency"]["value"] = efficiency_values
-        variables["Efficiency"]["size"] = ("NumberBranches", "NumberInstants")
 
 
 def _is_zero_efficiency(eff) -> bool:

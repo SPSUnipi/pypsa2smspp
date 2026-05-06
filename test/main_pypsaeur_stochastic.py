@@ -23,6 +23,7 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost,
     clean_marginal_cost_intermittent,
     add_slack_unit,
+    reduce_snapshots_and_scale_costs
 )
 
 
@@ -54,7 +55,7 @@ if not os.access(OUT, os.W_OK):
 # NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/stochastic_eth/test_europe/networks/base_s_stoch_adm___2050.nc"
 NETWORK_PATH = r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_stoch_adm___2050.nc"
 
-NAME = "stochastic_2intermittent_1mapping"
+NAME = "stochastic_reduced"
 FOLDER = "develop/tssb_loaded"
 
 WORKDIR = OUT / FOLDER
@@ -68,6 +69,9 @@ EXPORT_PYPSA_LP = True
 EXPORT_NETCDF = True
 
 ADD_SLACK = True
+
+DO_REDUCE_SNAPSHOTS = True
+REDUCE_SNAPSHOTS_TO = 1000
 
 # If None, the script infers stochastic parameters from the network.
 # Otherwise use, for example:
@@ -469,6 +473,9 @@ def apply_network_corrections(n: pypsa.Network) -> pypsa.Network:
 
     if REMOVE_GLOBAL_CONSTRAINTS:
         n = clean_global_constraints(n)
+        
+    if DO_REDUCE_SNAPSHOTS:
+        n = reduce_snapshots_and_scale_costs(n, target=REDUCE_SNAPSHOTS_TO, scale_capital_costs=False, stochastic=True)
 
     # n = clean_e_sum_safe(n)
     # n = clean_cyclicity_storage_safe(n)

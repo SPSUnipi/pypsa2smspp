@@ -11,7 +11,7 @@ import pandas as pd
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Union, Sequence
+from typing import Union, Sequence, Optional
 
 from pypsa2smspp.constants import nominal_attrs
 
@@ -195,113 +195,256 @@ def reduce_snapshots_and_scale_costs(
     evenly_spaced: bool = False,
     scale_capital_costs: bool = True,
     inplace: bool = False,
+    stochastic: Optional[bool] = None,
 ):
     """
-    Reduce the number of snapshots in a PyPSA network and optionally scale capital costs.
+    Reduce the number of snapshots in a PyPSA network and optionally scale
+    capital costs.
+
+    This function supports both deterministic and stochastic PyPSA-like networks.
+    In the stochastic case, time-dependent tables may have MultiIndex columns,
+    typically of the form (scenario, asset). The function reduces only the
+    temporal index and keeps all scenario columns.
 
     Parameters
     ----------
     n : pypsa.Network
         The network to modify.
+
     target : int | Sequence | pd.Index
         If int:
-            - keep that many snapshots (first ones, by default);
-            - if `evenly_spaced=True`, pick them evenly spaced across horizon.
-        If a sequence/index of snapshot labels, keep exactly those.
+            - keep that many snapshots;
+            - if `evenly_spaced=True`, pick them evenly spaced across the
+              original horizon;
+            - otherwise, keep the first snapshots.
+        If a sequence/index of snapshot labels, keep exactly those snapshots.
+
     drop_renewables : bool, optional
-        If True, drop generators whose 'carrier' is in `renewable_carriers`.
+        If True, drop generators whose carrier is in `renewable_carriers`.
+
     renewable_carriers : Sequence[str], optional
         Carriers to drop if `drop_renewables` is True.
+
     adjust_snapshot_weightings : bool, optional
-        If True, scale n.snapshot_weightings['objective'] by (old_len / new_len).
+        If True, scale n.snapshot_weightings["objective"] by old_len / new_len
+        on the retained snapshots.
+
     evenly_spaced : bool, optional
-        If True and `target` is int, select snapshots evenly spaced instead of the first ones.
+        If True and `target` is int, select snapshots evenly spaced instead of
+        the first ones.
+
     scale_capital_costs : bool, optional
-        If True, scale component capital_cost by (new_len / old_len).
+        If True, scale component capital_cost by new_len / old_len.
+
     inplace : bool, optional
-        If False (default), operate on a copy and return it. If True, modify `n` in place.
+        If False, operate on a copy and return it. If True, modify `n` in place.
+
+    stochastic : bool | None, optional
+        Optional flag for readability. The implementation is automatic and does
+        not require this flag. It is kept only to make calls explicit if desired.
 
     Returns
     -------
     pypsa.Network
-        The modified network (or the same object if `inplace=True`).
+        The modified network, or the same object if `inplace=True`.
     """
+
+    def _slice_rows_by_snapshots(obj, snapshots: pd.Index):
+        """
+        Slice an object on its time index.
+
+        This supports:
+        - simple Index matching snapshots directly;
+        - MultiIndex where one level contains the snapshot labels.
+        """
+        if not hasattr(obj, "loc"):
+            return obj
+
+        if not isinstance(obj, (pd.DataFrame, pd.Series)):
+            return obj
+
+        idx = obj.index
+
+        if isinstance(idx, pd.MultiIndex):
+            for level in range(idx.nlevels):
+                level_values = idx.get_level_values(level)
+                if snapshots.isin(level_values).all():
+                    mask = level_values.isin(snapshots)
+                    return obj.loc[mask]
+
+            raise ValueError(
+                "Could not slice a time-dependent table with MultiIndex rows: "
+                "none of the index levels contains all requested snapshots."
+            )
+
+        return obj.loc[snapshots]
+
+    def _drop_assets_from_temporal_df(df: pd.DataFrame, assets: pd.Index) -> pd.DataFrame:
+        """
+        Drop asset columns from a deterministic or stochastic time-dependent table.
+
+        In deterministic tables, columns are usually asset names.
+
+        In stochastic tables, columns may be a MultiIndex such as:
+            (scenario, asset)
+
+        The function drops columns whose last level matches the selected assets.
+        If that fails, it drops columns whose any level matches the selected assets.
+        """
+        if not isinstance(df, pd.DataFrame):
+            return df
+
+        if len(assets) == 0:
+            return df
+
+        if isinstance(df.columns, pd.MultiIndex):
+            cols = df.columns
+
+            # Prefer the last level, because stochastic columns are usually
+            # structured as (scenario, asset).
+            last_level = cols.get_level_values(cols.nlevels - 1)
+            mask = last_level.isin(assets)
+
+            # Fallback: drop columns where any level matches an asset name.
+            if not mask.any():
+                mask = np.zeros(len(cols), dtype=bool)
+                for level in range(cols.nlevels):
+                    mask |= cols.get_level_values(level).isin(assets)
+
+            return df.loc[:, ~mask]
+
+        return df.drop(columns=assets, errors="ignore")
+
+    def _asset_names_from_component_index(index: pd.Index) -> pd.Index:
+        """
+        Return physical asset names from a component index.
+
+        In deterministic networks, the index is usually directly the asset name.
+
+        In stochastic networks, the index may be a MultiIndex such as:
+            (scenario, asset)
+
+        In that case, the physical asset name is assumed to be the last level.
+        """
+        if isinstance(index, pd.MultiIndex):
+            return pd.Index(index.get_level_values(index.nlevels - 1).unique())
+
+        return pd.Index(index)
 
     net = n if inplace else n.copy()
 
-    old_snapshots = net.snapshots.copy()
+    old_snapshots = pd.Index(net.snapshots.copy())
     old_len = len(old_snapshots)
+
     if old_len == 0:
         raise ValueError("Network has no snapshots to reduce.")
 
     if isinstance(target, int):
         if target <= 0:
             raise ValueError("target (int) must be > 0.")
+
         if target > old_len:
-            raise ValueError(f"target ({target}) cannot exceed original snapshots ({old_len}).")
+            raise ValueError(
+                f"target ({target}) cannot exceed original snapshots ({old_len})."
+            )
 
         if evenly_spaced:
-            # Equally spaced selection
-            idx = np.linspace(0, old_len - 1, target, dtype=int)
-            idx = np.unique(idx)
-            new_snapshots = old_snapshots[idx]
+            positions = np.linspace(0, old_len - 1, target)
+            positions = np.rint(positions).astype(int)
+            positions = np.clip(positions, 0, old_len - 1)
+
+            # Preserve order while removing possible duplicates.
+            positions = pd.Index(positions).drop_duplicates().to_numpy()
+
+            new_snapshots = old_snapshots[positions]
         else:
-            # Just take the first N snapshots
             new_snapshots = old_snapshots[:target]
 
     else:
-        # Sequence of labels
         new_snapshots = pd.Index(target)
+
         missing = new_snapshots.difference(old_snapshots)
         if len(missing) > 0:
             raise ValueError(
-                f"Some requested snapshots are not in the network: {missing[:5].tolist()} ..."
+                "Some requested snapshots are not in the network: "
+                f"{missing[:5].tolist()} ..."
             )
 
     new_len = len(new_snapshots)
+
     if new_len == 0:
         raise ValueError("Resulting snapshot set is empty.")
 
-    # Apply new snapshots
+    # Set network snapshots.
     net.snapshots = new_snapshots
 
-    # Slice all *_t DataFrames
-    for attr in dir(net):
-        if attr.endswith("_t"):
-            df_dict = getattr(net, attr)
-            for key, df in list(df_dict.items()):
-                if hasattr(df, "loc"):
-                    df_dict[key] = df.loc[new_snapshots]
+    # Slice snapshot weightings if present.
+    if hasattr(net, "snapshot_weightings"):
+        sw = net.snapshot_weightings
 
-    # Optionally drop renewable generators
+        if isinstance(sw, pd.DataFrame):
+            net.snapshot_weightings = _slice_rows_by_snapshots(sw, new_snapshots)
+
+            if adjust_snapshot_weightings and "objective" in net.snapshot_weightings.columns:
+                net.snapshot_weightings.loc[:, "objective"] = (
+                    net.snapshot_weightings["objective"] * (old_len / new_len)
+                )
+
+    # Slice all time-dependent component tables.
+    for attr in dir(net):
+        if not attr.endswith("_t"):
+            continue
+
+        df_dict = getattr(net, attr)
+
+        if not isinstance(df_dict, dict):
+            continue
+
+        for key, df in list(df_dict.items()):
+            if isinstance(df, (pd.DataFrame, pd.Series)):
+                df_dict[key] = _slice_rows_by_snapshots(df, new_snapshots)
+
+    # Optionally drop renewable generators.
     if drop_renewables and hasattr(net, "generators"):
-        to_drop = net.generators.loc[
-            net.generators["carrier"].isin(renewable_carriers)
-        ].index
-        if len(to_drop) > 0:
-            net.generators.drop(index=to_drop, inplace=True)
+        generators = net.generators
+
+        if isinstance(generators, pd.DataFrame) and "carrier" in generators.columns:
+            renewable_rows = generators["carrier"].isin(renewable_carriers)
+
+            rows_to_drop = generators.index[renewable_rows]
+            assets_to_drop = _asset_names_from_component_index(rows_to_drop)
+
+            if len(rows_to_drop) > 0:
+                net.generators.drop(index=rows_to_drop, inplace=True)
+
             if hasattr(net, "generators_t"):
                 for key, df in list(net.generators_t.items()):
-                    if hasattr(df, "drop"):
-                        df.drop(columns=to_drop, inplace=True, errors="ignore")
+                    net.generators_t[key] = _drop_assets_from_temporal_df(
+                        df,
+                        assets_to_drop,
+                    )
 
-    # Optionally scale capital_costs
+    # Optionally scale capital costs.
     if scale_capital_costs:
         scale_capex = new_len / old_len
-        capex_tables = ["generators", "links", "stores", "storage_units", "lines", "transformers"]
-        for tab in capex_tables:
-            if hasattr(net, tab):
-                df = getattr(net, tab)
-                if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
-                    df["capital_cost"] = df["capital_cost"] * scale_capex
 
-    # Optionally adjust snapshot_weightings
-    if adjust_snapshot_weightings and hasattr(net, "snapshot_weightings"):
-        sw = net.snapshot_weightings
-        if "objective" in sw.columns:
-            sw.loc[new_snapshots, "objective"] = (
-                sw.loc[new_snapshots, "objective"] * (old_len / new_len)
-            )
+        capex_tables = [
+            "generators",
+            "links",
+            "stores",
+            "storage_units",
+            "lines",
+            "transformers",
+        ]
+
+        for tab in capex_tables:
+            if not hasattr(net, tab):
+                continue
+
+            df = getattr(net, tab)
+
+            if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
+                df.loc[:, "capital_cost"] = df["capital_cost"] * scale_capex
 
     return net
 
