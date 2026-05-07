@@ -11,7 +11,8 @@ import pandas as pd
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Union, Sequence, Optional
+from typing import Any, Mapping, Optional, Union, Sequence
+import math
 
 from pypsa2smspp.constants import nominal_attrs
 
@@ -449,6 +450,371 @@ def reduce_snapshots_and_scale_costs(
     return net
 
 
+def split_traditional_generators_into_modules(
+    n,
+    module_sizes: Mapping[str, float],
+    n_modules: Union[int, Mapping[str, int]],
+    *,
+    randomize: Optional[Mapping[str, Union[float, Mapping[str, float]]]] = None,
+    seed: Optional[int] = None,
+    round_mode: str = "nearest",
+    split_extendable: bool = False,
+    scale_startup_like_costs: bool = True,
+    startup_like_cost_attrs: tuple[str, ...] = (
+        "start_up_cost",
+        "shut_down_cost",
+        "stand_by_cost",
+    ),
+    suffix_template: str = "{name}__mod{idx:02d}",
+    inplace: bool = True,
+    verbose: bool = True,
+    max_capacity_deviation: float = 0.10
+):
+    """
+    Split selected conventional PyPSA generators into several modular generators.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        Input PyPSA network.
+
+    module_sizes : mapping
+        Mapping carrier -> base module size in MW.
+        Example:
+            {
+                "coal": 195,
+                "diesel": 230,
+                "gas": 500,
+            }
+
+    n_modules : int | mapping
+        Number of modules created for each selected generator.
+        If an integer is provided, the same value is used for all carriers.
+        If a mapping is provided, it is interpreted as carrier -> number of modules.
+
+    randomize : mapping, optional
+        Mapping attribute -> randomization settings.
+
+        Simple form:
+            {"marginal_cost": 0.05}
+
+        means normal multiplicative perturbation with std = 5%.
+
+        Extended form:
+            {
+                "marginal_cost": {"std_pct": 0.05, "mean_pct": 0.0, "clip_pct": 0.15},
+                "start_up_cost": {"std_pct": 0.10, "clip_pct": 0.30},
+            }
+
+        The multiplier is:
+            1 + Normal(mean_pct, std_pct)
+
+        If clip_pct is provided, the multiplier is clipped to:
+            [1 - clip_pct, 1 + clip_pct]
+
+        Values above 1 are interpreted as percentages.
+        For example 5 means 5%, while 0.05 also means 5%.
+
+    seed : int, optional
+        Random seed for reproducible perturbations.
+
+    round_mode : {"nearest", "floor", "ceil"}
+        Rule used to round each module capacity to a multiple of the carrier base size.
+
+    split_extendable : bool
+        If False, generators with p_nom_extendable=True are skipped.
+
+    scale_startup_like_costs : bool
+        If True, startup-like costs are divided by the number of modules before
+        random perturbations are applied. This approximately preserves the total
+        startup-like cost when all modules are started.
+
+    startup_like_cost_attrs : tuple of str
+        Static attributes to divide by the number of modules.
+
+    suffix_template : str
+        Template used to name the new module generators.
+
+    inplace : bool
+        If True, modify the input network in place.
+        If False, work on a copy.
+
+    verbose : bool
+        Print a compact summary.
+
+    Returns
+    -------
+    pypsa.Network
+        Network with selected generators split into modules.
+    """
+    net = n if inplace else n.copy()
+
+    if round_mode not in {"nearest", "floor", "ceil"}:
+        raise ValueError("round_mode must be one of: 'nearest', 'floor', 'ceil'.")
+
+    if randomize is None:
+        randomize = {}
+
+    rng = np.random.default_rng(seed)
+
+    module_sizes = dict(module_sizes)
+    target_carriers = set(module_sizes)
+
+    if isinstance(n_modules, Mapping):
+        modules_by_carrier = dict(n_modules)
+    else:
+        modules_by_carrier = {carrier: int(n_modules) for carrier in target_carriers}
+
+    def _as_fraction(value: float) -> float:
+        """Interpret both 5 and 0.05 as 5%."""
+        value = float(value)
+        return value / 100.0 if abs(value) > 1.0 else value
+
+    def _parse_random_settings(settings: Union[float, Mapping[str, float]]) -> dict[str, Optional[float]]:
+        """Normalize randomization settings."""
+        if isinstance(settings, Mapping):
+            mean_pct = _as_fraction(settings.get("mean_pct", 0.0))
+            std_pct = _as_fraction(settings.get("std_pct", 0.0))
+            clip_pct = settings.get("clip_pct", None)
+            clip_pct = None if clip_pct is None else _as_fraction(clip_pct)
+        else:
+            mean_pct = 0.0
+            std_pct = _as_fraction(settings)
+            clip_pct = None
+
+        return {
+            "mean_pct": mean_pct,
+            "std_pct": std_pct,
+            "clip_pct": clip_pct,
+        }
+
+    def _draw_multiplier(attr: str) -> float:
+        """Draw one multiplicative random factor for one attribute."""
+        if attr not in randomize:
+            return 1.0
+
+        settings = _parse_random_settings(randomize[attr])
+        multiplier = 1.0 + rng.normal(settings["mean_pct"], settings["std_pct"])
+
+        clip_pct = settings["clip_pct"]
+        if clip_pct is not None:
+            multiplier = float(np.clip(multiplier, 1.0 - clip_pct, 1.0 + clip_pct))
+
+        return float(multiplier)
+
+    def _round_to_module_size(value: float, base_size: float) -> float:
+        """Round a capacity to a positive multiple of base_size."""
+        ratio = float(value) / float(base_size)
+
+        if round_mode == "nearest":
+            multiple = round(ratio)
+        elif round_mode == "floor":
+            multiple = math.floor(ratio)
+        elif round_mode == "ceil":
+            multiple = math.ceil(ratio)
+        else:
+            raise RuntimeError("Unexpected round_mode.")
+
+        multiple = max(1, int(multiple))
+        return float(multiple * base_size)
+
+    selected = net.generators.index[
+        net.generators["carrier"].isin(target_carriers)
+    ].tolist()
+
+    if not split_extendable and "p_nom_extendable" in net.generators.columns:
+        selected = [
+            gen
+            for gen in selected
+            if not bool(net.generators.at[gen, "p_nom_extendable"])
+        ]
+
+    if not selected:
+        if verbose:
+            print("[split_generators] No generators selected.")
+        return net
+
+    new_rows = []
+    old_names_to_drop = []
+    dynamic_columns_to_add: dict[str, dict[str, pd.Series]] = {}
+    report_rows = []
+
+    for old_name in selected:
+        old_row = net.generators.loc[old_name].copy()
+        carrier = old_row["carrier"]
+
+        if carrier not in modules_by_carrier:
+            continue
+
+        requested_k = int(modules_by_carrier[carrier])
+        if requested_k <= 0:
+            raise ValueError(f"Invalid number of modules for carrier {carrier}: {requested_k}")
+
+        base_size = float(module_sizes[carrier])
+        old_p_nom = float(old_row.get("p_nom", 0.0))
+
+        if old_p_nom <= 0:
+            if verbose:
+                print(
+                    f"[WARN] Generator '{old_name}' has non-positive p_nom={old_p_nom:.6g}. "
+                    "Skipping split."
+                )
+            continue
+
+        # If the generator is already smaller than the base module size, keep it unchanged.
+        if old_p_nom < base_size:
+            if verbose:
+                print(
+                    f"[split_generators] Generator '{old_name}' with carrier '{carrier}' has "
+                    f"p_nom={old_p_nom:.6g} MW < base module size {base_size:.6g} MW. "
+                    "Keeping it unchanged."
+                )
+            continue
+
+        # In this version, the base size is the actual size of each module.
+        # We choose the number of modules that best approximates the original capacity,
+        # without exceeding the requested number of modules.
+        candidates = []
+
+        for candidate_k in range(1, requested_k + 1):
+            candidate_total_p_nom = candidate_k * base_size
+            candidate_deviation = (candidate_total_p_nom - old_p_nom) / old_p_nom
+
+            candidates.append(
+                {
+                    "k": candidate_k,
+                    "module_p_nom": base_size,
+                    "total_p_nom": candidate_total_p_nom,
+                    "deviation": candidate_deviation,
+                    "abs_deviation": abs(candidate_deviation),
+                }
+            )
+
+        best = min(candidates, key=lambda x: x["abs_deviation"])
+
+        k = int(best["k"])
+        module_p_nom = float(best["module_p_nom"])
+
+        requested_total_p_nom = requested_k * base_size
+        requested_deviation = (requested_total_p_nom - old_p_nom) / old_p_nom
+
+        if k != requested_k and verbose:
+            print(
+                f"[WARN] Generator '{old_name}' with carrier '{carrier}' has "
+                f"p_nom={old_p_nom:.6g} MW. Requested {requested_k} modules of "
+                f"{base_size:.6g} MW would give {requested_total_p_nom:.6g} MW total "
+                f"({requested_deviation * 100:.2f}% deviation). "
+                f"Using {k} modules of {base_size:.6g} MW instead "
+                f"({k * base_size:.6g} MW total, {best['deviation'] * 100:.2f}% deviation)."
+            )
+
+        if abs(best["deviation"]) > max_capacity_deviation and verbose:
+            print(
+                f"[WARN] Closest modular split for generator '{old_name}' still exceeds "
+                f"the allowed ±{max_capacity_deviation * 100:.2f}% capacity deviation. "
+                "The closest available split is used anyway."
+            )
+
+        module_names = [
+            suffix_template.format(name=old_name, idx=i + 1)
+            for i in range(k)
+        ]
+
+        # Draw one multiplier per module and randomized attribute.
+        multipliers_by_module = {
+            module_name: {
+                attr: _draw_multiplier(attr)
+                for attr in randomize
+            }
+            for module_name in module_names
+        }
+
+        for module_name in module_names:
+            new_row = old_row.copy()
+            new_row.name = module_name
+
+            # Split nominal capacity.
+            if "p_nom" in new_row.index:
+                new_row["p_nom"] = module_p_nom
+
+            # Scale extendable capacity bounds if present.
+            for attr in ("p_nom_min", "p_nom_max"):
+                if attr in new_row.index and pd.notna(new_row[attr]):
+                    new_row[attr] = float(new_row[attr]) / k
+
+            # Divide startup-like costs by the number of modules.
+            if scale_startup_like_costs:
+                for attr in startup_like_cost_attrs:
+                    if attr in new_row.index and pd.notna(new_row[attr]):
+                        new_row[attr] = float(new_row[attr]) / k
+
+            # Apply random static perturbations.
+            for attr, multiplier in multipliers_by_module[module_name].items():
+                if attr in new_row.index and pd.notna(new_row[attr]):
+                    new_row[attr] = float(new_row[attr]) * multiplier
+
+            new_rows.append(new_row)
+
+        # Duplicate dynamic generator time series.
+        for attr, df in net.generators_t.items():
+            if old_name not in df.columns:
+                continue
+
+            if attr not in dynamic_columns_to_add:
+                dynamic_columns_to_add[attr] = {}
+
+            for module_name in module_names:
+                series = df[old_name].copy()
+
+                # Apply random dynamic perturbations, if the randomized attribute
+                # is time-dependent.
+                if attr in randomize:
+                    series = series * multipliers_by_module[module_name][attr]
+
+                dynamic_columns_to_add[attr][module_name] = series
+
+        old_names_to_drop.append(old_name)
+
+        report_rows.append(
+            {
+                "generator": old_name,
+                "carrier": carrier,
+                "old_p_nom": old_p_nom,
+                "n_modules": k,
+                "base_module_size": base_size,
+                "new_module_p_nom": module_p_nom,
+                "new_total_p_nom": k * module_p_nom,
+                "delta_p_nom": k * module_p_nom - old_p_nom,
+            }
+        )
+
+    if not new_rows:
+        if verbose:
+            print("[split_generators] No new module rows created.")
+        return net
+
+    new_generators = pd.DataFrame(new_rows)
+    net.generators = pd.concat([net.generators, new_generators], axis=0)
+
+    # Add dynamic columns for the new module generators.
+    for attr, columns in dynamic_columns_to_add.items():
+        for module_name, series in columns.items():
+            net.generators_t[attr][module_name] = series
+
+    # Remove original generators and their dynamic columns.
+    net.generators = net.generators.drop(index=old_names_to_drop)
+
+    for attr, df in net.generators_t.items():
+        cols_to_drop = [name for name in old_names_to_drop if name in df.columns]
+        if cols_to_drop:
+            net.generators_t[attr] = df.drop(columns=cols_to_drop)
+
+    if verbose:
+        report = pd.DataFrame(report_rows)
+        print("[split_generators] Split summary:")
+        print(report.to_string(index=False))
+
+    return net
 
 def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     """

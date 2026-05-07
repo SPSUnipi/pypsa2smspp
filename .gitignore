@@ -169,6 +169,7 @@ test/configs/data/~$components.xlsx
 test/gurobi*
 investment_candidates*
 test/configs/data/develop/*
+notebooks/
 
 # Documentation
 docs/_build/

@@ -368,9 +368,6 @@ def ucblock_dimensions(n):
         },
     }
 
-    if has_time_dependent_link_data(n):
-        dimensions["NumberInstants"] = dimensions["TimeHorizon"]
-
     return dimensions
 
 
@@ -499,6 +496,9 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     dimensions['NetworkBlock']['Links'] -= number_merged_links
     dimensions['NetworkBlock']['combined'] -= number_merged_links
     dimensions['UCBlock']['NumberLines'] -= number_merged_links
+
+    if has_time_dependent_link_data(n):
+        dimensions["NumberInstants"] = dimensions["TimeHorizon"]
     
     if expansion_ucblock:
        dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links 
