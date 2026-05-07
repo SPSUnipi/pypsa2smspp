@@ -4,11 +4,29 @@
 
 ### New Features and Major Changes
 
-* [{Description of the fix} PR #XX](https://github.com/SPSUnipi/pySMSpp/pull/XX)
+* 
 
 ### Minor Changes and Bug Fixes
 
 * 
+
+## v0.3.0
+
+### New Features and Major Changes
+
+* Improve configuration of the functions and distinction between thermal and intermittent units [PR #23](https://github.com/SPSUnipi/pypsa2smspp/pull/23)
+* Add support for stochastic networks [PR #21](https://github.com/SPSUnipi/pypsa2smspp/pull/21)
+* Support create/optimize/retrieve of SMS++ network [PR #27](https://github.com/SPSUnipi/pypsa2smspp/pull/27)
+* Add documentation [PR #28](https://github.com/SPSUnipi/pypsa2smspp/pull/28)
+* Support LineName, NodeName and UC name [PR #33](https://github.com/SPSUnipi/pypsa2smspp/pull/33)
+* Support for time-dependent links [7522065](https://github.com/SPSUnipi/pypsa2smspp/tree/752206593202961f5809f0dde06fba50fef3795b)
+
+### Minor Changes and Bug Fixes
+
+* Improves git ignore and CI [PR #34](https://github.com/SPSUnipi/pypsa2smspp/pull/34)
+* Cleaned dimensions for multi-links in sector-coupled networks
+* Introduce CI with conda package
+* Support for inflows
 
 ## v0.2.0
 
