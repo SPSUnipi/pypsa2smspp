@@ -37,7 +37,7 @@ Issues = "https://github.com/SPSUnipi/pypsa2smspp/issues"
 [project.optional-dependencies]
 dev = [
     "pytest", 
-    "highspy",
+    "highspy<=1.11",
     "gurobipy",
     "coverage",
     "pre-commit",
