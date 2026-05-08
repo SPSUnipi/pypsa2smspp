@@ -26,10 +26,10 @@ import pypsa
 
 # Inputs
 # NETWORK_NC = Path(r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_5_elec_.nc")
-# NETWORK_NC = Path(
-#      r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp_italy_very_small_fewsectors/networks/base_s_2___2050.nc"
-# )
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small.nc")
+NETWORK_NC = Path(
+     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks/base_s_20___2050.nc"
+)
+# NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small.nc")
 
 
 # Output
@@ -63,7 +63,7 @@ FP_SOLUTION = "smspp_{name}_solution.nc"
 # SMS++ config selection (no YAML)
 # - "auto" chooses a default template based on CAPACITY_EXPANSION_UCBLOCK inside Transformation.optimize()
 # - otherwise pass a template path or a pysmspp.SMSConfig (depending on your implementation)
-CONFIGFILE = "UCBlock/uc_solverconfig_grb.txt"
+CONFIGFILE = "UCBlock/uc_solverconfig_grb_lp.txt"
 
 # Optional: pass-through options for pySMSpp (all optional; defaults exist in pySMSpp)
 # Examples:
@@ -74,8 +74,8 @@ PYSMSSP_OPTIONS = {"logging": True}
 DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
-DO_REDUCE_SNAPSHOTS = False
-REDUCE_SNAPSHOTS_TO = 1800
+DO_REDUCE_SNAPSHOTS = True
+REDUCE_SNAPSHOTS_TO = 1000
 DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False
