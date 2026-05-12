@@ -2100,3 +2100,5 @@ def _flatten_saved_efficiencies(efficiencies_dict, drop_zero=True):
         v if v.ndim > 0 else np.full(time_horizon, float(v), dtype=float)
         for v in values
     ])
+
+
