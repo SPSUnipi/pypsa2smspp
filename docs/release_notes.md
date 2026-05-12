@@ -23,6 +23,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Add architecture to documentation and improve examples [PR #37](https://github.com/SPSUnipi/pypsa2smspp/pull/37) and [PR #38](https://github.com/SPSUnipi/pypsa2smspp/pull/38)
 * Improves git ignore and CI [PR #34](https://github.com/SPSUnipi/pypsa2smspp/pull/34)
 * Cleaned dimensions for multi-links in sector-coupled networks
 * Introduce CI with conda package
