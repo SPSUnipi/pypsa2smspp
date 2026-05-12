@@ -53,6 +53,7 @@ nav:
   - Capacity expansion with Benders (InvestmentBlock): examples/capacity_expansion_investmentblock.ipynb
   - Stochastic optimization with TwoStageStochasticBlock: examples/stochastic_demand_intermittent.ipynb
 - User Guide:
+  - Architecture: user-guide/architecture.md
   - API Reference: api_reference.md
 - Release Notes: release_notes.md
 - Contributing: contributing.md

@@ -28,7 +28,9 @@ pypsa2smspp is a Python package to enable advanced mathematical decomposition in
 
     [:octicons-arrow-right-24: Simple capacity expansion (2 bus)](examples/capacity_expansion_2bus.ipynb)
 
-    [:octicons-arrow-right-24: PyPSA to SMS++ conversion step by step](examples/conversion_step_by_step.ipynb)
+    [:octicons-arrow-right-24: Capacity expansion with InvestmentBlock (Benders Decomposition)](examples/capacity_expansion_investmentblock.ipynb)
+
+    [:octicons-arrow-right-24: Stochastic optimization with TwoStageStochasticBlock](examples/stochastic_demand_intermittent.ipynb)
 
 </div>
 
@@ -36,11 +38,13 @@ pypsa2smspp is a Python package to enable advanced mathematical decomposition in
 
 <div class="grid cards" markdown>
 
--   :octicons-code-16:{ .lg .middle } **API Reference**
+-   :octicons-code-16:{ .lg .middle } **User guide**
 
     ---
 
-    The API Reference is generated automatically from the docstrings in the code. It provides a detailed description of all modules, classes and functions, their parameters and usage.
+    The user guide provides detailed information of the model. It provides a detailed description of all modules, classes and functions, their parameters and usage.
+
+    [:octicons-arrow-right-24: Architecture](user-guide/architecture.md)
 
     [:octicons-arrow-right-24: API Reference](api_reference.md)
 

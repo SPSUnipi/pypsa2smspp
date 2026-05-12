@@ -2,23 +2,22 @@
 
 ## What is pypsa2smspp?
 
-pypsa2smspp is a Python package to enable advanced mathematical decomposition in the energy modeling framework [PyPSA](https://github.com/PyPSA/pypsa). This package interfaces [PyPSA](https://github.com/PyPSA/pypsa) using [Structured Modeling System for mathematical models (SMS++)](https://smspp.gitlab.io/smspp-project/) and its python interface [pySMSpp](https://github.com/SPSUnipi/pySMSpp).
+pypsa2smspp is a Python package that connects [PyPSA](https://github.com/PyPSA/pypsa) energy-system models with [SMS++](https://smspp.gitlab.io/smspp-project/), using the [pySMSpp](https://github.com/SPSUnipi/pySMSpp) Python interface.
 
-The package is under active development and the current documentation aims to facilitate the development of the package. Currently, there is not yet a stable release of the package on PyPI or Conda, so the installation can be performed by cloning the repository and installing the package locally.
+PyPSA remains the user-facing modelling environment: networks, components, time series, and optimized results are represented as PyPSA objects. SMS++ provides the block-structured mathematical model and the solvers that can exploit that structure. pypsa2smspp sits between them: it converts a PyPSA network into an SMS++ block hierarchy, runs the optimization through pySMSpp, and maps the solution back onto the original PyPSA network.
 
-## What is SMS++?
-
-SMS++ is a software tool for advanced optimization of mathematical models by adopting advanced decomposition tools.
-It is a collection of C++ classes for modeling complex, block-structured mathematical models and solving them via sophisticated, structure-exploiting algorithms such as decomposition methods and specialized Interior-Point approaches.
-
-SMS++ preserves the block-structure of the model and allows the user to define the model in terms of blocks, which can be solved by different solvers. Each block may describe a specific physical system to model (e.g. a generator of a power system) or a specific mathematical structure (e.g. to allow Lagrangian relaxation). Each block may be characterized by a set of variables, constraints, and objectives, and may be solved by highly specialized solvers and decomposition techniques. As each block is solved by a specialized solver, the overall solution process is highly efficient and can exploit the structure of the model.
-
-SMS++ supports a hierarchical model structure, where blocks may contain other blocks. This allows the user to define complex models in a modular way, where each block can be solved by a specialized solver. The nested structure combined with the specialized solvers allows the user to exploit the structure of the model and aims to break down computational resources to solve large-scale models.
-
-For more information about SMS++, please refer to the [SMS++ website](https://smspp.gitlab.io/smspp-project/).
+The package is under active development. The current documentation is intended both for users who want to run conversions and for developers who want to understand and extend the transformation pipeline. There is not yet a stable release on PyPI or Conda, so the package is currently installed by cloning the repository and installing it locally.
 
 ## Why pypsa2smspp?
 
-As mentioned above SMS++ is a powerful tool for solving complex mathematical models. On the other hand, PyPSA is a powerful tool for modeling and optimizing energy systems. By interfacing PyPSA with SMS++, we can leverage the power of SMS++ to solve complex energy system models defined in PyPSA. This allows us to solve larger and more complex models than what is possible with the default solvers available in PyPSA, and to exploit the structure of the model to achieve faster solution times.
+PyPSA is a flexible framework for defining and optimizing energy-system models in Python. SMS++ is designed for advanced optimization of block-structured mathematical models, including decomposition methods and specialized solvers.
 
-By leveraging on [pySMSpp](https://pysmspp.readthedocs.io/en/latest/), that is the Python interface to SMS++, pypsa2smspp allows to convert PyPSA models into SMS++ objects in Python, and to write, read and optimize SMS++ models. This allows us to leverage the power of SMS++ while still being able to define the model in Python, which is a widely used programming language in the energy modeling community.
+pypsa2smspp combines these strengths. Users can continue to build networks in PyPSA while experimenting with SMS++ formulations such as `UCBlock`, `InvestmentBlock`, `DesignNetworkBlock`, and `TwoStageStochasticBlock`. This is especially useful for capacity expansion, unit-commitment-style formulations, network design, and stochastic problems where the mathematical structure matters.
+
+## What is SMS++?
+
+SMS++ is a C++ framework for modelling and solving complex block-structured optimization problems. A model is represented as a hierarchy of blocks; each block can contain variables, constraints, objectives, data, and nested sub-blocks.
+
+This block structure is important because it lets solvers exploit the mathematical organization of the problem. For example, different units, networks, investment variables, and scenario-dependent data can be represented as separate but connected blocks. SMS++ can then use decomposition-oriented algorithms or specialized solvers that are aware of this structure.
+
+For more information, see the [SMS++ website](https://smspp.gitlab.io/smspp-project/).
