@@ -51,6 +51,8 @@ from pypsa2smspp.transformation import Transformation
 from datetime import datetime
 import pysmspp
 import pypsa
+import numpy as np
+import pandas as pd
 
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
@@ -69,7 +71,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_2intermittent_2datamapping'
+name = 'stochastic_marginal_intermittent'
 folder = 'develop/tssb'
 
 #%% Network definition with PyPSA
@@ -81,28 +83,179 @@ nd = NetworkDefinition(config)
 #     nd.n = add_slack_unit(nd.n)
 nd.n = add_slack_unit(nd.n)
 
-SCENARIOS = ["low", "med", "high"]
-PROB = {"low": 0.333333333333, "med": 0.333333333333, "high": 0.333333333333}  # Scenario probabilities
+# SCENARIOS = ["low", "med", "high"]
+# PROB = {"low": 0.333333333333, "med": 0.333333333333, "high": 0.333333333333}  # Scenario probabilities
 
-load = nd.n.loads_t.p_set
-pmaxpu = nd.n.generators_t.p_max_pu
-marginal = nd.n.generators.marginal_cost
+# load = nd.n.loads_t.p_set
+# pmaxpu = nd.n.generators_t.p_max_pu
+# marginal = nd.n.generators.marginal_cost
+
+# nd.n.set_scenarios(PROB)
+
+# for st_p in config.stochastic_parameters:
+#     if st_p == "demand":
+#         LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
+#         for scenario in SCENARIOS:
+#             nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
+#     elif st_p == "renewable_maxpower":
+#         PMAXPU_VALUE = {"low": pmaxpu / 2, "med": pmaxpu, "high": pmaxpu * 2/3}
+#         for scenario in SCENARIOS:
+#             nd.n.generators_t.p_max_pu[scenario] = PMAXPU_VALUE[scenario]
+#     elif st_p == "renewable_marginal_cost":
+#         MARGINAL_VALUE = {"low": marginal, "med": marginal * 2, "high": marginal * 4}
+#         for scenario in SCENARIOS:
+#             nd.n.generators.marginal_cost[scenario] = MARGINAL_VALUE[scenario]
+
+
+# ---------------------------------------------------------------------
+# Stochastic scenario configuration
+# ---------------------------------------------------------------------
+
+N_SCENARIOS = 1000
+SEED = 123
+
+SCENARIOS = [f"scenario_{i + 1}" for i in range(N_SCENARIOS)]
+PROB = {scenario: 1.0 / N_SCENARIOS for scenario in SCENARIOS}
+
+# Standard deviations of the Gaussian multipliers.
+# Example: sigma = 0.20 means values are typically varied by about ±20%.
+SIGMA = {
+    "demand": 0.20,
+    "renewable_maxpower": 0.15,
+    "renewable_marginal_cost": 0.30,
+}
+
+# Choose how uncertainty is sampled:
+# - "global": one multiplier per scenario and parameter
+# - "elementwise": one multiplier per value, i.e. snapshot/asset-specific noise
+DRAW_MODE = "global"
+
+rng = np.random.default_rng(SEED)
+
+
+def gaussian_multiplier(base, sigma, *, rng, mode="global", lower=0.0):
+    """
+    Generate Gaussian multipliers centered around 1.
+
+    Parameters
+    ----------
+    base : pd.DataFrame | pd.Series
+        Base object used only to infer the output shape.
+    sigma : float
+        Standard deviation of the Gaussian multiplier.
+    rng : np.random.Generator
+        Random number generator.
+    mode : {"global", "elementwise"}
+        If "global", one scalar multiplier is used for the whole object.
+        If "elementwise", one multiplier is sampled for each entry.
+    lower : float
+        Minimum allowed multiplier.
+
+    Returns
+    -------
+    float | pd.DataFrame | pd.Series
+        Gaussian multiplier.
+    """
+    if mode == "global":
+        multiplier = rng.normal(loc=1.0, scale=sigma)
+        return max(multiplier, lower)
+
+    if mode == "elementwise":
+        values = rng.normal(loc=1.0, scale=sigma, size=base.shape)
+        values = np.maximum(values, lower)
+
+        if isinstance(base, pd.DataFrame):
+            return pd.DataFrame(values, index=base.index, columns=base.columns)
+
+        if isinstance(base, pd.Series):
+            return pd.Series(values, index=base.index)
+
+        return values
+
+    raise ValueError(f"Unknown draw mode: {mode}")
+
+
+# ---------------------------------------------------------------------
+# Store original deterministic values before activating scenarios
+# ---------------------------------------------------------------------
+
+base_load = nd.n.loads_t.p_set.copy()
+base_pmaxpu = nd.n.generators_t.p_max_pu.copy()
+base_marginal = nd.n.generators.marginal_cost.copy()
+
+# Optional: restrict renewable_maxpower uncertainty only to renewable generators.
+# Adjust this list if your carrier names differ.
+renewable_carriers = {
+    "solar",
+    "solar-hsat",
+    "onwind",
+    "offwind-ac",
+    "offwind-dc",
+    "offwind-float",
+    "ror",
+}
+
+renewable_generators = nd.n.generators.index[
+    nd.n.generators.carrier.isin(renewable_carriers)
+]
+
+# ---------------------------------------------------------------------
+# Activate stochastic scenarios
+# ---------------------------------------------------------------------
 
 nd.n.set_scenarios(PROB)
 
-for st_p in config.stochastic_parameters:
-    if st_p == "demand":
-        LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
-        for scenario in SCENARIOS:
-            nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
-    elif st_p == "renewable_maxpower":
-        PMAXPU_VALUE = {"low": pmaxpu / 2, "med": pmaxpu, "high": pmaxpu * 2/3}
-        for scenario in SCENARIOS:
-            nd.n.generators_t.p_max_pu[scenario] = PMAXPU_VALUE[scenario]
-    elif st_p == "renewable_marginal_cost":
-        MARGINAL_VALUE = {"low": marginal, "med": marginal * 2, "high": marginal * 4}
-        for scenario in SCENARIOS:
-            nd.n.generators.marginal_cost[scenario] = MARGINAL_VALUE[scenario]
+
+# ---------------------------------------------------------------------
+# Assign scenario-dependent values
+# ---------------------------------------------------------------------
+
+for scenario in SCENARIOS:
+
+    if "demand" in config.stochastic_parameters:
+        mult = gaussian_multiplier(
+            base_load,
+            SIGMA["demand"],
+            rng=rng,
+            mode=DRAW_MODE,
+            lower=0.0,
+        )
+
+        nd.n.loads_t.p_set[scenario] = (base_load * mult).clip(lower=0.0)
+
+    if "renewable_maxpower" in config.stochastic_parameters:
+        mult = gaussian_multiplier(
+            base_pmaxpu[renewable_generators],
+            SIGMA["renewable_maxpower"],
+            rng=rng,
+            mode=DRAW_MODE,
+            lower=0.0,
+        )
+
+        scenario_pmaxpu = base_pmaxpu.copy()
+
+        scenario_pmaxpu.loc[:, renewable_generators] = (
+            base_pmaxpu.loc[:, renewable_generators] * mult
+        ).clip(lower=0.0, upper=1.0)
+
+        nd.n.generators_t.p_max_pu[scenario] = scenario_pmaxpu
+
+    if "renewable_marginal_cost" in config.stochastic_parameters:
+        mult = gaussian_multiplier(
+            base_marginal[renewable_generators],
+            SIGMA["renewable_marginal_cost"],
+            rng=rng,
+            mode=DRAW_MODE,
+            lower=0.0,
+        )
+
+        scenario_marginal = base_marginal.copy()
+
+        scenario_marginal.loc[renewable_generators] = (
+            base_marginal.loc[renewable_generators] * mult
+        ).clip(lower=0.0)
+
+        nd.n.generators.marginal_cost[scenario] = scenario_marginal
 
 
 n_pypsa = nd.n.copy()
