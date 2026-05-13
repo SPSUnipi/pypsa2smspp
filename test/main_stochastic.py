@@ -86,6 +86,7 @@ PROB = {"low": 0.333333333333, "med": 0.333333333333, "high": 0.333333333333}  #
 
 load = nd.n.loads_t.p_set
 pmaxpu = nd.n.generators_t.p_max_pu
+marginal = nd.n.generators.marginal_cost
 
 nd.n.set_scenarios(PROB)
 
@@ -94,10 +95,14 @@ for st_p in config.stochastic_parameters:
         LOAD_VALUE = {"low": load, "med": load * 2, "high": load * 4}
         for scenario in SCENARIOS:
             nd.n.loads_t.p_set[scenario] = LOAD_VALUE[scenario]
-    elif st_p == "renewables":
+    elif st_p == "renewable_maxpower":
         PMAXPU_VALUE = {"low": pmaxpu / 2, "med": pmaxpu, "high": pmaxpu * 2/3}
         for scenario in SCENARIOS:
             nd.n.generators_t.p_max_pu[scenario] = PMAXPU_VALUE[scenario]
+    elif st_p == "renewable_marginal_cost":
+        MARGINAL_VALUE = {"low": marginal, "med": marginal * 2, "high": marginal * 4}
+        for scenario in SCENARIOS:
+            nd.n.generators.marginal_cost[scenario] = MARGINAL_VALUE[scenario]
 
 
 n_pypsa = nd.n.copy()
