@@ -111,7 +111,7 @@ nd.n = add_slack_unit(nd.n)
 # Stochastic scenario configuration
 # ---------------------------------------------------------------------
 
-N_SCENARIOS = 1000
+N_SCENARIOS = 10
 SEED = 123
 
 SCENARIOS = [f"scenario_{i + 1}" for i in range(N_SCENARIOS)]

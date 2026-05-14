@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Union, Literal, Callable
 import warnings
 
-from pypsa2smspp.constants import conversion_dict, nominal_attrs, renewable_carriers
+from pypsa2smspp.constants import (
+    conversion_dict,
+    nominal_attrs,
+    renewable_carriers,
+    STOCHASTIC_PARAMETER_REGISTRY,
+)
+
 from pypsa2smspp.utils import (
     is_extendable,
     filter_extendable_components,
@@ -74,16 +80,15 @@ from pypsa2smspp.stochastic_utils import (
     get_base_scenario_network,
     describe_problem_structure,
     build_dss_demand,
-    build_dss_renewable_marginal_cost,
-    build_dss_renewable_maxpower,
+    build_dss_unitblock_timeseries_parameter,
     merge_tssb_dss_parts,
     calculate_design_variables,
     build_tssb_static_abstract_path,
     build_stochastic_mapping_demand,
     build_stochastic_mapping_single_unit,
     build_tssb_stochastic_block_data,
-    build_stochastic_mapping_renewable_maxpower_single_unit,
-    get_physical_renewable_generators
+    get_stochastic_parameter_asset_names,
+    collect_unitblock_indices_by_names_and_type,
 )
 
 NP_DOUBLE = np.float64
@@ -2059,16 +2064,26 @@ class Transformation:
                     "'get_scenario'."
                 )
     
-            if not (
-                self.problem_structure["stochastic_demand"]
-                or self.problem_structure["stochastic_renewable_marginal_cost"]
-                or self.problem_structure["stochastic_renewable_maxpower"]
-            ):
+            stochastic_parameters = self.problem_structure.get(
+                "stochastic_parameters", []
+            )
+            
+            if not stochastic_parameters:
                 raise ValueError(
                     "The network is stochastic but no stochastic parameter was declared. "
                     "Set stochastic_parameters={'stochastic_type': 'tssb', "
                     "'parameters': [...]}."
                 )
+            
+            for parameter in stochastic_parameters:
+                spec = STOCHASTIC_PARAMETER_REGISTRY[parameter]
+            
+                if spec.get("requires_enable_thermal_units", False):
+                    if not self.enable_thermal_units:
+                        raise ValueError(
+                            f"Stochastic parameter {parameter!r} requires "
+                            "enable_thermal_units=True."
+                        )
     
         return True
 
@@ -2124,30 +2139,60 @@ class Transformation:
         """
         Build the payload for the DiscreteScenarioSet of a TSSB problem.
     
-        Implemented sources:
-        - stochastic demand
-        - stochastic renewable maximum power profiles from Generator.p_max_pu
-        - stochastic renewable marginal costs from Generator.marginal_cost
+        The selected stochastic parameters are read from the registry. Demand is
+        handled by a dedicated UCBlock-level builder, while all UnitBlock-level
+        time series parameters share the same generic DSS builder.
         """
         dss_parts = []
     
-        if self.problem_structure.get("stochastic_demand", False):
-            dss_parts.append(build_dss_demand(n))
+        self.tssb_parameter_specs = {}
+        self.tssb_parameter_asset_order = {}
     
-        if self.problem_structure.get("stochastic_renewable_maxpower", False):
-            dss_parts.append(
-                build_dss_renewable_maxpower(
-                    n=n,
-                    renewable_carriers=renewable_carriers,
-                )
-            )
+        for parameter in self.problem_structure.get("stochastic_parameters", []):
+            spec = STOCHASTIC_PARAMETER_REGISTRY[parameter]
+            mapping_kind = spec["mapping_kind"]
     
-        if self.problem_structure.get("stochastic_renewable_marginal_cost", False):
-            dss_parts.append(
-                build_dss_renewable_marginal_cost(
+            self.tssb_parameter_specs[parameter] = dict(spec)
+    
+            if mapping_kind == "ucblock_timeseries":
+                if parameter != "demand":
+                    raise ValueError(
+                        f"Unsupported UCBlock stochastic parameter {parameter!r}."
+                    )
+    
+                dss_parts.append(build_dss_demand(n))
+                continue
+    
+            if mapping_kind == "unitblock_timeseries":
+                asset_names = get_stochastic_parameter_asset_names(
                     n=n,
-                    renewable_carriers=renewable_carriers,
+                    parameter=parameter,
+                    spec=spec,
+                    intermittent_carriers=self.intermittent_carriers,
+                    default_intermittent_carriers=renewable_carriers,
+                    enable_thermal_units=self.enable_thermal_units,
                 )
+                    
+                self.tssb_parameter_asset_order[parameter] = list(asset_names)
+    
+                dss_parts.append(
+                    build_dss_unitblock_timeseries_parameter(
+                        n=n,
+                        parameter=parameter,
+                        pypsa_component=spec["pypsa_component"],
+                        field=spec["field"],
+                        asset_names=asset_names,
+                        function_name=spec["function_name"],
+                        unitblock_type=spec["unitblock_type"],
+                        target=spec["target"],
+                        weights=bool(spec.get("weights", False)),
+                    )
+                )
+                continue
+    
+            raise ValueError(
+                f"Unsupported stochastic mapping_kind={mapping_kind!r} "
+                f"for parameter {parameter!r}."
             )
     
         dss_data = merge_tssb_dss_parts(dss_parts)
@@ -2276,91 +2321,100 @@ class Transformation:
     def build_tssb_stochastic_block(self, n):
         """
         Build the StochasticBlock payload for TSSB.
-    
-        Implemented mappings:
-        - stochastic demand -> UCBlock::set_active_power_demand
-        - stochastic renewable maximum power
-          -> IntermittentUnitBlock::set_maximum_power
-        - stochastic renewable marginal cost
-          -> IntermittentUnitBlock::set_active_power_cost
+
+        Demand maps directly to UCBlock::set_active_power_demand.
+        UnitBlock-level stochastic parameters are mapped one asset at a time
+        using the asset order already used in the DSS.
         """
         data_mappings = []
-    
-        if self.problem_structure.get("stochastic_demand", False):
-            demand_offset = self.tssb_dss_offsets["demand"]
-    
-            data_mappings.append(
-                build_stochastic_mapping_demand(
-                    set_from_start=demand_offset["start"],
-                    set_from_end=demand_offset["end"],
-                    scenario_size=demand_offset["size"],
-                )
-            )
-    
-        renewable_unitblock_indices = None
         time_horizon = int(self.dimensions["UCBlock"]["TimeHorizon"])
-    
-        def append_renewable_unit_mappings(parameter, function_name, target):
-            nonlocal renewable_unitblock_indices
-    
+
+        for parameter in self.problem_structure.get("stochastic_parameters", []):
+            spec = STOCHASTIC_PARAMETER_REGISTRY[parameter]
+            mapping_kind = spec["mapping_kind"]
+
+            if parameter not in self.tssb_dss_offsets:
+                raise KeyError(
+                    f"No DSS offset found for stochastic parameter {parameter!r}."
+                )
+
             offset = self.tssb_dss_offsets[parameter]
-    
-            if renewable_unitblock_indices is None:
-                renewable_unitblock_indices = (
-                    self._collect_renewable_generator_unitblock_indices(
-                        n=n,
-                        renewable_carriers=renewable_carriers,
+
+            if mapping_kind == "ucblock_timeseries":
+                if parameter != "demand":
+                    raise ValueError(
+                        f"Unsupported UCBlock stochastic parameter {parameter!r}."
                     )
-                )
-    
-            number_renewable_units = len(renewable_unitblock_indices)
-            expected_size = number_renewable_units * time_horizon
-    
-            if offset["size"] != expected_size:
-                raise ValueError(
-                    f"Mismatch between stochastic {parameter!r} DSS size and "
-                    f"renewable generator UnitBlock mappings. DSS size is "
-                    f"{offset['size']}, while {number_renewable_units} renewable "
-                    f"generators and TimeHorizon={time_horizon} imply "
-                    f"{expected_size}."
-                )
-    
-            for local_idx, unitblock_index in enumerate(renewable_unitblock_indices):
-                set_from_start = offset["start"] + local_idx * time_horizon
-                set_from_end = set_from_start + time_horizon
-    
+
                 data_mappings.append(
-                    build_stochastic_mapping_single_unit(
-                        target=target,
-                        function_name=function_name,
-                        set_from_start=set_from_start,
-                        set_from_end=set_from_end,
-                        time_horizon=time_horizon,
-                        unitblock_index=unitblock_index,
+                    build_stochastic_mapping_demand(
+                        set_from_start=offset["start"],
+                        set_from_end=offset["end"],
+                        scenario_size=offset["size"],
                     )
                 )
-    
-        if self.problem_structure.get("stochastic_renewable_maxpower", False):
-            append_renewable_unit_mappings(
-                parameter="renewable_maxpower",
-                function_name="IntermittentUnitBlock::set_maximum_power",
-                target="renewable_maxpower",
+                continue
+
+            if mapping_kind == "unitblock_timeseries":
+                asset_names = self.tssb_parameter_asset_order.get(parameter, None)
+
+                if asset_names is None:
+                    raise KeyError(
+                        f"No asset order was stored for stochastic parameter "
+                        f"{parameter!r}."
+                    )
+
+                unitblock_indices = collect_unitblock_indices_by_names_and_type(
+                    unitblocks=self.unitblocks,
+                    names=asset_names,
+                    block_type=spec["unitblock_type"],
+                )
+
+                number_units = len(unitblock_indices)
+                expected_size = number_units * time_horizon
+
+                if offset["size"] != expected_size:
+                    raise ValueError(
+                        f"Mismatch between stochastic {parameter!r} DSS size and "
+                        f"UnitBlock mappings. DSS size is {offset['size']}, while "
+                        f"{number_units} units and TimeHorizon={time_horizon} imply "
+                        f"{expected_size}."
+                    )
+
+                for local_idx, unitblock_index in enumerate(unitblock_indices):
+                    set_from_start = offset["start"] + local_idx * time_horizon
+                    set_from_end = set_from_start + time_horizon
+
+                    data_mappings.append(
+                        build_stochastic_mapping_single_unit(
+                            target=spec["target"],
+                            function_name=spec["function_name"],
+                            set_from_start=set_from_start,
+                            set_from_end=set_from_end,
+                            time_horizon=time_horizon,
+                            unitblock_index=unitblock_index,
+                        )
+                    )
+
+                self.tssb_parameter_unitblock_indices = getattr(
+                    self, "tssb_parameter_unitblock_indices", {}
+                )
+                self.tssb_parameter_unitblock_indices[parameter] = unitblock_indices
+
+                continue
+
+            raise ValueError(
+                f"Unsupported stochastic mapping_kind={mapping_kind!r} "
+                f"for parameter {parameter!r}."
             )
-    
-        if self.problem_structure.get("stochastic_renewable_marginal_cost", False):
-            append_renewable_unit_mappings(
-                parameter="renewable_marginal_cost",
-                function_name="IntermittentUnitBlock::set_active_power_cost",
-                target="renewable_marginal_cost",
-            )
-    
+
         if not data_mappings:
             raise ValueError(
                 "No stochastic data mappings were built for the TSSB StochasticBlock."
             )
-    
+
         stochastic_block = build_tssb_stochastic_block_data(data_mappings)
-    
+
         self.dimensions["tssb"]["sb"] = {
             "NumberDataMappings": stochastic_block["NumberDataMappings"],
             "SetSize_dim": int(stochastic_block["SetSize"].shape[0]),
@@ -2370,45 +2424,9 @@ class Transformation:
                 "TotalLength": int(stochastic_block["AbstractPath"]["TotalLength"]),
             },
         }
-    
+
         return stochastic_block
-    
-    def _collect_renewable_generator_unitblock_indices(self, n, renewable_carriers):
-        """
-        Collect UnitBlock indices corresponding to renewable PyPSA generators.
-    
-        Assumption
-        ----------
-        Generator-derived UnitBlocks are created first and preserve the order of
-        the physical generator index, i.e. without the scenario level.
-    
-        Therefore, the physical generator at position i maps to UnitBlock_i.
-        """
-        renewable_generators = get_physical_renewable_generators(
-            n=n,
-            renewable_carriers=renewable_carriers,
-        )
-    
-        generators = n.generators.copy()
-    
-        if isinstance(generators.index, pd.MultiIndex):
-            if "name" in generators.index.names:
-                name_level = generators.index.names.index("name")
-            else:
-                name_level = -1
-    
-            generators.index = generators.index.get_level_values(name_level)
-            generators = generators.loc[~generators.index.duplicated(keep="first")]
-    
-        unitblock_indices = [
-            int(generators.index.get_loc(generator_name))
-            for generator_name in renewable_generators
-        ]
-    
-        self.tssb_renewable_generator_order = renewable_generators
-        self.tssb_renewable_unitblock_indices = unitblock_indices
-    
-        return unitblock_indices
+
     
     
 #############################################################################################

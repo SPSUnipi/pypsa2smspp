@@ -5,11 +5,12 @@
 ### New Features and Major Changes
 
 * Add TSSB marginal cost for IntermittentUnitBlocks [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
+* Automatically handling new uncertain parameters for TSSB [PR #44](https://github.com/SPSUnipi/pypsa2smspp/pull/44)
 
 ### Minor Changes and Bug Fixes
 
 * Add test for TSSB [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
-* Fix of efficiency in time-dependent links [PR #42](https://github.com/SPSUnipi/pypsa2smspp/pull/42)
+* Fix of efficiency in time-dependent links [PR #43](https://github.com/SPSUnipi/pypsa2smspp/pull/43)
 
 ## v0.3.0
 
