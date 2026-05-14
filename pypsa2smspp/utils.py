@@ -2014,6 +2014,9 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
     p_nom = n.links["p_nom"].astype(float)
     p_nom_extendable = n.links["p_nom_extendable"].fillna(False).astype(bool)
+    
+    if _has_dynamic_link_attr(n, "efficiency"):
+        variables['Efficiency']['size'] = ("NumberBranches", "NumberInstants")
 
     for attr, smspp_name in (
         ("p_max_pu", "MaxPowerFlow"),
@@ -2048,6 +2051,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
         variables[smspp_name]["value"] = old
         variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")
+        
 
 
 def _is_zero_efficiency(eff) -> bool:

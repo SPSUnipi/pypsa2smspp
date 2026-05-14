@@ -805,8 +805,6 @@ class Transformation:
             networkblock=self.networkblock,
         )
 
-        if self.dimensions["UCBlock"]["NumberInstants"]:
-            self.networkblock["Lines"]["variables"]["Efficiency"]["size"] = ("NumberBranches", "NumberInstants")
 
 
             
