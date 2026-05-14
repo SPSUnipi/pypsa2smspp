@@ -172,7 +172,12 @@ def _normalize_stochastic_parameters(
 
     parameters = [str(p).strip().lower() for p in parameters if str(p).strip()]
 
-    valid_parameters = {"demand", "price", "renewables"}
+    valid_parameters = {
+        "demand",
+        "thermal_marginal_cost",
+        "renewable_maxpower",
+        "renewable_marginal_cost",
+    }
     invalid = sorted(set(parameters) - valid_parameters)
     if invalid:
         raise ValueError(
@@ -208,11 +213,59 @@ def describe_problem_structure(
         "scenario_names": scenario_names,
         "has_investment_block": not bool(capacity_expansion_ucblock),
         "stochastic_demand": "demand" in stochastic_parameter_set,
-        "stochastic_marginal": "marginal" in stochastic_parameter_set,
-        "stochastic_renewables": "renewables" in stochastic_parameter_set,
+        "stochastic_thermal_marginal_cost": (
+            "thermal_marginal_cost" in stochastic_parameter_set
+        ),
+        "stochastic_renewable_maxpower": (
+            "renewable_maxpower" in stochastic_parameter_set
+        ),
+        "stochastic_renewable_marginal_cost": (
+            "renewable_marginal_cost" in stochastic_parameter_set
+        ),
     }
 
+def get_physical_renewable_generators(n, renewable_carriers) -> List[Any]:
+    """
+    Return physical renewable generator names from a possibly scenario-expanded
+    stochastic PyPSA network.
 
+    The returned order follows the physical generator order, i.e. the order that
+    maps generator position i to UnitBlock_i in the SMS++ structure.
+    """
+    if renewable_carriers is None:
+        raise ValueError("renewable_carriers must be provided.")
+
+    renewable_carriers = set(renewable_carriers)
+
+    physical_generator_names = _unique_component_names(n.generators.index)
+
+    generators_static = n.generators.copy()
+
+    if isinstance(generators_static.index, pd.MultiIndex):
+        if "name" in generators_static.index.names:
+            name_level = generators_static.index.names.index("name")
+        else:
+            name_level = -1
+
+        generators_static = generators_static.copy()
+        generators_static.index = generators_static.index.get_level_values(name_level)
+        generators_static = generators_static.loc[
+            ~generators_static.index.duplicated(keep="first")
+        ]
+
+    generators_static = generators_static.reindex(physical_generator_names)
+
+    renewable_generators = generators_static.index[
+        generators_static["carrier"].isin(renewable_carriers)
+    ].tolist()
+
+    if not renewable_generators:
+        raise ValueError(
+            "No PyPSA generators with carriers in "
+            f"renewable_carriers={sorted(renewable_carriers)} were found."
+        )
+
+    return renewable_generators
 
 def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
     """Flatten bus demand with time-major / node-minor ordering.
@@ -378,69 +431,46 @@ def build_dss_demand(
         "number_scenarios": int(scenario_matrix.shape[0]),
     }
 
-
-def build_dss_marginal(n) -> Dict[str, Any] | None:
-    """Placeholder builder for stochastic marginal costs."""
-    warnings.warn(
-        "build_dss_marginal was called, but stochastic marginal costs are not implemented yet.",
-        UserWarning,
-    )
-    return None
-
-
-def build_dss_renewables(
+def build_dss_generator_timeseries_for_renewables(
     n,
-    intermittent_carriers,
+    renewable_carriers,
+    *,
+    field: str,
+    parameter: str,
+    variable: str,
+    source: str,
+    weights: bool = False,
 ) -> Dict[str, Any]:
     """
-    Build DSS data for stochastic renewable maximum power profiles.
+    Build DSS data for a dense Generator time series restricted to renewable
+    generators.
 
-    Source:
-        Generator.p_max_pu
+    Examples
+    --------
+    field="p_max_pu"
+        -> IntermittentUnitBlock MaxPower
 
-    Flattening:
-        generator-major, time-minor
+    field="marginal_cost"
+        -> IntermittentUnitBlock ActivePowerCost
 
-    For each scenario:
+    Flattening
+    ----------
+    generator-major, time-minor:
+
         gen_0[t0], ..., gen_0[tT],
         gen_1[t0], ..., gen_1[tT],
         ...
     """
     scenario_names = get_scenario_names(n)
     if not scenario_names:
-        raise ValueError("DSS renewable extraction requested on a deterministic network.")
-
-    if intermittent_carriers is None:
-        raise ValueError("intermittent_carriers must be provided for stochastic renewables.")
-
-    intermittent_carriers = set(intermittent_carriers)
-
-    physical_generator_names = _unique_component_names(n.generators.index)
-
-    generators_static = n.generators.copy()
-    if isinstance(generators_static.index, pd.MultiIndex):
-        if "name" in generators_static.index.names:
-            name_level = generators_static.index.names.index("name")
-        else:
-            name_level = -1
-
-        generators_static = generators_static.copy()
-        generators_static.index = generators_static.index.get_level_values(name_level)
-        generators_static = generators_static.loc[
-            ~generators_static.index.duplicated(keep="first")
-        ]
-
-    generators_static = generators_static.reindex(physical_generator_names)
-
-    renewable_generators = generators_static.index[
-        generators_static["carrier"].isin(intermittent_carriers)
-    ].tolist()
-
-    if not renewable_generators:
         raise ValueError(
-            "stochastic_renewables=True, but no generators with carriers in "
-            f"intermittent_carriers={sorted(intermittent_carriers)} were found."
+            f"DSS extraction for {source} requested on a deterministic network."
         )
+
+    renewable_generators = get_physical_renewable_generators(
+        n=n,
+        renewable_carriers=renewable_carriers,
+    )
 
     scenarios = []
     generator_order = None
@@ -449,41 +479,42 @@ def build_dss_renewables(
     for scenario_name in scenario_names:
         n_s = n.get_scenario(scenario_name)
 
-        p_max_pu = get_param_as_dense(
+        values = get_param_as_dense(
             n_s,
             component="Generator",
-            field="p_max_pu",
-            weights=False,
+            field=field,
+            weights=weights,
         )
 
-        p_max_pu = _drop_scenario_level_from_columns(p_max_pu)
-        p_max_pu = p_max_pu.reindex(columns=renewable_generators)
+        values = _drop_scenario_level_from_columns(values)
+        values = values.reindex(columns=renewable_generators)
 
         if generator_order is None:
-            generator_order = list(p_max_pu.columns)
-            snapshot_order = list(p_max_pu.index)
+            generator_order = list(values.columns)
+            snapshot_order = list(values.index)
         else:
-            p_max_pu = p_max_pu.reindex(
+            values = values.reindex(
                 index=snapshot_order,
                 columns=generator_order,
             )
 
-        if p_max_pu.isna().any().any():
-            missing = p_max_pu.columns[p_max_pu.isna().any(axis=0)].tolist()
+        if values.isna().any().any():
+            missing = values.columns[values.isna().any(axis=0)].tolist()
             raise ValueError(
-                "Missing p_max_pu values after reindexing renewable generators. "
+                f"Missing {source} values after reindexing renewable generators. "
                 f"Missing/invalid generators: {missing}"
             )
 
-        scenarios.append(flatten_generator_timeseries_generator_major(p_max_pu))
+        scenarios.append(flatten_generator_timeseries_generator_major(values))
 
     scenario_matrix = np.vstack(scenarios).astype(float)
     pool_weights = get_scenario_probabilities(n).astype(float)
 
     return {
-        "parameter": "renewables",
-        "variable": "MaxPower",
-        "source": "Generator.p_max_pu",
+        "parameter": parameter,
+        "variable": variable,
+        "source": source,
+        "field": field,
         "scenarios": scenario_matrix,
         "pool_weights": pool_weights,
         "generator_order": generator_order,
@@ -492,6 +523,52 @@ def build_dss_renewables(
         "scenario_size": int(scenario_matrix.shape[1]),
         "number_scenarios": int(scenario_matrix.shape[0]),
     }
+
+def build_dss_renewable_maxpower(
+    n,
+    renewable_carriers,
+) -> Dict[str, Any]:
+    """
+    Build DSS data for stochastic renewable maximum power profiles.
+
+    Source:
+        Generator.p_max_pu
+
+    Target:
+        IntermittentUnitBlock::set_maximum_power
+    """
+    return build_dss_generator_timeseries_for_renewables(
+        n=n,
+        renewable_carriers=renewable_carriers,
+        field="p_max_pu",
+        parameter="renewable_maxpower",
+        variable="MaxPower",
+        source="Generator.p_max_pu",
+        weights=False,
+    )
+
+def build_dss_renewable_marginal_cost(
+    n,
+    renewable_carriers,
+) -> Dict[str, Any]:
+    """
+    Build DSS data for stochastic renewable marginal costs.
+
+    Source:
+        Generator.marginal_cost
+
+    Target:
+        IntermittentUnitBlock::set_active_power_cost
+    """
+    return build_dss_generator_timeseries_for_renewables(
+        n=n,
+        renewable_carriers=renewable_carriers,
+        field="marginal_cost",
+        parameter="renewable_marginal_cost",
+        variable="ActivePowerCost",
+        source="Generator.marginal_cost",
+        weights=False,
+    )
 
 
 def merge_tssb_dss_parts(dss_parts):
@@ -680,27 +757,27 @@ def build_stochastic_mapping_demand(
         ],
     }
 
-def build_stochastic_mapping_renewable_maxpower_single_unit(
+def build_stochastic_mapping_single_unit(
+    *,
+    target: str,
+    function_name: str,
     set_from_start,
     set_from_end,
     time_horizon,
     unitblock_index,
 ):
     """
-    Build one stochastic data mapping for one renewable UnitBlock MaxPower.
+    Build one stochastic data mapping for one UnitBlock time series.
 
     The mapping applies one contiguous slice of the DSS scenario vector to one
-    IntermittentUnitBlock::set_maximum_power call.
+    setter call on one nested UnitBlock_i.
 
-    DSS layout for renewables is assumed to be generator-major, time-minor:
-
-        gen_0[t0:tT], gen_1[t0:tT], ...
-
-    Therefore, each renewable UnitBlock receives exactly TimeHorizon values.
+    Abstract path:
+        B("unitblock_index")
     """
     return {
-        "target": "renewables",
-        "function_name": "IntermittentUnitBlock::set_maximum_power",
+        "target": target,
+        "function_name": function_name,
         "caller": "B",
         "data_type": "D",
         "set_size": [0, 0],
@@ -719,6 +796,43 @@ def build_stochastic_mapping_renewable_maxpower_single_unit(
             }
         ],
     }
+
+def build_stochastic_mapping_renewable_maxpower_single_unit(
+    set_from_start,
+    set_from_end,
+    time_horizon,
+    unitblock_index,
+):
+    """
+    Build one stochastic data mapping for one renewable UnitBlock MaxPower.
+    """
+    return build_stochastic_mapping_single_unit(
+        target="renewables",
+        function_name="IntermittentUnitBlock::set_maximum_power",
+        set_from_start=set_from_start,
+        set_from_end=set_from_end,
+        time_horizon=time_horizon,
+        unitblock_index=unitblock_index,
+    )
+
+
+def build_stochastic_mapping_renewable_marginal_cost_single_unit(
+    set_from_start,
+    set_from_end,
+    time_horizon,
+    unitblock_index,
+):
+    """
+    Build one stochastic data mapping for one renewable UnitBlock ActivePowerCost.
+    """
+    return build_stochastic_mapping_single_unit(
+        target="renewable_marginal_cost",
+        function_name="IntermittentUnitBlock::set_active_power_cost",
+        set_from_start=set_from_start,
+        set_from_end=set_from_end,
+        time_horizon=time_horizon,
+        unitblock_index=unitblock_index,
+    )
 
 
 def build_tssb_stochastic_block_data(data_mappings):

@@ -48,9 +48,12 @@ nav:
   - Installation: getting-started/installation.md
   - Quick Start: getting-started/quick-start.md
 - Examples:
-  - Simple capacity expansion (2 bus): examples/capacity_expansion_2bus.ipynb
+  - Simple capacity expansion (2 bus) with UCBlock: examples/capacity_expansion_2bus.ipynb
   - Conversion step by step: examples/conversion_step_by_step.ipynb
+  - Capacity expansion with Benders (InvestmentBlock): examples/capacity_expansion_investmentblock.ipynb
+  - Stochastic optimization with TwoStageStochasticBlock: examples/stochastic_demand_intermittent.ipynb
 - User Guide:
+  - Architecture: user-guide/architecture.md
   - API Reference: api_reference.md
 - Release Notes: release_notes.md
 - Contributing: contributing.md

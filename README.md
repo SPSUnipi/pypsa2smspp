@@ -30,7 +30,7 @@ The package aims to support:
     Alternatively, using conda:
 
     ```bash
-        conda create -n pypsa2smspp python=3.10
+        conda create -n pypsa2smspp python=3.12 pip
         conda activate pypsa2smspp
     ```
 
