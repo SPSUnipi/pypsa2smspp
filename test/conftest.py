@@ -44,14 +44,36 @@ def safe_remove(p: Path):
     except Exception:
         pass
 
-def create_test_config(xlsx_path: Path) -> TestConfig:
-    """Create a TestConfig object pointing to the given Excel file."""
-    parser = TestConfig(fp="application_test.ini")
-    parser.input_data_path = str(xlsx_path.parent)       # folder of the excel
-    parser.input_name_components = xlsx_path.name        # excel filename
+def create_test_config(xlsx_path: Path, fp: str | Path = "application_test.ini") -> TestConfig:
+    """Create a TestConfig object pointing to the given input file."""
+    parser = TestConfig(fp=str(fp))
+    parser.input_data_path = str(xlsx_path.parent)
+    parser.input_name_components = xlsx_path.name
+
     if "sector" in xlsx_path.name:
         parser.load_sign = -1
+
     return parser
+
+
+def get_tssb_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
+    """
+    Get all Excel test cases whose full path contains 'tssb'.
+    """
+    files = sorted(
+        p for p in inputs_dir.rglob("*.xlsx")
+        if "tssb" in str(p).lower()
+    )
+
+    names = [
+        f"{i}: {p.relative_to(HERE)}"
+        for i, p in enumerate(files)
+    ]
+
+    return {"xlsx_paths": files, "ids": names}
+
+
+tssb_test_cases = get_tssb_test_cases()
 
 
 def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
