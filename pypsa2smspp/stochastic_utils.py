@@ -8,18 +8,21 @@ This module keeps stochastic-network inspection and lightweight data extraction
 outside of the main Transformation class, so the pipeline can remain readable.
 """
 
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-
-from typing import Any, Dict, Mapping, Optional, Sequence, List, Tuple
-import warnings
 import numpy as np
 import pandas as pd
 
 from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
+from pypsa2smspp.utils import (
+    get_bus_demand_matrix,
+    get_param_as_dense,
+)
 
-from pypsa2smspp.utils import (get_bus_demand_matrix,
-                    get_param_as_dense,
-                    )
+
+# =============================================================================
+# Stochastic network inspection
+# =============================================================================
 
 def is_stochastic_network(n) -> bool:
     """Return True if the network exposes stochastic scenarios."""
@@ -32,99 +35,31 @@ def get_scenario_names(n) -> List[Any]:
         return []
 
     scenarios = getattr(n, "scenarios", [])
+
     try:
         return list(scenarios)
     except TypeError:
         return []
 
 
-def _extract_probability_series_from_obj(obj, scenario_names: Sequence[Any]) -> pd.Series | None:
-    """Try to extract scenario probabilities from a generic object."""
-    if obj is None:
-        return None
-
-    # Series indexed by scenarios
-    if isinstance(obj, pd.Series):
-        s = obj.copy()
-        s = s.reindex(scenario_names)
-        if s.notna().all():
-            return s.astype(float)
-
-    # DataFrame indexed by scenarios
-    if isinstance(obj, pd.DataFrame):
-        candidate_columns = [
-            "probability",
-            "Probability",
-            "probabilities",
-            "Probabilities",
-            "weight",
-            "Weight",
-            "weights",
-            "Weights",
-            "objective",
-            "Objective",
-        ]
-        for col in candidate_columns:
-            if col in obj.columns:
-                s = obj[col].reindex(scenario_names)
-                if s.notna().all():
-                    return s.astype(float)
-
-        # Single-column DataFrame fallback
-        if obj.shape[1] == 1:
-            s = obj.iloc[:, 0].reindex(scenario_names)
-            if s.notna().all():
-                return s.astype(float)
-
-    # Dict-like
-    if isinstance(obj, dict):
-        try:
-            s = pd.Series({k: obj[k] for k in scenario_names}, dtype=float)
-            if s.notna().all():
-                return s
-        except Exception:
-            pass
-
-    return None
-
-
-def get_scenario_probabilities(n) -> np.ndarray:
-    """Return a probability vector aligned with get_scenario_names(n).
-
-    If no explicit probabilities are found, use uniform weights.
-    The vector is always normalized to sum to 1.
+def get_base_scenario_network(n):
     """
-    scenario_names = get_scenario_names(n)
-    if not scenario_names:
-        return np.array([], dtype=float)
+    Return a deterministic network for direct conversion.
 
-    candidate_attrs = [
-        "scenario_weightings",
-        "scenario_probabilities",
-        "scenario_probability",
-        "probabilities",
-        "weights",
-    ]
+    If the input network is stochastic, return the first scenario.
+    Otherwise, return the original network unchanged.
+    """
+    has_scenarios = getattr(n, "has_scenarios", False)
 
-    prob_series = None
-    for attr in candidate_attrs:
-        obj = getattr(n, attr, None)
-        prob_series = _extract_probability_series_from_obj(obj, scenario_names)
-        if prob_series is not None:
-            break
+    if has_scenarios:
+        scenarios = list(n.scenarios)
+        if not scenarios:
+            raise ValueError(
+                "The network is marked as stochastic but has no scenarios."
+            )
+        return n.get_scenario(scenarios[0])
 
-    if prob_series is None:
-        prob = np.full(len(scenario_names), 1.0 / len(scenario_names), dtype=float)
-        return prob
-
-    prob = prob_series.to_numpy(dtype=float)
-    total = float(np.sum(prob))
-    if total <= 0.0:
-        prob = np.full(len(scenario_names), 1.0 / len(scenario_names), dtype=float)
-    else:
-        prob = prob / total
-
-    return prob
+    return n
 
 
 def has_extendable_assets(n) -> bool:
@@ -139,13 +74,128 @@ def has_extendable_assets(n) -> bool:
 
     for attr, col in checks:
         df = getattr(n, attr, None)
+
         if df is None or getattr(df, "empty", True):
             continue
+
         if col in df.columns and bool(df[col].fillna(False).astype(bool).any()):
             return True
 
     return False
 
+
+# =============================================================================
+# Scenario probabilities
+# =============================================================================
+
+def _extract_probability_series_from_obj(
+    obj,
+    scenario_names: Sequence[Any],
+) -> pd.Series | None:
+    """Try to extract scenario probabilities from a generic object."""
+    if obj is None:
+        return None
+
+    # Series indexed by scenarios.
+    if isinstance(obj, pd.Series):
+        s = obj.copy()
+        s = s.reindex(scenario_names)
+
+        if s.notna().all():
+            return s.astype(float)
+
+    # DataFrame indexed by scenarios.
+    if isinstance(obj, pd.DataFrame):
+        candidate_columns = [
+            "probability",
+            "Probability",
+            "probabilities",
+            "Probabilities",
+            "weight",
+            "Weight",
+            "weights",
+            "Weights",
+            "objective",
+            "Objective",
+        ]
+
+        for col in candidate_columns:
+            if col in obj.columns:
+                s = obj[col].reindex(scenario_names)
+
+                if s.notna().all():
+                    return s.astype(float)
+
+        # Single-column DataFrame fallback.
+        if obj.shape[1] == 1:
+            s = obj.iloc[:, 0].reindex(scenario_names)
+
+            if s.notna().all():
+                return s.astype(float)
+
+    # Dict-like fallback.
+    if isinstance(obj, dict):
+        try:
+            s = pd.Series({k: obj[k] for k in scenario_names}, dtype=float)
+
+            if s.notna().all():
+                return s
+        except Exception:
+            pass
+
+    return None
+
+
+def get_scenario_probabilities(n) -> np.ndarray:
+    """
+    Return a probability vector aligned with get_scenario_names(n).
+
+    If no explicit probabilities are found, use uniform weights.
+    The vector is always normalized to sum to 1.
+    """
+    scenario_names = get_scenario_names(n)
+
+    if not scenario_names:
+        return np.array([], dtype=float)
+
+    candidate_attrs = [
+        "scenario_weightings",
+        "scenario_probabilities",
+        "scenario_probability",
+        "probabilities",
+        "weights",
+    ]
+
+    prob_series = None
+
+    for attr in candidate_attrs:
+        obj = getattr(n, attr, None)
+        prob_series = _extract_probability_series_from_obj(obj, scenario_names)
+
+        if prob_series is not None:
+            break
+
+    if prob_series is None:
+        return np.full(
+            len(scenario_names),
+            1.0 / len(scenario_names),
+            dtype=float,
+        )
+
+    prob = prob_series.to_numpy(dtype=float)
+    total = float(np.sum(prob))
+
+    if total <= 0.0:
+        prob = np.full(len(scenario_names), 1.0 / len(scenario_names), dtype=float)
+    else:
+        prob = prob / total
+
+    return prob
+
+
+# =============================================================================
+# Stochastic parameter normalization and problem structure
+# =============================================================================
 
 def _normalize_stochastic_parameters(
     stochastic_parameters: Optional[Mapping[str, Any]] = None,
@@ -211,11 +261,29 @@ def describe_problem_structure(
         "number_scenarios": len(scenario_names),
         "scenario_names": scenario_names,
         "has_investment_block": not bool(capacity_expansion_ucblock),
-
-        # New generic representation.
         "stochastic_parameters": stochastic_parameters_list,
         "stochastic_parameter_set": stochastic_parameter_set,
     }
+
+
+# =============================================================================
+# Physical asset helpers
+# =============================================================================
+
+def _unique_component_names(component_index) -> pd.Index:
+    """
+    Return unique physical component names from a possibly scenario-expanded index.
+    """
+    if isinstance(component_index, pd.MultiIndex):
+        if "name" in component_index.names:
+            name_level = component_index.names.index("name")
+        else:
+            name_level = -1
+
+        names = component_index.get_level_values(name_level)
+        return pd.Index(names).drop_duplicates()
+
+    return pd.Index(component_index).drop_duplicates()
 
 
 def _as_physical_component_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -235,6 +303,28 @@ def _as_physical_component_frame(df: pd.DataFrame) -> pd.DataFrame:
 
         out.index = out.index.get_level_values(name_level)
         out = out.loc[~out.index.duplicated(keep="first")]
+
+    return out
+
+
+def _drop_scenario_level_from_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collapse scenario-expanded columns to physical component names.
+
+    This is useful after get_param_as_dense() on scenario networks where columns
+    may still be a MultiIndex such as (scenario, name).
+    """
+    if not isinstance(df.columns, pd.MultiIndex):
+        return df
+
+    if "name" in df.columns.names:
+        name_level = df.columns.names.index("name")
+    else:
+        name_level = -1
+
+    out = df.copy()
+    out.columns = out.columns.get_level_values(name_level)
+    out = out.loc[:, ~out.columns.duplicated(keep="first")]
 
     return out
 
@@ -307,8 +397,14 @@ def get_physical_storage_units(n) -> List[Any]:
 
     return _unique_component_names(n.storage_units.index).tolist()
 
+
+# =============================================================================
+# Flattening helpers
+# =============================================================================
+
 def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
-    """Flatten bus demand with time-major / node-minor ordering.
+    """
+    Flatten bus demand with time-major / node-minor ordering.
 
     Ordering:
         (t0, n0), (t0, n1), ..., (t1, n0), (t1, n1), ...
@@ -324,6 +420,7 @@ def flatten_bus_demand_time_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
         1D flattened vector.
     """
     return demand_by_bus.T.to_numpy(dtype=float).reshape(-1)
+
 
 def flatten_bus_demand_node_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
     """
@@ -345,60 +442,7 @@ def flatten_bus_demand_node_major(demand_by_bus: pd.DataFrame) -> np.ndarray:
     return demand_by_bus.to_numpy(dtype=float).reshape(-1)
 
 
-def get_base_scenario_network(n):
-    """Return a deterministic network for direct conversion.
-
-    If the input network is stochastic, return the first scenario.
-    Otherwise, return the original network unchanged.
-    """
-    has_scenarios = getattr(n, "has_scenarios", False)
-
-    if has_scenarios:
-        scenarios = list(n.scenarios)
-        if not scenarios:
-            raise ValueError("The network is marked as stochastic but has no scenarios.")
-        return n.get_scenario(scenarios[0])
-
-    return n
-
-def _unique_component_names(component_index):
-    """
-    Return unique physical component names from a possibly scenario-expanded index.
-    """
-    if isinstance(component_index, pd.MultiIndex):
-        if "name" in component_index.names:
-            name_level = component_index.names.index("name")
-        else:
-            name_level = -1
-
-        names = component_index.get_level_values(name_level)
-        return pd.Index(names).drop_duplicates()
-
-    return pd.Index(component_index).drop_duplicates()
-
-
-def _drop_scenario_level_from_columns(df):
-    """
-    Collapse scenario-expanded columns to physical component names.
-
-    This is useful after get_param_as_dense() on scenario networks where columns
-    may still be a MultiIndex such as (scenario, name).
-    """
-    if not isinstance(df.columns, pd.MultiIndex):
-        return df
-
-    if "name" in df.columns.names:
-        name_level = df.columns.names.index("name")
-    else:
-        name_level = -1
-
-    out = df.copy()
-    out.columns = out.columns.get_level_values(name_level)
-    out = out.loc[:, ~out.columns.duplicated(keep="first")]
-    return out
-
-
-def flatten_generator_timeseries_generator_major(p_max_pu):
+def flatten_generator_timeseries_generator_major(values: pd.DataFrame) -> np.ndarray:
     """
     Flatten a snapshot x generator DataFrame as generator-major, time-minor.
 
@@ -409,7 +453,8 @@ def flatten_generator_timeseries_generator_major(p_max_pu):
     Output:
         gen_0 all snapshots, then gen_1 all snapshots, etc.
     """
-    return p_max_pu.T.to_numpy(dtype=float).reshape(-1)
+    return values.T.to_numpy(dtype=float).reshape(-1)
+
 
 def flatten_asset_timeseries_asset_major(values: pd.DataFrame) -> np.ndarray:
     """
@@ -424,13 +469,104 @@ def flatten_asset_timeseries_asset_major(values: pd.DataFrame) -> np.ndarray:
     """
     return values.T.to_numpy(dtype=float).reshape(-1)
 
-# Build Discrete Scenario Set
 
-def build_dss_demand(
+# =============================================================================
+# Generic stochastic asset selection
+# =============================================================================
+
+def get_effective_intermittent_carriers(
+    intermittent_carriers,
+    default_carriers,
+) -> List[Any]:
+    """
+    Return the carrier set used to identify intermittent generators.
+
+    If intermittent_carriers is None, fall back to default_carriers.
+    """
+    if intermittent_carriers is None:
+        carriers = default_carriers
+    elif isinstance(intermittent_carriers, str):
+        carriers = [intermittent_carriers]
+    else:
+        carriers = list(intermittent_carriers)
+
+    return carriers
+
+
+def get_stochastic_parameter_asset_names(
     n,
-) -> Dict[str, Any]:
-    
-    """Build DSS data for stochastic demand.
+    *,
+    parameter: str,
+    spec: Mapping[str, Any],
+    intermittent_carriers,
+    default_intermittent_carriers,
+    enable_thermal_units: bool,
+) -> List[Any]:
+    """
+    Return the physical PyPSA asset names affected by a stochastic parameter.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        Possibly stochastic PyPSA network.
+    parameter : str
+        Stochastic parameter name, e.g. "renewable_maxpower".
+    spec : mapping
+        Registry entry for the stochastic parameter.
+    intermittent_carriers : sequence | str | None
+        User-provided intermittent carriers.
+    default_intermittent_carriers : sequence
+        Fallback carriers used when intermittent_carriers is None.
+    enable_thermal_units : bool
+        Whether thermal generators are represented as ThermalUnitBlock.
+    """
+    asset_filter = spec.get("asset_filter", None)
+
+    if asset_filter == "intermittent_generators":
+        intermittent = get_effective_intermittent_carriers(
+            intermittent_carriers=intermittent_carriers,
+            default_carriers=default_intermittent_carriers,
+        )
+
+        return get_physical_generators_by_carriers(
+            n=n,
+            carriers=intermittent,
+        )
+
+    if asset_filter == "thermal_generators":
+        if not enable_thermal_units:
+            raise ValueError(
+                f"Stochastic parameter {parameter!r} requires "
+                "enable_thermal_units=True."
+            )
+
+        intermittent = get_effective_intermittent_carriers(
+            intermittent_carriers=intermittent_carriers,
+            default_carriers=default_intermittent_carriers,
+        )
+
+        return get_physical_generators_excluding_carriers(
+            n=n,
+            carriers=intermittent,
+        )
+
+    if asset_filter == "storage_units":
+        return get_physical_storage_units(n)
+
+    raise ValueError(
+        f"Unsupported asset_filter={asset_filter!r} for stochastic "
+        f"parameter {parameter!r}."
+    )
+
+
+# =============================================================================
+# Discrete Scenario Set
+# =============================================================================
+
+def build_dss_demand(n) -> Dict[str, Any]:
+    """
+    Build DSS data for stochastic demand.
+
     Returns
     -------
     scenarios : np.ndarray
@@ -444,8 +580,8 @@ def build_dss_demand(
     flattening : str
         Human-readable description of the flattening convention.
     """
-    
     scenario_names = get_scenario_names(n)
+
     if not scenario_names:
         raise ValueError("DSS demand extraction requested on a deterministic network.")
 
@@ -471,7 +607,6 @@ def build_dss_demand(
 
     scenario_matrix = np.vstack(scenarios).astype(float)
     pool_weights = get_scenario_probabilities(n).astype(float)
-    flattening = "node_major_time_minor"
 
     return {
         "parameter": "demand",
@@ -479,10 +614,11 @@ def build_dss_demand(
         "pool_weights": pool_weights,
         "node_order": bus_order,
         "snapshot_order": snapshot_order,
-        "flattening": flattening,
+        "flattening": "node_major_time_minor",
         "scenario_size": int(scenario_matrix.shape[1]),
         "number_scenarios": int(scenario_matrix.shape[0]),
     }
+
 
 def build_dss_unitblock_timeseries_parameter(
     n,
@@ -517,6 +653,7 @@ def build_dss_unitblock_timeseries_parameter(
         )
 
     asset_names = list(asset_names)
+
     if not asset_names:
         raise ValueError(
             f"No assets were provided for stochastic parameter {parameter!r}."
@@ -578,6 +715,7 @@ def build_dss_unitblock_timeseries_parameter(
         "number_scenarios": int(scenario_matrix.shape[0]),
     }
 
+
 def merge_tssb_dss_parts(dss_parts):
     """
     Merge DSS parts by concatenating their scenario vectors horizontally.
@@ -601,11 +739,11 @@ def merge_tssb_dss_parts(dss_parts):
 
     checked_parts = []
     scenario_arrays = []
-
     offset = 0
 
     for part in dss_parts:
         part_number_scenarios = int(part["number_scenarios"])
+
         if part_number_scenarios != number_scenarios:
             raise ValueError(
                 "All DSS parts must have the same NumberScenarios. "
@@ -614,6 +752,7 @@ def merge_tssb_dss_parts(dss_parts):
             )
 
         part_pool_weights = np.asarray(part["pool_weights"], dtype=float)
+
         if not np.allclose(part_pool_weights, pool_weights):
             raise ValueError(
                 "All DSS parts must have the same PoolWeights. "
@@ -644,22 +783,23 @@ def merge_tssb_dss_parts(dss_parts):
     }
 
 
-# Build Abstract Path
+# =============================================================================
+# Static Abstract Path
+# =============================================================================
 
 def calculate_design_variables(
     investment_meta,
     unitblock_design_data,
     network_block_index,
 ):
-    """
-    Build design-variable descriptors for the TSSB StaticAbstractPath.
-    """
+    """Build design-variable descriptors for the TSSB StaticAbstractPath."""
     design_variables = []
 
     for item in unitblock_design_data:
         design_variables.append(item)
 
     design_lines = list(investment_meta.get("design_lines", []))
+
     if design_lines:
         for line_idx in design_lines:
             design_variables.append(
@@ -676,9 +816,7 @@ def calculate_design_variables(
 
 
 def build_tssb_static_abstract_path(design_variables):
-    """
-    Build a preliminary StaticAbstractPath representation from design variables.
-    """
+    """Build a preliminary StaticAbstractPath representation from design variables."""
     path_dim = len(design_variables)
     total_length = 2 * path_dim
 
@@ -689,16 +827,17 @@ def build_tssb_static_abstract_path(design_variables):
     path_start = []
 
     current = 0
+
     for dv in design_variables:
         path_start.append(current)
 
-        # Block node
+        # Block node.
         path_group_indices.append(str(dv["block_index"]))
         path_node_types.append("B")
         path_element_indices.append(0)
         path_range_indices.append(0)
 
-        # Variable node
+        # Variable node.
         path_group_indices.append(dv["var_name"])
         path_node_types.append("V")
         path_element_indices.append(int(dv["element_index"]))
@@ -713,6 +852,7 @@ def build_tssb_static_abstract_path(design_variables):
         np.array(path_element_indices, dtype=np.uint32),
         mask=(path_node_types == "B"),
     )
+
     path_range_indices = np.ma.masked_array(
         np.array(path_range_indices, dtype=np.uint32),
         mask=(path_node_types == "B"),
@@ -729,7 +869,9 @@ def build_tssb_static_abstract_path(design_variables):
     }
 
 
-# Build stochastic block
+# =============================================================================
+# StochasticBlock mappings
+# =============================================================================
 
 def build_stochastic_mapping_demand(
     set_from_start,
@@ -763,6 +905,7 @@ def build_stochastic_mapping_demand(
             }
         ],
     }
+
 
 def build_stochastic_mapping_single_unit(
     *,
@@ -806,9 +949,7 @@ def build_stochastic_mapping_single_unit(
 
 
 def build_tssb_stochastic_block_data(data_mappings):
-    """
-    Build the StochasticBlock payload from a list of data mappings.
-    """
+    """Build the StochasticBlock payload from a list of data mappings."""
     if not data_mappings:
         raise ValueError("At least one stochastic data mapping is required.")
 
@@ -827,7 +968,7 @@ def build_tssb_stochastic_block_data(data_mappings):
 
     abstract_path = build_tssb_stochastic_block_abstract_path(data_mappings)
 
-    stochastic_block = {
+    return {
         "NumberDataMappings": len(data_mappings),
         "FunctionName": np.array(function_names, dtype="object"),
         "Caller": np.array(callers, dtype="object"),
@@ -837,16 +978,15 @@ def build_tssb_stochastic_block_data(data_mappings):
         "AbstractPath": abstract_path,
     }
 
-    return stochastic_block
-
 
 def build_tssb_stochastic_block_abstract_path(data_mappings):
     """
     Build the AbstractPath for the StochasticBlock mappings.
 
     The AbstractPath is built by concatenating all paths declared by each
-    mapping. Demand normally contributes one empty path. Renewable MaxPower
-    contributes one B("UnitBlock_i") path per intermittent UnitBlock.
+    mapping. Demand normally contributes one empty path. UnitBlock-level
+    stochastic parameters contribute one B("UnitBlock_i") path per affected
+    UnitBlock.
     """
     path_start = []
     node_types = []
@@ -947,3 +1087,84 @@ def build_tssb_stochastic_block_abstract_path(data_mappings):
             ),
         ),
     }
+
+
+# =============================================================================
+# UnitBlock lookup helpers
+# =============================================================================
+
+def collect_unitblock_indices_by_names_and_type(
+    unitblocks: Mapping[str, Mapping[str, Any]],
+    *,
+    names: Sequence[Any],
+    block_type: str,
+) -> List[int]:
+    """
+    Collect UnitBlock indices by matching PyPSA asset names and SMS++ block type.
+
+    The matching relies on unitblocks entries such as:
+        {
+            "name": "<pypsa asset name>",
+            "enumerate": "UnitBlock_i",
+            "block": "<block_type>",
+        }
+
+    Parameters
+    ----------
+    unitblocks : mapping
+        Transformation unitblocks dictionary.
+    names : sequence
+        PyPSA physical asset names in DSS flattening order.
+    block_type : str
+        SMS++ block type, e.g. "IntermittentUnitBlock",
+        "ThermalUnitBlock", or "HydroUnitBlock".
+    """
+    matches = {}
+
+    for _, unitblock in unitblocks.items():
+        name = unitblock.get("name", None)
+        block = unitblock.get("block", None)
+        enumerate_name = unitblock.get("enumerate", None)
+
+        if name is None or block is None or enumerate_name is None:
+            continue
+
+        key = (name, block)
+        matches.setdefault(key, []).append(enumerate_name)
+
+    unitblock_indices = []
+
+    for name in names:
+        key = (name, block_type)
+        candidates = matches.get(key, [])
+
+        if not candidates:
+            available = sorted(
+                f"{asset_name!r}/{asset_block!r}"
+                for asset_name, asset_block in matches
+            )
+            raise ValueError(
+                f"Could not find a UnitBlock for asset {name!r} with "
+                f"block type {block_type!r}. Available name/block pairs: "
+                f"{available}"
+            )
+
+        if len(candidates) > 1:
+            raise ValueError(
+                f"Ambiguous UnitBlock match for asset {name!r} with "
+                f"block type {block_type!r}: {candidates}"
+            )
+
+        enumerate_name = str(candidates[0])
+
+        try:
+            unitblock_index = int(enumerate_name.split("_")[-1])
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid UnitBlock enumerate value {enumerate_name!r} "
+                f"for asset {name!r}."
+            ) from exc
+
+        unitblock_indices.append(unitblock_index)
+
+    return unitblock_indices
