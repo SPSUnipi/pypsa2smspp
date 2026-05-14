@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypsa2smspp"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="Alessandro Pampado", email="alessandro.pampado@ing.unipi.it"},
   { name="Davide Fioriti", email="davide.fioriti@unipi.it" },
@@ -15,6 +15,7 @@ readme = "README.md"
 classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
 ]
@@ -27,7 +28,7 @@ dependencies = [
     "pypsa>=1",
     "xarray<2026.4",
     "openpyxl",
-    "pysmspp>=0.0.4",
+    "pysmspp>=0.0.7",
 ]
 
 [project.urls]
@@ -37,7 +38,7 @@ Issues = "https://github.com/SPSUnipi/pypsa2smspp/issues"
 [project.optional-dependencies]
 dev = [
     "pytest", 
-    "highspy",
+    "highspy<=1.11",
     "gurobipy",
     "coverage",
     "pre-commit",
