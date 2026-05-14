@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Union, Literal, Callable
 import warnings
 
-from .constants import conversion_dict, nominal_attrs, renewable_carriers
-from .utils import (
+from pypsa2smspp.constants import conversion_dict, nominal_attrs, renewable_carriers
+from pypsa2smspp.utils import (
     is_extendable,
     filter_extendable_components,
     get_bus_idx,
@@ -49,12 +49,12 @@ from .utils import (
     apply_time_dependent_link_data_to_lines
 )
 
-from .pip_utils import (
+from pypsa2smspp.pip_utils import (
     StepTimer,
     step,
 )
 
-from .inverse import (
+from pypsa2smspp.inverse import (
     component_definition,
     block_to_dataarrays,
     normalize_key,
@@ -63,14 +63,14 @@ from .inverse import (
     block_to_dataarrays_stochastic,
     broadcast_static_variables_over_scenarios,
 )
-from .io_parser import (
+from pypsa2smspp.io_parser import (
     parse_txt_to_unitblocks,
     assign_design_variables_to_unitblocks,
     prepare_solution,
     split_merged_dcnetworkblocks
 )
 
-from .stochastic_utils import (
+from pypsa2smspp.stochastic_utils import (
     get_base_scenario_network,
     describe_problem_structure,
     build_dss_demand,
@@ -414,12 +414,12 @@ class Transformation:
             logger=logger,
         )
     
-        n = preprocess_dynamic_link_parameters_to_static_means(
-            n,
-            fields=("efficiency", "p_min_pu", "p_max_pu"),
-            logger=logger,
-            drop_dynamic=True
-        )
+        # n = preprocess_dynamic_link_parameters_to_static_means(
+        #     n,
+        #     fields=("efficiency", "p_min_pu", "p_max_pu"),
+        #     logger=logger,
+        #     drop_dynamic=True
+        # )
     
         stores_df, links_merged_df, self.dimensions["NetworkBlock"]["merged_links_ext"] = build_store_and_merged_links(
             n,
@@ -804,6 +804,7 @@ class Transformation:
             n=n,
             networkblock=self.networkblock,
         )
+
 
 
             
