@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-        - "3.13"
+        - "3.11"
     defaults:
       run:
         shell: bash -el {0}
@@ -78,7 +78,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-        - "3.12"
+        - "3.11"
         os:
         - ubuntu-latest
     env:
