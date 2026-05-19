@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+import inspect
 
 from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
 from pypsa2smspp.utils import (
@@ -558,6 +559,238 @@ def get_stochastic_parameter_asset_names(
         f"parameter {parameter!r}."
     )
 
+# =============================================================================
+# SMS++ parameter evaluation
+# =============================================================================
+
+def _get_unitblock_parameter_map(transformation_config, unitblock_type: str):
+    """
+    Return the TransformationConfig parameter dictionary for a UnitBlock type.
+    """
+    attr_name = f"{unitblock_type}_parameters"
+
+    if not hasattr(transformation_config, attr_name):
+        raise AttributeError(
+            f"TransformationConfig does not define {attr_name!r}."
+        )
+
+    return getattr(transformation_config, attr_name)
+
+
+def _get_parameter_transform(
+    transformation_config,
+    *,
+    unitblock_type: str,
+    smspp_parameter: str,
+):
+    """
+    Return the transformation rule for one SMS++ UnitBlock parameter.
+    """
+    parameter_map = _get_unitblock_parameter_map(
+        transformation_config=transformation_config,
+        unitblock_type=unitblock_type,
+    )
+
+    if smspp_parameter not in parameter_map:
+        raise KeyError(
+            f"Parameter {smspp_parameter!r} was not found in "
+            f"{unitblock_type}_parameters."
+        )
+
+    return parameter_map[smspp_parameter]
+
+
+def _get_transform_argument_names(transform) -> List[str]:
+    """
+    Return argument names required by a callable transformation rule.
+
+    Constant rules have no arguments.
+    """
+    if not callable(transform):
+        return []
+
+    return list(inspect.signature(transform).parameters)
+
+
+def _to_snapshot_asset_frame(
+    values,
+    *,
+    snapshot_order: Sequence[Any],
+    asset_order: Sequence[Any],
+    parameter: str,
+) -> pd.DataFrame:
+    """
+    Convert a transformation output to a snapshot x asset DataFrame.
+
+    The direct transformation sometimes returns DataFrames, sometimes Series,
+    scalars, or numpy arrays. This helper normalizes the result for DSS
+    flattening.
+    """
+    snapshot_order = list(snapshot_order)
+    asset_order = list(asset_order)
+
+    if isinstance(values, pd.DataFrame):
+        out = values.copy()
+        out = _drop_scenario_level_from_columns(out)
+        return out.reindex(index=snapshot_order, columns=asset_order)
+
+    if isinstance(values, pd.Series):
+        if values.index.equals(pd.Index(asset_order)):
+            data = np.tile(values.reindex(asset_order).to_numpy(dtype=float), (len(snapshot_order), 1))
+            return pd.DataFrame(data, index=snapshot_order, columns=asset_order)
+
+        if values.index.equals(pd.Index(snapshot_order)) and len(asset_order) == 1:
+            return pd.DataFrame(
+                values.reindex(snapshot_order).to_numpy(dtype=float).reshape(-1, 1),
+                index=snapshot_order,
+                columns=asset_order,
+            )
+
+        raise ValueError(
+            f"Cannot convert Series output for stochastic parameter "
+            f"{parameter!r} to a snapshot x asset frame."
+        )
+
+    arr = np.asarray(values)
+
+    if arr.ndim == 0:
+        return pd.DataFrame(
+            float(arr),
+            index=snapshot_order,
+            columns=asset_order,
+        )
+
+    if arr.ndim == 1:
+        if arr.shape[0] == len(snapshot_order) and len(asset_order) == 1:
+            return pd.DataFrame(
+                arr.reshape(-1, 1),
+                index=snapshot_order,
+                columns=asset_order,
+            )
+
+        if arr.shape[0] == len(asset_order):
+            data = np.tile(arr.reshape(1, -1), (len(snapshot_order), 1))
+            return pd.DataFrame(data, index=snapshot_order, columns=asset_order)
+
+        raise ValueError(
+            f"Cannot convert 1D output with shape {arr.shape} for stochastic "
+            f"parameter {parameter!r}. Expected length {len(snapshot_order)} "
+            f"or {len(asset_order)}."
+        )
+
+    if arr.ndim == 2:
+        if arr.shape == (len(snapshot_order), len(asset_order)):
+            return pd.DataFrame(arr, index=snapshot_order, columns=asset_order)
+
+        if arr.shape == (len(asset_order), len(snapshot_order)):
+            return pd.DataFrame(arr.T, index=snapshot_order, columns=asset_order)
+
+        raise ValueError(
+            f"Cannot convert 2D output with shape {arr.shape} for stochastic "
+            f"parameter {parameter!r}. Expected "
+            f"{(len(snapshot_order), len(asset_order))} or "
+            f"{(len(asset_order), len(snapshot_order))}."
+        )
+
+    raise ValueError(
+        f"Cannot convert output with ndim={arr.ndim} for stochastic "
+        f"parameter {parameter!r}."
+    )
+
+
+def evaluate_unitblock_parameter_timeseries(
+    n_s,
+    *,
+    parameter: str,
+    pypsa_component: str,
+    field: str,
+    asset_names: Sequence[Any],
+    transformation_config,
+    unitblock_type: str,
+    smspp_parameter: str | None,
+    weights: bool = False,
+) -> pd.DataFrame:
+    """
+    Evaluate the actual SMS++ UnitBlock parameter for one scenario.
+
+    If smspp_parameter is provided, the corresponding TransformationConfig rule
+    is used. Otherwise, the raw PyPSA field is returned.
+
+    The returned object is always a snapshot x asset DataFrame.
+    """
+    raw_reference = get_param_as_dense(
+        n_s,
+        component=pypsa_component,
+        field=field,
+        weights=weights,
+    )
+
+    raw_reference = _drop_scenario_level_from_columns(raw_reference)
+    raw_reference = raw_reference.reindex(columns=list(asset_names))
+
+    snapshot_order = list(raw_reference.index)
+    asset_order = list(raw_reference.columns)
+
+    if smspp_parameter is None:
+        return raw_reference
+
+    transform = _get_parameter_transform(
+        transformation_config=transformation_config,
+        unitblock_type=unitblock_type,
+        smspp_parameter=smspp_parameter,
+    )
+
+    argument_names = _get_transform_argument_names(transform)
+
+    if not argument_names:
+        evaluated = transform
+    else:
+        kwargs = {}
+
+        for arg_name in argument_names:
+            arg_values = get_param_as_dense(
+                n_s,
+                component=pypsa_component,
+                field=arg_name,
+                weights=weights,
+            )
+
+            arg_values = _drop_scenario_level_from_columns(arg_values)
+            arg_values = arg_values.reindex(
+                index=snapshot_order,
+                columns=asset_order,
+            )
+
+            if arg_values.isna().any().any():
+                missing = arg_values.columns[arg_values.isna().any(axis=0)].tolist()
+                raise ValueError(
+                    f"Missing dependency {pypsa_component}.{arg_name} while "
+                    f"evaluating stochastic parameter {parameter!r} as "
+                    f"{unitblock_type}.{smspp_parameter}. "
+                    f"Missing/invalid assets: {missing}"
+                )
+
+            kwargs[arg_name] = arg_values
+
+        evaluated = transform(**kwargs)
+
+    evaluated = _to_snapshot_asset_frame(
+        evaluated,
+        snapshot_order=snapshot_order,
+        asset_order=asset_order,
+        parameter=parameter,
+    )
+
+    if evaluated.isna().any().any():
+        missing = evaluated.columns[evaluated.isna().any(axis=0)].tolist()
+        raise ValueError(
+            f"NaN values found after evaluating stochastic parameter "
+            f"{parameter!r} as {unitblock_type}.{smspp_parameter}. "
+            f"Missing/invalid assets: {missing}"
+        )
+
+    return evaluated
+
 
 # =============================================================================
 # Discrete Scenario Set
@@ -630,20 +863,23 @@ def build_dss_unitblock_timeseries_parameter(
     function_name: str,
     unitblock_type: str,
     target: str,
+    transformation_config=None,
+    smspp_parameter: str | None = None,
     weights: bool = False,
 ) -> Dict[str, Any]:
     """
-    Build DSS data for a dense unit-block time series parameter.
+    Build DSS data for a dense UnitBlock time series parameter.
 
-    The parameter is extracted scenario by scenario using get_param_as_dense()
-    and flattened with asset-major, time-minor ordering:
+    The parameter is extracted scenario by scenario and flattened with
+    asset-major, time-minor ordering:
 
         asset_0[t0], ..., asset_0[tT],
         asset_1[t0], ..., asset_1[tT],
         ...
 
-    This generic builder is used for stochastic parameters mapped to nested
-    UnitBlocks, e.g. IntermittentUnitBlock, ThermalUnitBlock and HydroUnitBlock.
+    If smspp_parameter is provided, the corresponding TransformationConfig
+    rule is applied. This ensures that the DSS contains the actual SMS++
+    parameter passed to the setter, not necessarily the raw PyPSA field.
     """
     scenario_names = get_scenario_names(n)
 
@@ -659,6 +895,12 @@ def build_dss_unitblock_timeseries_parameter(
             f"No assets were provided for stochastic parameter {parameter!r}."
         )
 
+    if smspp_parameter is not None and transformation_config is None:
+        raise ValueError(
+            f"transformation_config must be provided when smspp_parameter is set "
+            f"for stochastic parameter {parameter!r}."
+        )
+
     scenarios = []
     asset_order = None
     snapshot_order = None
@@ -666,15 +908,17 @@ def build_dss_unitblock_timeseries_parameter(
     for scenario_name in scenario_names:
         n_s = n.get_scenario(scenario_name)
 
-        values = get_param_as_dense(
+        values = evaluate_unitblock_parameter_timeseries(
             n_s,
-            component=pypsa_component,
+            parameter=parameter,
+            pypsa_component=pypsa_component,
             field=field,
+            asset_names=asset_names,
+            transformation_config=transformation_config,
+            unitblock_type=unitblock_type,
+            smspp_parameter=smspp_parameter,
             weights=weights,
         )
-
-        values = _drop_scenario_level_from_columns(values)
-        values = values.reindex(columns=asset_names)
 
         if asset_order is None:
             asset_order = list(values.columns)
@@ -689,7 +933,7 @@ def build_dss_unitblock_timeseries_parameter(
             missing = values.columns[values.isna().any(axis=0)].tolist()
             raise ValueError(
                 f"Missing values for stochastic parameter {parameter!r} "
-                f"after reindexing {pypsa_component}.{field}. "
+                f"after evaluating {pypsa_component}.{field}. "
                 f"Missing/invalid assets: {missing}"
             )
 
@@ -703,6 +947,7 @@ def build_dss_unitblock_timeseries_parameter(
         "target": target,
         "function_name": function_name,
         "unitblock_type": unitblock_type,
+        "smspp_parameter": smspp_parameter,
         "pypsa_component": pypsa_component,
         "field": field,
         "source": f"{pypsa_component}.{field}",

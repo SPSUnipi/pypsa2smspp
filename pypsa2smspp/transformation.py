@@ -118,7 +118,7 @@ class Transformation:
         self,
         *,
         # --- transformation options ---
-        merge_links: Union[bool, str, Sequence[str]] = True,
+        merge_links: Union[bool, str, Sequence[str]] = False,
         merge_selector: Optional[Callable[..., bool]] = None,
         capacity_expansion_ucblock: bool = True,
         enable_thermal_units: bool = False,
@@ -2185,6 +2185,8 @@ class Transformation:
                         function_name=spec["function_name"],
                         unitblock_type=spec["unitblock_type"],
                         target=spec["target"],
+                        transformation_config=self.config,
+                        smspp_parameter=spec.get("smspp_parameter", None),
                         weights=bool(spec.get("weights", False)),
                     )
                 )

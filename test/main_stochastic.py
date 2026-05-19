@@ -71,7 +71,7 @@ from pypsa2smspp.network_correction import (
 def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
-name = 'stochastic_marginal_intermittent'
+name = 'stochastic_pypsaeur'
 folder = 'develop/tssb'
 
 #%% Network definition with PyPSA
@@ -111,7 +111,7 @@ nd.n = add_slack_unit(nd.n)
 # Stochastic scenario configuration
 # ---------------------------------------------------------------------
 
-N_SCENARIOS = 10
+N_SCENARIOS = 3
 SEED = 123
 
 SCENARIOS = [f"scenario_{i + 1}" for i in range(N_SCENARIOS)]
@@ -120,7 +120,7 @@ PROB = {scenario: 1.0 / N_SCENARIOS for scenario in SCENARIOS}
 # Standard deviations of the Gaussian multipliers.
 # Example: sigma = 0.20 means values are typically varied by about ±20%.
 SIGMA = {
-    "demand": 0.20,
+    "demand": 0.35,
     "renewable_maxpower": 0.15,
     "renewable_marginal_cost": 0.30,
 }
@@ -265,7 +265,7 @@ obj_pypsa = n_pypsa.objective + n_pypsa.objective_constant
 
 # n_pypsa.export_to_netcdf("output/develop/tssb/pypsa_stoch_load.nc")
 
-statistics_pypsa = n_pypsa.statistics()
+# statistics_pypsa = n_pypsa.statistics()
 
 transformation = Transformation(name=name,
                                 configfile="TSSBlock/TSSBSCfg_grb.txt",
@@ -277,7 +277,7 @@ transformation = Transformation(name=name,
                                 }
                                 )
 nd.n = transformation.run(nd.n)
-statistics_smspp = nd.n.statistics()
+# statistics_smspp = nd.n.statistics()
 
 obj_smspp = nd.n.objective
 error = (obj_smspp - obj_pypsa) / obj_pypsa * 100
