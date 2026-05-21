@@ -4,7 +4,7 @@
 
 ### New Features and Major Changes
 
-* 
+* Support for Python 3.10 and 3.11 [PR #45](https://github.com/SPSUnipi/pypsa2smspp/pull/45)
 
 ### Minor Changes and Bug Fixes
 
