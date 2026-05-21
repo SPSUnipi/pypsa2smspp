@@ -4,6 +4,17 @@
 
 ### New Features and Major Changes
 
+* 
+
+### Minor Changes and Bug Fixes
+
+* 
+
+
+## v0.0.4
+
+### New Features and Major Changes
+
 * Add TSSB marginal cost for IntermittentUnitBlocks [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
 * Automatically handling new uncertain parameters for TSSB [PR #44](https://github.com/SPSUnipi/pypsa2smspp/pull/44)
 * Support for Python 3.10 and 3.11 [PR #45](https://github.com/SPSUnipi/pypsa2smspp/pull/45)
@@ -13,7 +24,7 @@
 * Add test for TSSB [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
 * Fix of efficiency in time-dependent links [PR #43](https://github.com/SPSUnipi/pypsa2smspp/pull/43)
 
-## v0.3.0
+## v0.0.3
 
 ### New Features and Major Changes
 
@@ -33,13 +44,13 @@
 * Introduce CI with conda package
 * Support for networks with snapshot weightings != 1 [cd973f3](ce973f3dc480441c9154dd6a268740b8d9c1cc4e)
 
-## v0.2.0
+## v0.0.2
 
 ### Minor Changes and Bug Fixes
 
 * Include license file in the package distribution.
 
-## v0.1.0 (First Public Release)
+## v0.0.1 (First Public Release)
 
 ### New Features and Major Changes
 
