@@ -6,6 +6,7 @@
 
 * Add TSSB marginal cost for IntermittentUnitBlocks [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
 * Automatically handling new uncertain parameters for TSSB [PR #44](https://github.com/SPSUnipi/pypsa2smspp/pull/44)
+* Support for Python 3.10 and 3.11 [PR #45](https://github.com/SPSUnipi/pypsa2smspp/pull/45)
 
 ### Minor Changes and Bug Fixes
 
