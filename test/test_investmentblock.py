@@ -129,7 +129,7 @@ def run_investment_block(xlsx_path: Path) -> None:
         pass
 
     try:
-        obj_pypsa = float(network.objective + getattr(network, "objective_constant", 0.0))
+        obj_pypsa = float(network.objective + network.objective_constant)
     except Exception:
         obj_pypsa = float(network.objective)
 

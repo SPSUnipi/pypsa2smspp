@@ -132,7 +132,13 @@ class TransformationConfig:
             "Inflows": lambda inflow: inflow.values.transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
             # "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
-            "MaxFlow": lambda p_nom, p_max_pu, max_hours: (np.array([(p_nom*p_max_pu*max_hours), (0.*p_max_pu)])).squeeze().transpose(),
+            # "MaxFlow": lambda p_nom, p_max_pu, max_hours: (np.array([(p_nom*p_max_pu*max_hours), (0.*p_max_pu)])).squeeze().transpose(),
+            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow: (
+                np.array([
+                    (p_nom * max_hours * p_max_pu).clip(lower=inflow.sum().sum()),
+                    0. * p_max_pu
+                    ]).squeeze().transpose()
+                ),            
             "MinFlow": lambda p_nom, p_min_pu, max_hours: (np.array([(0.*p_min_pu), (p_nom*p_min_pu*max_hours)])).squeeze().transpose(),
             "MaxPower": lambda p_nom, p_max_pu: (np.array([(p_nom*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
             "MinPower": lambda p_nom, p_min_pu: (np.array([(0.*p_min_pu), (p_nom*p_min_pu)])).squeeze().transpose(),

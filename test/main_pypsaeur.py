@@ -26,10 +26,10 @@ import pypsa
 
 # Inputs
 # NETWORK_NC = Path(r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/unit_commitment_smspp_italy/networks/base_s_5_elec_.nc")
-NETWORK_NC = Path(
-     r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks/base_s_20___2050.nc"
-)
-# NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small.nc")
+# NETWORK_NC = Path(
+#      r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks/base_s_20___2050.nc"
+# )
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small_fewsectors.nc")
 
 
 # Output
@@ -75,7 +75,7 @@ DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
 DO_REDUCE_SNAPSHOTS = True
-REDUCE_SNAPSHOTS_TO = 1000
+REDUCE_SNAPSHOTS_TO = 5000
 DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False

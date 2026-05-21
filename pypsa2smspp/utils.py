@@ -498,7 +498,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
     dimensions['UCBlock']['NumberLines'] -= number_merged_links
 
     if has_time_dependent_link_data(n):
-        dimensions["NumberInstants"] = dimensions["TimeHorizon"]
+        dimensions['UCBlock']["NumberInstants"] = dimensions['UCBlock']["TimeHorizon"]
     
     if expansion_ucblock:
        dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links 
@@ -2014,6 +2014,9 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
     p_nom = n.links["p_nom"].astype(float)
     p_nom_extendable = n.links["p_nom_extendable"].fillna(False).astype(bool)
+    
+    if _has_dynamic_link_attr(n, "efficiency"):
+        variables['Efficiency']['size'] = ("NumberBranches", "NumberInstants")
 
     for attr, smspp_name in (
         ("p_max_pu", "MaxPowerFlow"),
@@ -2048,6 +2051,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
         variables[smspp_name]["value"] = old
         variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")
+        
 
 
 def _is_zero_efficiency(eff) -> bool:
@@ -2100,3 +2104,5 @@ def _flatten_saved_efficiencies(efficiencies_dict, drop_zero=True):
         v if v.ndim > 0 else np.full(time_horizon, float(v), dtype=float)
         for v in values
     ])
+
+

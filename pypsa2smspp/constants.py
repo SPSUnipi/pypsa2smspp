@@ -57,3 +57,94 @@ renewable_carriers = [
     "wind",
     "ror"
 ]
+
+
+# Registry of stochastic parameters supported by the TSSB interface.
+#
+# Each entry describes:
+# - how the stochastic data are extracted from PyPSA;
+# - how they are flattened in the DiscreteScenarioSet;
+# - which SMS++ setter receives the stochastic slice.
+
+STOCHASTIC_PARAMETER_REGISTRY = {
+    "demand": {
+        "mapping_kind": "ucblock_timeseries",
+        "function_name": "UCBlock::set_active_power_demand",
+        "target": "demand",
+    },
+
+    "renewable_maxpower": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "Generator",
+        "field": "p_max_pu",
+        "asset_filter": "intermittent_generators",
+        "unitblock_type": "IntermittentUnitBlock",
+        "smspp_parameter": "MaxPower",
+        "function_name": "IntermittentUnitBlock::set_maximum_power",
+        "target": "renewable_maxpower",
+        "weights": False,
+    },
+
+    "renewable_marginal_cost": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "Generator",
+        "field": "marginal_cost",
+        "asset_filter": "intermittent_generators",
+        "unitblock_type": "IntermittentUnitBlock",
+        "smspp_parameter": "ActivePowerCost",
+        "function_name": "IntermittentUnitBlock::set_active_power_cost",
+        "target": "renewable_marginal_cost",
+        "weights": False,
+    },
+
+    "thermal_stand_by_cost": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "Generator",
+        "field": "stand_by_cost",
+        "asset_filter": "thermal_generators",
+        "unitblock_type": "ThermalUnitBlock",
+        "smspp_parameter": "ConstTerm",
+        "function_name": "ThermalUnitBlock::set_const_term",
+        "target": "thermal_stand_by_cost",
+        "weights": False,
+        "requires_enable_thermal_units": True,
+    },
+
+    "thermal_marginal_cost": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "Generator",
+        "field": "marginal_cost",
+        "asset_filter": "thermal_generators",
+        "unitblock_type": "ThermalUnitBlock",
+        "smspp_parameter": "LinearTerm",
+        "function_name": "ThermalUnitBlock::set_linear_term",
+        "target": "thermal_marginal_cost",
+        "weights": False,
+        "requires_enable_thermal_units": True,
+    },
+
+    "thermal_marginal_cost_quadratic": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "Generator",
+        "field": "marginal_cost_quadratic",
+        "asset_filter": "thermal_generators",
+        "unitblock_type": "ThermalUnitBlock",
+        "smspp_parameter": "QuadTerm",
+        "function_name": "ThermalUnitBlock::set_quad_term",
+        "target": "thermal_marginal_cost_quadratic",
+        "weights": False,
+        "requires_enable_thermal_units": True,
+    },
+
+    "hydro_inflow": {
+        "mapping_kind": "unitblock_timeseries",
+        "pypsa_component": "StorageUnit",
+        "field": "inflow",
+        "asset_filter": "storage_units",
+        "unitblock_type": "HydroUnitBlock",
+        "smspp_parameter": "Inflows",
+        "function_name": "HydroUnitBlock::set_inflow",
+        "target": "hydro_inflow",
+        "weights": False,
+    },
+}
