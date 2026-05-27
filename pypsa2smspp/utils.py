@@ -68,18 +68,6 @@ def get_param_as_dense(n, component, field, weights=True):
         field_val = field_val.mul(weighting, axis=0)
     return field_val
 
-         
-def remove_zero_p_nom_opt_components(n, nominal_attrs):
-    # Lista dei componenti che hanno l'attributo p_nom_opt
-    components_with_p_nom_opt = ["Generator", "Link", "Store", "StorageUnit", "Line", "Transformer"]
-    
-    for components in n.components[["Line", "Generator", "Link", "Store", "StorageUnit"]]:
-        if components.empty:
-            continue
-        components_df = components.static
-        components_df = components_df[components_df[f"{nominal_attrs[components.name]}_opt"] > 0]
-        setattr(n, components.list_name, components_df)
-
 
 def is_extendable(component_df, component_type, nominal_attrs):
     """

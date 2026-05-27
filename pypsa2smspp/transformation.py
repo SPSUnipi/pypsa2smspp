@@ -418,6 +418,9 @@ class Transformation:
             update_bounds=True,
             logger=logger,
         )
+        
+        n.storage_units['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
+        n.stores['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
     
         # n = preprocess_dynamic_link_parameters_to_static_means(
         #     n,
