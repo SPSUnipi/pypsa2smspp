@@ -1959,7 +1959,7 @@ class Transformation:
             "TwoStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
         }
     
-        cfg = getattr(self, "configfile", "auto")
+        cfg = self.configfile
     
         if cfg is None or cfg == "auto":
             if block_type not in default_template_map:
@@ -1972,8 +1972,18 @@ class Transformation:
         else:
             if isinstance(cfg, pysmspp.SMSConfig):
                 configfile = cfg
+            elif isinstance(cfg, str):
+                if os.path.isfile(cfg):
+                    configfile = pysmspp.SMSConfig(fp=str(os.path.abspath(cfg)))
+                else:
+                    configfile = pysmspp.SMSConfig(template=str(cfg))
+            elif isinstance(cfg, Path):
+                configfile = pysmspp.SMSConfig(fp=str(cfg.resolve()))
             else:
-                configfile = pysmspp.SMSConfig(template=str(cfg))
+                raise ValueError(
+                    f"Invalid type for configfile: {type(cfg)}. "
+                    f"Expected None, 'auto', str path, or SMSConfig instance."
+                )
     
         # --------------------------------------------------
         # Workdir and filepaths
