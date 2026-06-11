@@ -8,7 +8,7 @@
 
 ### Minor Changes and Bug Fixes
 
-* 
+* Enable custom configfiles from local files [PR #46](https://github.com/SPSUnipi/pypsa2smspp/pull/46)
 
 
 ## v0.0.4
