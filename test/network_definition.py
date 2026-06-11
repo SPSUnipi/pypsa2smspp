@@ -142,6 +142,8 @@ class NetworkDefinition:
     
             if "stores" in df.columns:
                 self.n.snapshot_weightings.loc[self.n.snapshots, "stores"] = df["stores"].to_numpy()
+            else:
+                self.n.snapshot_weightings.loc[self.n.snapshots, "stores"] = default_weight
     
             LOGGER.info(
                 "Defined %d snapshots from Excel sheet 'snapshots'.",
@@ -152,7 +154,7 @@ class NetworkDefinition:
             self.n.snapshots = range(0, self.parser.n_snapshots)
             self.n.snapshot_weightings.objective = self.parser.weight
             self.n.snapshot_weightings.generators = self.parser.weight
-            # self.n.snapshot_weightings.stores = self.parser.weight
+            self.n.snapshot_weightings.stores = self.parser.weight
     
             LOGGER.info(
                 "Defined %d snapshots from parser fallback.",

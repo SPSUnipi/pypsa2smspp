@@ -29,7 +29,7 @@ import pypsa
 # NETWORK_NC = Path(
 #      r"/home/pampado/sector-coupled/pypsa-eur-smspp/resources/smspp/networks/base_s_20___2050.nc"
 # )
-NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small_fewsectors.nc")
+NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_2___2050.nc")
 
 
 # Output
@@ -75,13 +75,13 @@ DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
 DO_REDUCE_SNAPSHOTS = True
-REDUCE_SNAPSHOTS_TO = 5000
+REDUCE_SNAPSHOTS_TO = 1000
 DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False
 REMOVE_GENERATORS_ON_REMOVED_BUSES = False
 DO_CLEAN_GLOBAL_CONSTRAINTS = True
-DO_MEAN_EFFICIENCIES = True
+DO_MEAN_EFFICIENCIES = False
 
 # Debug artifacts
 EXPORT_PYPSA_LP = True
@@ -225,6 +225,10 @@ timer_rows = []
 try:
     # -------- Load network --------
     n_smspp = pypsa.Network(str(NETWORK_NC))
+    
+    # n_smspp.snapshot_weightings['objective'] = 1
+    # n_smspp.snapshot_weightings['stores'] = 1
+    # n_smspp.snapshot_weightings['generators'] = 1
 
     if DO_CLEAN_E_SUM:
         n_smspp = clean_e_sum(n_smspp)
