@@ -40,7 +40,7 @@ DEFAULT_STOCHASTIC_PARAMETERS = (
 )
 
 TSSB_APPLICATION_INI = "application_tssb_test.ini"
-TSSB_CONFIGFILE = "TSSBlock/TSSBSCfg_grb.txt"
+TSSB_CONFIGFILE = "TSSBlock/TSSBSCfg.txt"
 
 OBJECTIVES_CSV = OUT_TEST / "tssb_objectives_report.csv"
 _OBJECTIVES_HEADER_WRITTEN = False
