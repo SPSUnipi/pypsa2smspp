@@ -8,6 +8,13 @@
 
 ### Minor Changes and Bug Fixes
 
+* 
+
+
+## v0.0.5
+
+### New Features and Major Changes
+
 * Enable custom configfiles from local files [PR #46](https://github.com/SPSUnipi/pypsa2smspp/pull/46)
 
 
@@ -23,6 +30,7 @@
 
 * Add test for TSSB [PR #40](https://github.com/SPSUnipi/pypsa2smspp/pull/40)
 * Fix of efficiency in time-dependent links [PR #43](https://github.com/SPSUnipi/pypsa2smspp/pull/43)
+
 
 ## v0.0.3
 
@@ -44,11 +52,13 @@
 * Introduce CI with conda package
 * Support for networks with snapshot weightings != 1 [cd973f3](ce973f3dc480441c9154dd6a268740b8d9c1cc4e)
 
+
 ## v0.0.2
 
 ### Minor Changes and Bug Fixes
 
 * Include license file in the package distribution.
+
 
 ## v0.0.1 (First Public Release)
 
@@ -68,6 +78,7 @@
   * Buses
 * Support for inverse conversion from SMS++ input files back to PyPSA `Network` objects populated with solution.
 * Automated testing via `pytest`.
+
 
 ## Release Process
 
