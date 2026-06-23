@@ -186,8 +186,14 @@ class TransformationConfig:
             "state_of_charge": lambda volumetriclevel: volumetriclevel,
             }
         
-        # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
-        self.BatteryUnitBlock_inverse = {
+        self.BatteryUnitBlock_StorageUnit_inverse = {
+            "p_dispatch": lambda activepower: np.maximum(np.asarray(activepower), 0.0),
+            "p_store": lambda activepower: np.maximum(-np.asarray(activepower), 0.0),
+            "state_of_charge": lambda storageLevel: storageLevel,
+            "p_nom": lambda batteryDesign: batteryDesign,
+        }
+
+        self.BatteryUnitBlock_Store_inverse = {
             "e_nom": lambda designvariable: designvariable,
             # "p_dispatch": lambda activepower: np.maximum(activepower, 0),
             # "p_store": lambda activepower: np.maximum(-activepower, 0),

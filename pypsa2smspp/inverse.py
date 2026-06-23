@@ -39,7 +39,10 @@ def component_definition(n, unit_block: dict) -> str:
         case "HydroUnitBlock":
             return "StorageUnit"
         case "BatteryUnitBlock":
-            return "StorageUnit" if unit_block['name'] in n.storage_units.index else "Store"
+            return unit_block.get(
+                "pypsa_component",
+                "StorageUnit" if unit_block["name"] in n.storage_units.index else "Store",
+            )
         case "DCNetworkBlock_lines":
             return "Line"
         case "DCNetworkBlock_links":
@@ -188,14 +191,21 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_na
     """
     Transforms a unit block into a dictionary of DataArrays.
     """
-    attr_name = f"{unit_block['block']}_inverse"
+    if unit_block["block"] == "BatteryUnitBlock":
+        attr_name = f"{unit_block['block']}_{component}_inverse"
+    else:
+        attr_name = f"{unit_block['block']}_inverse"
+
     converted_dict = {}
     normalized_keys = {normalize_key(k): k for k in unit_block.keys()}
 
     if hasattr(config, attr_name):
         unitblock_parameters = getattr(config, attr_name)
     else:
-        print(f"Block {unit_block['block']} not yet implemented")
+        print(
+            f"Block inverse mapping not implemented: {attr_name} "
+            f"for unit block {unit_block.get('name')}"
+        )
         return {}
 
     df = getattr(n, config.component_mapping[component])
@@ -210,10 +220,24 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_na
                 key=key,
                 scenario_name=scenario_name,
             )
+
             if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
                 value = value.sum(axis=0)
-            value, dims, coords, var_name = dataarray_components(n, value, component, unit_block, key)
-            converted_dict[var_name] = xr.DataArray(value, dims=dims, coords=coords, name=var_name)
+
+            value, dims, coords, var_name = dataarray_components(
+                n,
+                value,
+                component,
+                unit_block,
+                key,
+            )
+
+            converted_dict[var_name] = xr.DataArray(
+                value,
+                dims=dims,
+                coords=coords,
+                name=var_name,
+            )
 
     return converted_dict
 

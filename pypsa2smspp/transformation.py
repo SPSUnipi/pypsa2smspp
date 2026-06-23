@@ -504,7 +504,6 @@ class Transformation:
                 self.config.BatteryUnitBlock_parameters,
                 self.config.BatteryUnitBlock_store_parameters,
                 self.config.IntermittentUnitBlock_inverse,
-                self.config.BatteryUnitBlock_inverse,
                 self.config.InvestmentBlock_parameters,
             )
     
@@ -768,7 +767,15 @@ class Transformation:
                 "DesignVariable")   # fallback
             )
         
-            self.unitblocks[name] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], design_key: components_df[nom].values, "Extendable":ext, "variables": converted_dict}
+            self.unitblocks[name] = {
+                "name": components_df.index[0],
+                "enumerate": f"UnitBlock_{index}",
+                "block": attr_name.split("_")[0],
+                "pypsa_component": components_type,
+                design_key: components_df[nom].values,
+                "Extendable": ext,
+                "variables": converted_dict,
+            }
         
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']
