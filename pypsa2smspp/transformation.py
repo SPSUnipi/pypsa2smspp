@@ -501,6 +501,7 @@ class Transformation:
         if self.capacity_expansion_ucblock:
             apply_expansion_overrides(
                 self.config.IntermittentUnitBlock_parameters,
+                self.config.BatteryUnitBlock_parameters,
                 self.config.BatteryUnitBlock_store_parameters,
                 self.config.IntermittentUnitBlock_inverse,
                 self.config.BatteryUnitBlock_inverse,

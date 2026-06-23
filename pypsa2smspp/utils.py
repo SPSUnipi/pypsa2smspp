@@ -1316,7 +1316,7 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
     Keys are only added if missing, so it remains idempotent.
@@ -1348,6 +1348,57 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
         d["MinCapacityDesign"] = _min_cap_design
+        
+    # --- BatteryUnitBlock ---
+    b = BatteryUnitBlock_parameters
+
+    # "BatteryInvestmentCost"
+    if "BatteryInvestmentCost" not in b:
+        b["BatteryInvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if bool(first_scalar(p_nom_extendable)) else 0.0
+
+    # "ConverterInvestmentCost"
+    if "ConverterInvestmentCost" not in b:
+        b["ConverterInvestmentCost"] = lambda p_nom_extendable: 1e-12 if bool(first_scalar(p_nom_extendable)) else 0.0
+
+    # "BatteryMaxCapacityDesign"
+    if "BatteryMaxCapacityDesign" not in b:
+        def _battery_max_cap_design(p_nom, p_nom_extendable, p_nom_max):
+            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
+            return (first_scalar(p_nom_max_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
+        
+    # "BatteryMinCapacityDesign"
+    if "BatteryMinCapacityDesign" not in b:
+        def _battery_min_cap_design(p_nom, p_nom_extendable, p_nom_min):
+            p_nom_min_safe = p_nom_min
+            return (first_scalar(p_nom_min_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        b["BatteryMinCapacityDesign"] = _battery_min_cap_design
+
+    # "ConverterMaxCapacityDesign"
+    if "ConverterMaxCapacityDesign" not in b:
+        def _conv_max_cap_design(p_nom, p_nom_extendable, p_nom_max):
+            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
+            # Your rule of thumb: 10x battery energy cap when extendable, else p_nom
+            return (10.0 * first_scalar(p_nom_max_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
+        
+    
+    # "ConverterMinCapacityDesign"
+    if "ConverterMinCapacityDesign" not in b:
+        def _conv_min_cap_design(p_nom, p_nom_extendable, p_nom_min):
+            p_nom_min_safe = p_nom_min.replace(np.inf, 1e9)
+            # Your rule of thumb: 10x battery energy cap when extendable, else p_nom
+            return (10.0 * first_scalar(p_nom_min_safe)
+                    if bool(first_scalar(p_nom_extendable))
+                    else first_scalar(p_nom))
+        b["ConverterMinCapacityDesign"] = _conv_min_cap_design
+
 
     # --- BatteryUnitBlock_store ---
     b = BatteryUnitBlock_store_parameters
