@@ -504,6 +504,8 @@ class Transformation:
                 self.config.BatteryUnitBlock_parameters,
                 self.config.BatteryUnitBlock_store_parameters,
                 self.config.IntermittentUnitBlock_inverse,
+                self.config.BatteryUnitBlock_StorageUnit_inverse,
+                self.config.BatteryUnitBlock_Store_inverse,
                 self.config.InvestmentBlock_parameters,
             )
     

@@ -1316,7 +1316,7 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, InvestmentBlock=None):
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_StorageUnit_inverse=None, BatteryUnitBlock_Store_inverse=None, InvestmentBlock=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
     Keys are only added if missing, so it remains idempotent.
@@ -1455,6 +1455,17 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     IntermittentUnitBlock_inverse["p_nom"] = (
         lambda intermittentdesign: intermittentdesign
     )
+
+    # --- BatteryUnitBlock_inverse ---
+    BatteryUnitBlock_StorageUnit_inverse["p_nom"] = (
+        lambda batterydesign: batterydesign
+    )
+    
+    # --- BatteryUnitBlock_inverse ---
+    BatteryUnitBlock_Store_inverse["e_nom"] = (
+        lambda batterydesign: batterydesign
+    )
+    
     
     # --- InvestmentBlockParameters ---
     i = InvestmentBlock

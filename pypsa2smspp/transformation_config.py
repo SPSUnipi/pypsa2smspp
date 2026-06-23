@@ -187,8 +187,8 @@ class TransformationConfig:
             }
         
         self.BatteryUnitBlock_StorageUnit_inverse = {
-            "p_dispatch": lambda activepower: np.maximum(np.asarray(activepower), 0.0),
-            "p_store": lambda activepower: np.maximum(-np.asarray(activepower), 0.0),
+            "p_dispatch": lambda activepower: np.maximum(-np.asarray(activepower), 0.0),
+            "p_store": lambda activepower: np.maximum(np.asarray(activepower), 0.0),
             "state_of_charge": lambda storageLevel: storageLevel,
             "p_nom": lambda batteryDesign: batteryDesign,
         }
