@@ -1046,14 +1046,17 @@ def calculate_design_variables(
     design_lines = list(investment_meta.get("design_lines", []))
 
     if design_lines:
-        for line_idx in design_lines:
+        # x_network is indexed by design-line position (0..NumberDesignLines-1),
+        # not by the network line id: v_design[ p ] holds the design variable of
+        # the p-th designable line (whose line id is design_lines[ p ]).
+        for position, line_idx in enumerate(design_lines):
             design_variables.append(
                 {
                     "block_index": int(network_block_index),
                     "var_name": "x_network",
                     "component_type": "network",
-                    "element_index": int(line_idx),
-                    "range_index": int(line_idx) + 1,
+                    "element_index": int(position),
+                    "range_index": int(position) + 1,
                 }
             )
 
