@@ -1046,22 +1046,51 @@ def calculate_design_variables(
     design_lines = list(investment_meta.get("design_lines", []))
 
     if design_lines:
-        for line_idx in design_lines:
+        # x_network is indexed by design-line position (0..NumberDesignLines-1),
+        # not by the network line id: v_design[ p ] holds the design variable of
+        # the p-th designable line (whose line id is design_lines[ p ]).
+        for position, line_idx in enumerate(design_lines):
             design_variables.append(
                 {
                     "block_index": int(network_block_index),
                     "var_name": "x_network",
                     "component_type": "network",
-                    "element_index": int(line_idx),
-                    "range_index": int(line_idx) + 1,
+                    "element_index": int(position),
+                    "range_index": int(position) + 1,
                 }
             )
 
     return design_variables
 
 
+def check_unique_design_variables(design_variables):
+    """Reject design descriptors that resolve to the same ColVariable.
+
+    Two path nodes mapping onto the same (block, variable, element) make SMS++
+    fail downstream with an opaque "repeated ColVariable in x[ i ] and x[ j ]",
+    where i/j are internal Function indices that say nothing about the model.
+    Validating here lets the log name the offending design entries in converter
+    terms (block, variable, element) and points at the usual cause: an
+    element_index taken from the line id instead of the design position.
+    """
+    seen = {}
+    for pos, dv in enumerate(design_variables):
+        key = (str(dv["block_index"]), dv["var_name"], int(dv["element_index"]))
+        if key in seen:
+            raise ValueError(
+                f"Duplicate design variable: descriptors {seen[key]} and {pos} "
+                f"both map to block {key[0]}, variable '{key[1]}', element "
+                f"{key[2]}; this triggers a 'repeated ColVariable' error in "
+                "SMS++. Check that each extendable component is listed once and "
+                "that element_index is the design position, not the line id."
+            )
+        seen[key] = pos
+
+
 def build_tssb_static_abstract_path(design_variables):
     """Build a preliminary StaticAbstractPath representation from design variables."""
+    check_unique_design_variables(design_variables)
+
     path_dim = len(design_variables)
     total_length = 2 * path_dim
 
