@@ -1063,8 +1063,34 @@ def calculate_design_variables(
     return design_variables
 
 
+def check_unique_design_variables(design_variables):
+    """Reject design descriptors that resolve to the same ColVariable.
+
+    Two path nodes mapping onto the same (block, variable, element) make SMS++
+    fail downstream with an opaque "repeated ColVariable in x[ i ] and x[ j ]",
+    where i/j are internal Function indices that say nothing about the model.
+    Validating here lets the log name the offending design entries in converter
+    terms (block, variable, element) and points at the usual cause: an
+    element_index taken from the line id instead of the design position.
+    """
+    seen = {}
+    for pos, dv in enumerate(design_variables):
+        key = (str(dv["block_index"]), dv["var_name"], int(dv["element_index"]))
+        if key in seen:
+            raise ValueError(
+                f"Duplicate design variable: descriptors {seen[key]} and {pos} "
+                f"both map to block {key[0]}, variable '{key[1]}', element "
+                f"{key[2]}; this triggers a 'repeated ColVariable' error in "
+                "SMS++. Check that each extendable component is listed once and "
+                "that element_index is the design position, not the line id."
+            )
+        seen[key] = pos
+
+
 def build_tssb_static_abstract_path(design_variables):
     """Build a preliminary StaticAbstractPath representation from design variables."""
+    check_unique_design_variables(design_variables)
+
     path_dim = len(design_variables)
     total_length = 2 * path_dim
 
