@@ -66,8 +66,8 @@ class TransformationConfig:
             "MinPower": lambda p_nom, p_min_pu, p_nom_extendable: (p_nom * p_min_pu).where(~p_nom_extendable, p_min_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
-            "ExtractingBatteryRho": lambda efficiency_dispatch, snapshot_weighting: snapshot_weighting / efficiency_dispatch,
-            "StoringBatteryRho": lambda efficiency_store, snapshot_weighting: efficiency_store / snapshot_weighting,
+            "ExtractingBatteryRho": lambda efficiency_dispatch, snapshots_weighting: snapshots_weighting.iloc[0] / efficiency_dispatch.iloc[0],
+            "StoringBatteryRho": lambda efficiency_store, snapshots_weighting: snapshots_weighting.iloc[0] * efficiency_store.iloc[0],
             "Demand": 0.0,
             "MinStorage": 0.0,
             "MaxStorage": lambda p_nom, p_max_pu, max_hours: p_nom * p_max_pu * max_hours,
@@ -159,7 +159,7 @@ class TransformationConfig:
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
-            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, 1e7).values,
+            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, self.investment_upper_bound).values,
             # "InstalledQuantity": lambda p_nom: p_nom.replace(0, 1e-6).values,
             "InstalledQuantity": lambda p_nom: np.zeros_like(p_nom), # This is used now that we want to add objective constant as separated
             }
@@ -227,4 +227,11 @@ class TransformationConfig:
         }
         
         self.max_hours_stores = 1
+
+        # Cap substituted for a non-finite p_nom_max when building the
+        # InvestmentBlock UpperBound. np.inf leaves the asset uncapped
+        # (InvestmentBlock treats a non-finite UpperBound as no upper bound);
+        # a finite value caps it. A too-small finite cap silently truncates
+        # the optimum (e.g. a store whose true optimum exceeds the cap).
+        self.investment_upper_bound = np.inf
 
