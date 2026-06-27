@@ -268,12 +268,19 @@ class NetworkDefinition:
         data : pandas.DataFrame
             Static component table.
         """
+        # p_set on dispatchable components is a power-flow setpoint, not a LOPF
+        # input; recent PyPSA enforces it as a fixed-dispatch constraint, which
+        # would freeze the optimization. Drop it for these components (keep it
+        # for Load, where p_set is the demand).
+        drop_p_set = component_type in {"Generator", "Link", "Store",
+                                        "StorageUnit"}
         for _, row in data.iterrows():
             name = row[data.columns[0]]
             params = {
                 col: row[col]
                 for col in data.columns
                 if col != "name" and pd.notna(row[col])
+                and not (drop_p_set and col == "p_set")
             }
             network.add(component_type, name, **params)
 
