@@ -72,7 +72,7 @@ def get_datafile(fname):
     return os.path.join(os.path.dirname(__file__), "test_data", fname)
 
 name = 'time_dependent'
-folder = 'develop/time_dependent'
+folder = 'develop/investment_problems'
 
 #%% Network definition with PyPSA
 config = TestConfig()
@@ -103,8 +103,9 @@ network.optimize(solver_name='gurobi', solver_options=SOLVER_OPTIONS)
 transformation = Transformation(name=name,
                                 workdir=f"output/{folder}",
                                 enable_thermal_units=False,
-                                capacity_expansion_ucblock=True,
-                                configfile='UCBlock/uc_solverconfig_grb.txt',
+                                capacity_expansion_ucblock=False,
+                                # configfile='UCBlock/uc_solverconfig_grb.txt',
+                                configfile='auto',
                                 merge_links=False)
 nd.n = transformation.run(nd.n)
 

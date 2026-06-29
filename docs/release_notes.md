@@ -4,11 +4,11 @@
 
 ### New Features and Major Changes
 
-* 
+* Support snapshot_weightings != 1 [PR #47](https://github.com/SPSUnipi/pypsa2smspp/pull/47)
 
 ### Minor Changes and Bug Fixes
 
-* 
+* Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 
 
 ## v0.0.5

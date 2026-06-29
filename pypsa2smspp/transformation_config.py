@@ -233,5 +233,5 @@ class TransformationConfig:
         # (InvestmentBlock treats a non-finite UpperBound as no upper bound);
         # a finite value caps it. A too-small finite cap silently truncates
         # the optimum (e.g. a store whose true optimum exceeds the cap).
-        self.investment_upper_bound = np.inf
+        self.investment_upper_bound = 1e13
 
