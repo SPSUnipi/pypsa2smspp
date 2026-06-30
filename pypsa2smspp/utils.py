@@ -468,12 +468,20 @@ def hydroblock_dimensions():
 
 # -------------------------------- Correction --------------------------------------
 
-def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucblock):
+def correct_dimensions(
+    dimensions,
+    stores_df,
+    links_merged_df,
+    n,
+    expansion_ucblock,
+    fixed_investment_generators=0,
+):
     """
     Correct SMS++ dimensions based on particular cases/flags
     1. if we merge links, reduce the number of lines associated
     2. if we expand lines with DesignNetworkBlock, define NumberNetworks
     3. if we are in sector coupled, reduce the number of branches associated (if merge_links)
+    4. if generator preprocessing makes investment generators fixed, remove them from NumAssets
     """
     
     # Prime righe facoltative perché se ho sector coupled lo gestisco già alla fine...
@@ -495,6 +503,7 @@ def correct_dimensions(dimensions, stores_df, links_merged_df, n, expansion_ucbl
            dimensions['UCBlock']['NumberNetworks'] = 1
     else:
        dimensions['InvestmentBlock']['NumAssets'] -= number_ext_merg_links
+       dimensions['InvestmentBlock']['NumAssets'] -= int(fixed_investment_generators)
     
     if dimensions['NetworkBlock']['NumberBranches'] > 0:
         # dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links # sbagliato perché viene calcolato dopo e quindi tiene già conto dei 100
@@ -588,6 +597,7 @@ def preprocess_zero_capital_cost_extendable_generators(
     fixed_capacity: float = 1e8,
     update_bounds: bool = True,
     logger=print,
+    return_fixed_count: bool = False,
 ):
     """
     Preprocess extendable generators with zero capital cost.
@@ -608,14 +618,18 @@ def preprocess_zero_capital_cost_extendable_generators(
         If True, also set p_nom_min and p_nom_max to fixed_capacity when present.
     logger : callable, default print
         Logging function.
+    return_fixed_count : bool, default False
+        If True, also return the number of generators converted to fixed.
 
     Returns
     -------
     pypsa.Network
         The modified network (same object, modified in place).
+    tuple[pypsa.Network, int]
+        Returned only when return_fixed_count is True.
     """
     if n.generators.empty:
-        return n
+        return (n, 0) if return_fixed_count else n
 
     required_cols = {"p_nom_extendable", "capital_cost", "p_nom"}
     missing_cols = required_cols - set(n.generators.columns)
@@ -624,7 +638,7 @@ def preprocess_zero_capital_cost_extendable_generators(
             "Skipping generator preprocessing: missing columns "
             f"{sorted(missing_cols)}."
         )
-        return n
+        return (n, 0) if return_fixed_count else n
 
     mask = (
         n.generators["p_nom_extendable"].fillna(False).astype(bool)
@@ -632,9 +646,10 @@ def preprocess_zero_capital_cost_extendable_generators(
     )
 
     matched = n.generators.index[mask]
+    fixed_count = len(matched)
 
-    if len(matched) == 0:
-        return n
+    if fixed_count == 0:
+        return (n, 0) if return_fixed_count else n
 
     n.generators.loc[matched, "p_nom_extendable"] = False
     n.generators.loc[matched, "p_nom"] = fixed_capacity
@@ -650,7 +665,7 @@ def preprocess_zero_capital_cost_extendable_generators(
     #     f"set p_nom={fixed_capacity} and p_nom_extendable=False."
     # )
 
-    return n
+    return (n, fixed_count) if return_fixed_count else n
 
 def preprocess_dynamic_link_parameters_to_static_means(
     n,
@@ -1513,11 +1528,12 @@ def process_dcnetworkblock(
 
     # Fast membership test on index
     extendable_idx = set(extendable_df.index)
+    dc_unitblock_base = unitblock_index - lines_index
 
     # Loop over ALL components, advancing indices always
     for idx in components_df.index:
         if idx in extendable_idx:
-            investment_meta["Blocks"].append(f"DCNetworkBlock_{unitblock_index}")
+            investment_meta["Blocks"].append(f"DCNetworkBlock_{dc_unitblock_base + lines_index}")
             investment_meta["index_extendable"].append(lines_index)
             investment_meta["design_lines"].append(lines_index)
         

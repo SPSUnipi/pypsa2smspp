@@ -52,11 +52,11 @@ if not os.access(OUT, os.W_OK):
 # User settings
 # =============================================================================
 
-NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/eth_results/stochastic_network/networks/base_s_stoch_adm___2050.nc"
-# NETWORK_PATH = r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\base_s_stoch_adm___2050.nc"
+# NETWORK_PATH = "/home/pampado/stochastic/pypsa-eur/results/eth_results/stochastic_network/networks/base_s_stoch_adm___2050.nc"
+NETWORK_PATH = r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\network_small_fewsectors.nc"
 
-NAME = "stochastic_reduced"
-FOLDER = "develop/tssb_loaded"
+NAME = "tssb_hydro_inflow"
+FOLDER = "develop/test_hydro_inflow"
 
 WORKDIR = OUT / FOLDER
 WORKDIR.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ WORKDIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FP = "application_stochastic.ini"
 SMSPP_CONFIGFILE = "TSSBlock/TSSBSCfg_grb.txt"
 
-RUN_PYPSA_REFERENCE = False
+RUN_PYPSA_REFERENCE = True
 EXPORT_PYPSA_LP = True
 EXPORT_NETCDF = True
 
@@ -77,7 +77,7 @@ REDUCE_SNAPSHOTS_TO = 1000
 # Otherwise use, for example:
 # STOCHASTIC_PARAMETERS_OVERRIDE = ["demand"]
 # STOCHASTIC_PARAMETERS_OVERRIDE = ["demand", "renewables"]
-STOCHASTIC_PARAMETERS_OVERRIDE = ["demand"]
+STOCHASTIC_PARAMETERS_OVERRIDE = ["demand", "renewable_maxpower", "hydro_inflow"]
 
 SOLVER_NAME = "gurobi"
 SOLVER_OPTIONS = {
@@ -600,3 +600,7 @@ if __name__ == "__main__":
         n_pypsa.model.to_file(fn=WORKDIR / f"pypsa_{NAME}.lp")
 
     print("\n>>> Done")
+    print(f"\n>>> PyPSA objective: {obj_pypsa}")
+    print(f"\n>>> SMS++ objective: {obj_smspp}")
+    print(f"\n>>> Error PyPSA-SMS++: {error:.8f}%")
+    

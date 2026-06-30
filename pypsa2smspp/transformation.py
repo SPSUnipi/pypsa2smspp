@@ -293,6 +293,9 @@ class Transformation:
         self.timer = StepTimer()
         n.calculate_dependent_values()
         n.stores['max_hours'] = self.config.max_hours_stores
+        n.storage_units['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
+        n.stores['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
+        
         n_direct = get_base_scenario_network(n)
 
         with step(self.timer, "consistency_check", verbose=verbose):
@@ -412,15 +415,14 @@ class Transformation:
             dataframes needed during iteration.
         """
     
-        n = preprocess_zero_capital_cost_extendable_generators(
+        n, fixed_investment_generators = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
+            return_fixed_count=True,
         )
         
-        n.storage_units['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
-        n.stores['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
     
         # n = preprocess_dynamic_link_parameters_to_static_means(
         #     n,
@@ -490,6 +492,7 @@ class Transformation:
             links_merged_df,
             n,
             self.capacity_expansion_ucblock,
+            fixed_investment_generators=fixed_investment_generators,
         )
     
         self._dc_index = build_dc_index(n, links_before, links_after)
