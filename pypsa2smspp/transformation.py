@@ -415,11 +415,12 @@ class Transformation:
             dataframes needed during iteration.
         """
     
-        n = preprocess_zero_capital_cost_extendable_generators(
+        n, fixed_investment_generators = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
+            return_fixed_count=True,
         )
         
     
@@ -491,6 +492,7 @@ class Transformation:
             links_merged_df,
             n,
             self.capacity_expansion_ucblock,
+            fixed_investment_generators=fixed_investment_generators,
         )
     
         self._dc_index = build_dc_index(n, links_before, links_after)
