@@ -15,6 +15,7 @@ import sys
 import traceback
 from pathlib import Path
 from typing import Any, Dict
+from time import perf_counter
 
 import pandas as pd
 import pypsa
@@ -34,7 +35,7 @@ NETWORK_NC = Path(r"C:\Users\aless\sms\transformation_pypsa_smspp\test\networks\
 
 # Output
 OUT_ROOT = Path("output/develop")
-CASE_NAME = None  # if None -> derived from NETWORK_NC.stem
+CASE_NAME = "test_sector_coupled_complete"  # if None -> derived from NETWORK_NC.stem
 
 # PyPSA reference solve
 SOLVER_NAME = "gurobi"
@@ -49,7 +50,7 @@ SOLVER_OPTIONS = {
 }
 
 # Transformation toggles
-CAPACITY_EXPANSION_UCBLOCK = True      # True -> UCBlock, False -> InvestmentBlock
+CAPACITY_EXPANSION_UCBLOCK = False      # True -> UCBlock, False -> InvestmentBlock
 ENABLE_THERMAL_UNITS = False            # False -> everything (except slack) treated as intermittent
 INTERMITTENT_CARRIERS = None           # None -> default renewable_carriers; list/str -> override
 MERGE_LINKS = False                    # False / True / ["tes","battery","h2", ...]
@@ -63,7 +64,7 @@ FP_SOLUTION = "smspp_{name}_solution.nc"
 # SMS++ config selection (no YAML)
 # - "auto" chooses a default template based on CAPACITY_EXPANSION_UCBLOCK inside Transformation.optimize()
 # - otherwise pass a template path or a pysmspp.SMSConfig (depending on your implementation)
-CONFIGFILE = "UCBlock/uc_solverconfig_grb_lp.txt"
+CONFIGFILE = "auto"
 
 # Optional: pass-through options for pySMSpp (all optional; defaults exist in pySMSpp)
 # Examples:
@@ -75,7 +76,7 @@ DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
 DO_ADD_SLACK_UNIT = True
 DO_REDUCE_SNAPSHOTS = True
-REDUCE_SNAPSHOTS_TO = 100
+REDUCE_SNAPSHOTS_TO = 200
 DO_CLEAN_STORAGE_UNITS = False  # optional, kept off by default
 DO_CLEAN_STORES = False         # optional, kept off by default
 REMOVE_STORE_BUSES = False
@@ -208,6 +209,7 @@ metrics: Dict[str, Any] = {
     "Obj_PyPSA": None,
     "Obj_SMSpp": None,
     "Obj_rel_error_pct": None,
+    "PyPSA_optimize_s": None,    
 }
 
 
@@ -256,10 +258,21 @@ try:
 
     # -------- PyPSA optimization (reference) --------
     network = n_smspp.copy()
+    
+    pypsa_t0 = perf_counter()
     network.optimize(
         solver_name=SOLVER_NAME,
         solver_options=SOLVER_OPTIONS,
         # linearized_unit_commitment=True,
+    )
+    pypsa_optimize_s = perf_counter() - pypsa_t0
+    metrics["PyPSA_optimize_s"] = pypsa_optimize_s
+    timer_rows.append(
+        {
+            "step": "pypsa_optimize",
+            "elapsed_s": pypsa_optimize_s,
+            "source": "PyPSA",
+        }
     )
 
     if EXPORT_PYPSA_LP:
@@ -336,8 +349,18 @@ try:
         except Exception:
             pass
 
-    # -------- Timings (from Transformation.timer) --------
-    timer_rows = getattr(getattr(transformation, "timer", None), "rows", None) or []
+    # -------- Timings --------
+    smspp_timer_rows = getattr(getattr(transformation, "timer", None), "rows", None) or []
+
+    smspp_timer_rows = [
+        {
+            **r,
+            "source": r.get("source", "SMS++"),
+        }
+        for r in smspp_timer_rows
+    ]
+
+    timer_rows.extend(smspp_timer_rows)
 
     try:
         if timer_rows:
@@ -348,10 +371,17 @@ try:
     for r in timer_rows:
         step_name = r.get("step", "unknown")
         elapsed_s = r.get("elapsed_s", None)
-        metrics[f"time__{step_name}"] = elapsed_s
+        source = r.get("source", "unknown")
+
+        if elapsed_s is not None:
+            metrics[f"time__{source}__{step_name}"] = elapsed_s
+
+    metrics["PyPSA_total_s"] = metrics["PyPSA_optimize_s"]
 
     metrics["SMSpp_total_s"] = sum(
-        float(r.get("elapsed_s", 0.0)) for r in timer_rows if r.get("elapsed_s") is not None
+        float(r.get("elapsed_s", 0.0))
+        for r in smspp_timer_rows
+        if r.get("elapsed_s") is not None
     )
 
     if timer_rows:
@@ -368,6 +398,7 @@ try:
             "Obj_PyPSA": metrics["Obj_PyPSA"],
             "Obj_SMSpp": metrics["Obj_SMSpp"],
             "Obj_rel_error_pct": metrics["Obj_rel_error_pct"],
+            "PyPSA_total_s": metrics.get("PyPSA_total_s"),
             "SMSpp_total_s": metrics.get("SMSpp_total_s"),
         },
         title="\nMetrics:",
