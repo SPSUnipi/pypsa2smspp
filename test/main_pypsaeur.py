@@ -74,6 +74,7 @@ PYSMSSP_OPTIONS = {"logging": True}
 # Cleaning toggles
 DO_CLEAN_E_SUM = False
 DO_CLEAN_CICLICITY_STORAGE = False
+DO_CLEAN_DISPATCH_SETPOINTS = True  # drop p_set/e_set on dispatchable comps
 DO_ADD_SLACK_UNIT = True
 DO_REDUCE_SNAPSHOTS = True
 REDUCE_SNAPSHOTS_TO = 200
@@ -116,6 +117,7 @@ from pypsa2smspp.transformation import Transformation
 from pypsa2smspp.network_correction import (
     clean_e_sum,
     clean_ciclicity_storage,
+    clean_dispatch_setpoints,
     add_slack_unit,
     reduce_snapshots_and_scale_costs,
     clean_storage_units,
@@ -237,6 +239,9 @@ try:
 
     if DO_CLEAN_CICLICITY_STORAGE:
         n_smspp = clean_ciclicity_storage(n_smspp)
+
+    if DO_CLEAN_DISPATCH_SETPOINTS:
+        n_smspp = clean_dispatch_setpoints(n_smspp)
 
     if DO_REDUCE_SNAPSHOTS:
         n_smspp = reduce_snapshots_and_scale_costs(n_smspp, target=REDUCE_SNAPSHOTS_TO, scale_capital_costs=False)
