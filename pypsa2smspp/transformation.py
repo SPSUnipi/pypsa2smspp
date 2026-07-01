@@ -12,7 +12,6 @@ import os
 from pypsa2smspp.transformation_config import TransformationConfig
 from pysmspp import SMSNetwork, SMSFileType, Attribute, Dimension, Variable, Block, SMSConfig
 from pypsa2smspp import logger
-from copy import deepcopy
 import pysmspp
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Union, Literal, Callable
@@ -233,8 +232,11 @@ class Transformation:
 
             Any other keys are forwarded as solver-constructor kwargs (power-user usage).
         """
-        config = TransformationConfig()
-        self.config = deepcopy(config)
+        # NB: assign a fresh config directly (do NOT deepcopy). The parameter
+        # lambdas capture `self` in their closure; a deepcopy leaves them bound
+        # to the original instance, so later overrides of e.g.
+        # config.investment_upper_bound would be silently ignored.
+        self.config = TransformationConfig()
 
         self.merge_links = merge_links
         if merge_selector is not None:
@@ -295,7 +297,9 @@ class Transformation:
         n.stores['max_hours'] = self.config.max_hours_stores
         n.storage_units['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
         n.stores['snapshots_weighting'] = n.snapshot_weightings['stores'].iloc[0]
-        
+
+        self._set_investment_upper_bound(n)
+
         n_direct = get_base_scenario_network(n)
 
         with step(self.timer, "consistency_check", verbose=verbose):
@@ -309,9 +313,40 @@ class Transformation:
 
         with step(self.timer, "convert_to_blocks", verbose=verbose):
             self.sms_network = self.convert_to_blocks()
-        
+
         return self.sms_network
-    
+
+    def _set_investment_upper_bound(self, n):
+        """
+        Set a proportional, non-binding investment cap for uncapped assets.
+
+        A finite value is substituted for a non-finite ``p_nom_max`` when building
+        the InvestmentBlock UpperBound. A fixed huge cap (e.g. 1e13) never binds
+        but is badly scaled: it makes CPLEX/HiGHS abort and floors the Lagrangian
+        bundle's convergence through a badly-conditioned master QP. Scaling the
+        cap to the peak total demand keeps it non-binding (no single asset
+        usefully exceeds the total demand it can serve, over any horizon) while
+        keeping the numerics well conditioned. Falls back to the configured
+        ``investment_upper_bound`` when there is no demand to scale against.
+        """
+        # Scale = total weighted energy demand (MWh): it upper-bounds both the
+        # power capacity of any generator/link and the ENERGY capacity of any
+        # store (whose e_nom, power x hours, can be far larger than the peak
+        # power), so the cap never truncates either. The peak power is kept as a
+        # floor for the degenerate single-snapshot case.
+        scale = 0.0
+        p_set = n.loads_t.get("p_set")
+        if p_set is not None and not p_set.empty:
+            total = p_set.abs().sum(axis=1)
+            w = n.snapshot_weightings["objective"]
+            scale = max(float((total * w).sum()), float(total.max()))
+        if "p_set" in n.loads.columns:
+            scale = max(scale, float(n.loads["p_set"].abs().fillna(0.0).sum()))
+        if scale > 0.0:
+            self.config.investment_upper_bound = (
+                self.config.investment_upper_bound_factor * scale
+            )
+
     def optimize(self, verbose: bool = True):
         if self.sms_network is None:
             raise ValueError("Model must be created before optimization. Call create_model(n) first.")

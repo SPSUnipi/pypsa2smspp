@@ -34,6 +34,7 @@ from pypsa2smspp.transformation_config import TransformationConfig
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
     clean_global_constraints,
+    clean_dispatch_setpoints,
     clean_e_sum,
     clean_efficiency_link,
     clean_ciclicity_storage,
@@ -51,6 +52,7 @@ __all__ = [
     # network correction tools
     "clean_marginal_cost",
     "clean_global_constraints",
+    "clean_dispatch_setpoints",
     "clean_e_sum",
     "clean_efficiency_link",
     "clean_ciclicity_storage",

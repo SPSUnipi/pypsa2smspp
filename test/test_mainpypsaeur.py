@@ -42,7 +42,10 @@ OUT_TEST.mkdir(parents=True, exist_ok=True)
 
 # --- Domain imports (after PYTHONPATH is set) ---
 from pypsa2smspp.transformation import Transformation
-from pypsa2smspp.network_correction import clean_ciclicity_storage
+from pypsa2smspp.network_correction import (
+    clean_ciclicity_storage,
+    clean_dispatch_setpoints,
+)
 
 
 # ---------- Utilities ----------
@@ -72,6 +75,7 @@ def run_single_nc(
     capacity_expansion_ucblock: bool,
     solver_name: str = "gurobi",
     do_clean_ciclicity_storage: bool = True,
+    do_clean_dispatch_setpoints: bool = True,
     export_pypsa_lp: bool = True,
     export_pypsa_nc: bool = True,
     export_smspp_repopulated_nc: bool = True,
@@ -116,6 +120,8 @@ def run_single_nc(
         n_clean = n_raw
         if do_clean_ciclicity_storage:
             n_clean = clean_ciclicity_storage(n_clean)
+        if do_clean_dispatch_setpoints:
+            n_clean = clean_dispatch_setpoints(n_clean)
 
         # -------- PyPSA optimization (reference) --------
         network = n_clean.copy()

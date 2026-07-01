@@ -32,7 +32,40 @@ def clean_global_constraints(n, inplace=True):
         net.remove("GlobalConstraint", net.global_constraints.index)
 
     return net
-    
+
+def clean_dispatch_setpoints(n, inplace=True):
+    """
+    Drop the dispatch set-points (p_set, e_set) of dispatchable components.
+
+    On Generator/Link/Store/StorageUnit a finite p_set (or e_set) is a
+    power-flow set-point, not a LOPF input; recent PyPSA enforces it as a
+    fixed-dispatch equality constraint, which freezes those components (e.g. a
+    p_set=0 on a heat-supply link forces the optimizer to shed the heat demand
+    at VOLL instead of serving it). SMS++ ignores these set-points, so leaving
+    them in only inflates the PyPSA reference. Load p_set is the demand and is
+    kept. Networks built from Excel already drop it in add_component; this
+    covers networks loaded from netCDF or built outside that path.
+    """
+    net = n if inplace else n.copy()
+
+    # component (plural table) -> its dispatch set-point attributes
+    dispatchable = {
+        "generators": ("p_set",),
+        "links": ("p_set",),
+        "stores": ("p_set", "e_set"),
+        "storage_units": ("p_set",),
+    }
+    for plural, attrs in dispatchable.items():
+        static = getattr(net, plural)
+        dynamic = getattr(net, plural + "_t")
+        for attr in attrs:
+            if attr in static.columns:
+                static[attr] = np.nan
+            if attr in dynamic and not dynamic[attr].empty:
+                dynamic[attr] = dynamic[attr].iloc[:, :0]
+
+    return net
+
 def clean_e_sum(n):
     n.generators.e_sum_max = float('inf')
     n.generators_e_sum_min = float('-inf')
