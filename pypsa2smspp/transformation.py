@@ -49,6 +49,7 @@ from pypsa2smspp.utils import (
     get_param_as_dense,
     ucblock_variables,
     preprocess_zero_capital_cost_extendable_generators,
+    preprocess_zero_capital_cost_extendable_lines_links,
     get_bus_demand_matrix,
     preprocess_dynamic_link_parameters_to_static_means,
     apply_time_dependent_link_data_to_lines
@@ -454,7 +455,15 @@ class Transformation:
             logger=logger,
             return_fixed_count=True,
         )
-        
+
+        n, fixed_investment_lines_links = preprocess_zero_capital_cost_extendable_lines_links(
+            n,
+            fixed_capacity=1e9,
+            update_bounds=True,
+            logger=logger,
+            return_fixed_count=True,
+        )
+
     
         # n = preprocess_dynamic_link_parameters_to_static_means(
         #     n,
