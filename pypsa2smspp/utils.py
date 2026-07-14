@@ -475,6 +475,7 @@ def correct_dimensions(
     n,
     expansion_ucblock,
     fixed_investment_generators=0,
+    fixed_investment_lines_links=0,
 ):
     """
     Correct SMS++ dimensions based on particular cases/flags
@@ -482,6 +483,8 @@ def correct_dimensions(
     2. if we expand lines with DesignNetworkBlock, define NumberNetworks
     3. if we are in sector coupled, reduce the number of branches associated (if merge_links)
     4. if generator preprocessing makes investment generators fixed, remove them from NumAssets
+    5. if line/link preprocessing makes investment lines/links fixed, remove them from
+       the design lines (UCBlock path) or from NumAssets (InvestmentBlock path)
     """
     
     # Prime righe facoltative perché se ho sector coupled lo gestisco già alla fine...
@@ -497,13 +500,16 @@ def correct_dimensions(
         dimensions['UCBlock']["NumberInstants"] = dimensions['UCBlock']["TimeHorizon"]
     
     if expansion_ucblock:
-       dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links 
-       dimensions['NetworkBlock']['NumberDesignLines_links'] -= number_ext_merg_links 
+       dimensions['InvestmentBlock']['NumberDesignLines'] -= number_ext_merg_links
+       dimensions['NetworkBlock']['NumberDesignLines_links'] -= number_ext_merg_links
+       dimensions['InvestmentBlock']['NumberDesignLines'] -= int(fixed_investment_lines_links)
+       dimensions['NetworkBlock']['NumberDesignLines_links'] -= int(fixed_investment_lines_links)
        if dimensions['InvestmentBlock']['NumberDesignLines'] > 0:
            dimensions['UCBlock']['NumberNetworks'] = 1
     else:
        dimensions['InvestmentBlock']['NumAssets'] -= number_ext_merg_links
        dimensions['InvestmentBlock']['NumAssets'] -= int(fixed_investment_generators)
+       dimensions['InvestmentBlock']['NumAssets'] -= int(fixed_investment_lines_links)
     
     if dimensions['NetworkBlock']['NumberBranches'] > 0:
         # dimensions['NetworkBlock']['NumberBranches'] -= number_merged_links # sbagliato perché viene calcolato dopo e quindi tiene già conto dei 100

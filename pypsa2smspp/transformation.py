@@ -534,6 +534,7 @@ class Transformation:
             n,
             self.capacity_expansion_ucblock,
             fixed_investment_generators=fixed_investment_generators,
+            fixed_investment_lines_links=fixed_investment_lines_links,
         )
     
         self._dc_index = build_dc_index(n, links_before, links_after)
