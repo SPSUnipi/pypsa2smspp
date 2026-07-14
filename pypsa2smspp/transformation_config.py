@@ -159,7 +159,7 @@ class TransformationConfig:
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
-            "UpperBound": lambda p_nom_max: p_nom_max.replace(np.inf, self.investment_upper_bound).values,
+            "UpperBound": lambda p_nom_max: p_nom_max.values,
             # "InstalledQuantity": lambda p_nom: p_nom.replace(0, 1e-6).values,
             "InstalledQuantity": lambda p_nom: np.zeros_like(p_nom), # This is used now that we want to add objective constant as separated
             }
@@ -227,12 +227,4 @@ class TransformationConfig:
         }
         
         self.max_hours_stores = 1
-
-        # Cap substituted for a non-finite p_nom_max when building the
-        # InvestmentBlock UpperBound. This default is only a fallback for
-        # networks with no demand to scale against.
-        self.investment_upper_bound = 1e13
-        # Multiple of the total energy demand used as the (proportional,
-        # well-scaled) non-binding investment cap.
-        self.investment_upper_bound_factor = 1e1
 
