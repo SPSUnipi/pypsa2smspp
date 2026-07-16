@@ -265,6 +265,10 @@ class Transformation:
 
         self.sms_network = None
         self.result = None
+        # capex of extendable thermals fixed at their nominal capacity in the
+        # UCBlock path: a constant the solver objective does not carry, added
+        # back to the reported objective to match PyPSA (see the block loop)
+        self._fixed_thermal_capex = 0.0
         self.problem_structure = {}
         self.tssb_data = None
         self.design_variables = []
@@ -624,7 +628,34 @@ class Transformation:
                     intermittent_carriers=self.intermittent_carriers,
                     default_intermittent=renewable_carriers,
                 )
-    
+
+                # UCBlock cannot expand a thermal unit: its commitment u_t is a
+                # binary variable and a continuous design would multiply it in
+                # the maximum power constraint, making the model bilinear. Rather
+                # than normalizing the unit to a 1 MW module with no design
+                # variable, fix an extendable thermal at its nominal capacity.
+                if (
+                    self.capacity_expansion_ucblock
+                    and attr_name == "ThermalUnitBlock_parameters"
+                    and is_extendable(components_df.loc[[component]],
+                                      components.name, nominal_attrs)
+                ):
+                    nominal = nominal_attrs[components.name]
+                    p_nom = components_df.loc[component, nominal]
+                    components_df.loc[component, f"{nominal}_extendable"] = False
+                    # the fixed unit carries no design variable, so its capex is
+                    # a constant absent from the solver objective; accumulate it
+                    # to add back when reporting the objective
+                    self._fixed_thermal_capex += (
+                        components_df.loc[component, "capital_cost"] * p_nom
+                    )
+                    logger.warning(
+                        "%s is an extendable thermal unit, which UCBlock cannot "
+                        "expand; fixing it at its nominal capacity %s=%g. Use the "
+                        "InvestmentBlock path to expand thermal units.",
+                        component, nominal, p_nom,
+                    )
+
                 self.add_UnitBlock(
                     attr_name,
                     components_df.loc[[component]],
@@ -2034,7 +2065,13 @@ class Transformation:
             inner_block_name=inner_block_name,
             **solver_options,
         )
-    
+
+        # add back the capex of extendable thermals fixed at nominal capacity,
+        # a constant the solver objective does not carry (UCBlock path only)
+        if self._fixed_thermal_capex and self.result.objective_value is not None \
+                and np.isfinite(self.result.objective_value):
+            self.result._objective_value += self._fixed_thermal_capex
+
         return self.result
 
 
