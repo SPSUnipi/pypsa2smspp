@@ -19,6 +19,7 @@ import math
 from network_definition import NetworkDefinition
 
 from pypsa2smspp.transformation import Transformation
+from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
 from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
@@ -44,6 +45,61 @@ TSSB_CONFIGFILE = "TSSBlock/TSSBSCfg.txt"
 
 OBJECTIVES_CSV = OUT_TEST / "tssb_objectives_report.csv"
 _OBJECTIVES_HEADER_WRITTEN = False
+
+TSSB_NETWORK_DIR = Path(__file__).resolve().parent / "networks" / "test_tssb"
+TSSB_NETWORK_PARAMETER_MAP = {
+    "demand": ("demand",),
+    "maxpower": ("renewable_maxpower",),
+    "inflow": ("hydro_inflow",),
+    "complete": ("demand", "renewable_maxpower", "hydro_inflow"),
+}
+
+
+def _validate_stochastic_parameter_map() -> None:
+    valid_parameters = set(STOCHASTIC_PARAMETER_REGISTRY)
+
+    for tag, parameters in TSSB_NETWORK_PARAMETER_MAP.items():
+        unknown = set(parameters) - valid_parameters
+        if unknown:
+            raise ValueError(
+                f"Unknown stochastic parameter(s) for {tag!r}: {sorted(unknown)}"
+            )
+
+
+def stochastic_parameters_for_network(nc_path: Path) -> Tuple[str, ...]:
+    """
+    Infer TSSB stochastic parameters from the PyPSA network fixture name.
+    """
+    name = nc_path.stem.lower()
+
+    if "complete" in name:
+        return TSSB_NETWORK_PARAMETER_MAP["complete"]
+
+    for tag in ("demand", "maxpower", "inflow"):
+        if tag in name:
+            return TSSB_NETWORK_PARAMETER_MAP[tag]
+
+    raise ValueError(f"Cannot infer stochastic parameters from {nc_path.name!r}")
+
+
+def get_tssb_network_cases(
+    inputs_dir: Path = TSSB_NETWORK_DIR,
+) -> list[Tuple[Path, Tuple[str, ...]]]:
+    """
+    Get PyPSA network fixtures for TSSB regression tests.
+    """
+    return [
+        (path, stochastic_parameters_for_network(path))
+        for path in sorted(inputs_dir.glob("test*.nc"))
+    ]
+
+
+_validate_stochastic_parameter_map()
+TSSB_NETWORK_CASES = get_tssb_network_cases()
+TSSB_NETWORK_IDS = [
+    f"{path.stem}[{'+'.join(stochastic_parameters)}]"
+    for path, stochastic_parameters in TSSB_NETWORK_CASES
+]
 
 
 def stochastic_parameter_cases(
@@ -270,6 +326,62 @@ def run_tssb_block(
         pass
 
 
+def run_tssb_network(
+    nc_path: Path,
+    stochastic_parameters: Sequence[str],
+) -> None:
+    """
+    TSSB regression test for an already-stochastic PyPSA network fixture.
+    """
+    parameter_tag = _parameter_tag(stochastic_parameters)
+    case_name = f"network__{nc_path.stem}__{parameter_tag}"
+
+    workdir = OUT_TEST / "tssb_networks" / case_name
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    network_nc = workdir / f"network_{case_name}.nc"
+
+    safe_remove(network_nc)
+
+    n = pypsa.Network(str(nc_path))
+
+    transformation = Transformation(
+        name=case_name,
+        configfile=TSSB_CONFIGFILE,
+        enable_thermal_units=False,
+        workdir=workdir,
+        stochastic_parameters={
+            "stochastic_type": "tssb",
+            "parameters": list(stochastic_parameters),
+        },
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        pysmspp_options={},
+    )
+
+    transformation.create_model(n, verbose=False)
+    transformation.optimize(verbose=False)
+
+    obj_smspp = float(transformation.result.objective_value)
+
+    _append_objective_row(
+        case_name=case_name,
+        network_path=nc_path,
+        stochastic_parameters=stochastic_parameters,
+        obj_smspp=obj_smspp,
+    )
+
+    assert transformation.result is not None
+    assert math.isfinite(obj_smspp)
+
+    try:
+        n.export_to_netcdf(str(network_nc))
+    except Exception:
+        pass
+
+
 @pytest.mark.parametrize(
     "xlsx_path",
     tssb_test_cases["xlsx_paths"],
@@ -286,6 +398,18 @@ def test_tssb(xlsx_path, stochastic_parameters):
 
     run_tssb_block(
         xlsx_path=xlsx_path,
+        stochastic_parameters=stochastic_parameters,
+    )
+
+
+@pytest.mark.parametrize(
+    "nc_path, stochastic_parameters",
+    TSSB_NETWORK_CASES,
+    ids=TSSB_NETWORK_IDS,
+)
+def test_tssb_network(nc_path, stochastic_parameters):
+    run_tssb_network(
+        nc_path=nc_path,
         stochastic_parameters=stochastic_parameters,
     )
 
