@@ -1719,8 +1719,10 @@ class Transformation:
 
         self.convert_to_scenario_tree(mssb_block, "ScenarioGenerator")
         if not self.problem_structure.get("investment_outside", False):
-            self.convert_to_static_abstract_path(mssb_block,
-                                                 "StaticAbstractPath")
+            self.convert_to_static_abstract_path(
+                mssb_block , "StaticAbstractPath" ,
+                root_only=bool( self.tssb_data.get(
+                                    "static_abstract_path_root" ) ) )
 
         for index, group in enumerate(groups):
             inner_id = f"Block_{index}"
@@ -1861,12 +1863,20 @@ class Transformation:
         return master
     
     
-    def convert_to_static_abstract_path(self, master, name_id="StaticAbstractPath"):
+    def convert_to_static_abstract_path(self, master,
+                                        name_id="StaticAbstractPath",
+                                        root_only=False):
         """
         Add the StaticAbstractPath block to a TSSB block.
+
+        With root_only the path names the design decisions taken at the
+        root alone, which is what the outer level of a tree with a second
+        decision stage ties; everywhere else the path names them all.
         """
-        sap_data = self.tssb_data["static_abstract_path"]
-        dims = self.dimensions["tssb"]["sap"]
+        which = "static_abstract_path_root" if root_only \
+                else "static_abstract_path"
+        sap_data = self.tssb_data[ which ]
+        dims = self.dimensions["tssb"][ "sap_root" if root_only else "sap" ]
     
         sap_block = Block(
             block_type="AbstractPath",
@@ -2513,12 +2523,27 @@ class Transformation:
             "TotalLength": sap_data["TotalLength"],
         }
 
+        # with a second decision stage the two levels of the tree tie
+        # different things: the outer one only what is decided at the root,
+        # the inner one everything, so that what is decided once the branch
+        # is known is common to its leaves and free across branches
+        root_variables = self._root_design_variables(design_variables)
+        if root_variables is not None:
+            sap_root = build_tssb_static_abstract_path(root_variables)
+            self.dimensions["tssb"]["sap_root"] = {
+                "PathDim": sap_root["PathDim"],
+                "TotalLength": sap_root["TotalLength"],
+            }
+        else:
+            sap_root = None
+
         stochastic_block = self.build_tssb_stochastic_block(n)
 
         self.tssb_data = {
             "enabled": True,
             "discrete_scenario_set": dss_data,
             "static_abstract_path": sap_data,
+            "static_abstract_path_root": sap_root,
             "stochastic_block": stochastic_block,
         }
 
@@ -2684,6 +2709,48 @@ class Transformation:
             )
             
             
+    def _root_design_variables(self, design_variables):
+        """
+        The subset of the design descriptors that is decided at the root.
+
+        Returns None when every decision is taken there, which is the ordinary
+        two-stage case and the one where the two levels of the tree tie the
+        very same things. The assignment comes by component name, and the
+        descriptors carry the index of their Block, so the names are resolved
+        through the unit blocks the converter has just built.
+        """
+        stages = self.problem_structure.get("design_stages", None)
+        if not stages:
+            return None
+
+        wanted = set( stages[ "root" ] )
+        indices = set()
+        for name, unitblock in self.unitblocks.items():
+            if ( name in wanted ) or ( unitblock.get( "name" ) in wanted ):
+                position = str( unitblock.get( "enumerate" , "" ) ).split( "_" )
+                if len( position ) == 2 and position[ 1 ].isdigit():
+                    indices.add( int( position[ 1 ] ) )
+
+        missing = len( wanted ) - len( indices )
+        if missing > 0:
+            raise ValueError(
+                f"{missing} of the components said to be decided at the root "
+                "have no unit Block: design_stages names components of the "
+                "network, and only the expandable ones have a design Variable."
+            )
+
+        root = [ dv for dv in design_variables
+                 if int( dv[ "block_index" ] ) in indices ]
+
+        if not root:
+            raise ValueError(
+                "no design Variable is left at the root: with everything "
+                "decided after the branch is known the branches do not share "
+                "anything and the problem is not a tree."
+            )
+
+        return root
+
     def _collect_design_variables(self):
         """
         Collect design-variable descriptors for the TSSB StaticAbstractPath.

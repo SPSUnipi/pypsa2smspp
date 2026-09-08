@@ -338,7 +338,50 @@ def _normalize_stochastic_parameters(
         ),
         "investment_outside": bool( sp.get("investment_outside", False) ),
         "design_cost_outside": bool( sp.get("design_cost_outside", False) ),
+        "design_stages": normalize_design_stages( sp.get("design_stages",
+                                                          None) ),
     }
+
+
+def normalize_design_stages(design_stages):
+    """
+    Read which design decisions are taken when.
+
+    A two-stage problem decides them all at the root and says nothing here. A
+    problem with a second decision stage says which components are decided at
+    the root and which are decided one stage later, once the branch is known:
+
+        {"root": ["bus0 solar", ...], "branch": ["bus0 solar late", ...]}
+
+    The two lists are what tells the writer which here-and-now paths to put at
+    which level of the tree, the outer one naming the root decisions alone and
+    the inner one naming all of them, so that the later ones are tied inside a
+    branch and free across branches.
+    """
+    if not design_stages:
+        return None
+
+    root = [ str( name ) for name in design_stages.get( "root" , [] ) ]
+    branch = [ str( name ) for name in design_stages.get( "branch" , [] ) ]
+
+    if not branch:
+        return None          # nothing is decided later: a plain two-stage one
+
+    if not root:
+        raise ValueError(
+            "design_stages names decisions taken after the branch is known "
+            "but none taken at the root: with nothing decided before, the "
+            "problem is a collection of independent branches, not a tree."
+        )
+
+    common = set( root ) & set( branch )
+    if common:
+        raise ValueError(
+            "a design decision is taken either at the root or after the "
+            "branch is known, not both: " + ", ".join( sorted( common ) )
+        )
+
+    return { "root": root , "branch": branch }
 
 
 def describe_problem_structure(
@@ -372,6 +415,7 @@ def describe_problem_structure(
                               else False,
         "design_cost_outside": sp["design_cost_outside"] if is_stochastic
                                else False,
+        "design_stages": sp["design_stages"] if is_stochastic else None,
     }
 
 
