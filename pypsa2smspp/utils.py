@@ -1433,10 +1433,14 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
-        # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
+        # An uncapped p_nom_max stays infinite: a finite sentinel is a bound the
+        # solver has to carry on a column that appears in every time step, which
+        # keeps that column in the model and costs the barrier a denser
+        # factorization, while the design is already kept finite by its cost
+        # (the zero-cost extendable assets are made non-extendable upstream, see
+        # preprocess_zero_capital_cost_extendable_generators)
         def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(p_nom_max_safe)
+            return (first_scalar(p_nom_max)
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
         d["MaxCapacityDesign"] = _max_cap_design
@@ -1463,9 +1467,9 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(e_nom_max_safe)
+            return (first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
@@ -1481,10 +1485,10 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "ConverterMaxCapacityDesign"
     if "ConverterMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
             # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
-            return (10.0 * first_scalar(e_nom_max_safe)
+            return (10.0 * first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
