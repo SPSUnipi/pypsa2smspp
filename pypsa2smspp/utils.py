@@ -1417,6 +1417,24 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
+def zero_investment_cost(IntermittentUnitBlock_parameters=None,
+                         BatteryUnitBlock_store_parameters=None):
+    """
+    Make the units state a design Variable they do not pay for.
+
+    The capacity of an extendable unit keeps being a Variable of the unit, with
+    its own bounds, but its InvestmentCost is zeroed: whoever states that cost
+    outside the scenarios, in an InvestmentBlock above them, would otherwise
+    count it twice. What this buys is that the value of a scenario becomes
+    monotone in the design, which is the property a generic Benders solver
+    reads the sign of its cuts from.
+    """
+    for d in ( IntermittentUnitBlock_parameters ,
+               BatteryUnitBlock_store_parameters ):
+        if d is not None and "InvestmentCost" in d:
+            d[ "InvestmentCost" ] = lambda *args , **kwargs : 0.0
+
+
 def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
@@ -1517,13 +1535,16 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     
     
     # --- InvestmentBlockParameters ---
+    # left alone when no template is given, which is what states that the
+    # InvestmentBlock keeps naming assets rather than design lines
     i = InvestmentBlock
-    
-    # DesignLines
-    i['InvestmentCost'] = i.pop('Cost')
-    i['MinCapacityDesign'] = i.pop('LowerBound')
-    i['MaxCapacityDesign'] = i.pop('UpperBound')
-    i.pop('InstalledQuantity')    
+
+    if i is not None:
+        # DesignLines
+        i['InvestmentCost'] = i.pop('Cost')
+        i['MinCapacityDesign'] = i.pop('LowerBound')
+        i['MaxCapacityDesign'] = i.pop('UpperBound')
+        i.pop('InstalledQuantity')    
 
 
 def build_dc_index(n, links_merged_df_before_split, links_df_after_split):
