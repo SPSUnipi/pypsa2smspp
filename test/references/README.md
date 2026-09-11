@@ -25,16 +25,31 @@ it is not there.
 On `pypsa_2stage_c3_d3_b1_t1`, the two-decision tree:
 
 ```
-everything at the root, what a two-stage problem can say   229591.79
-the exact optimum, extensive_two_stage.py                  221972.59
-SMS++ on the file emit_two_stage.py writes                 221973      (6 digits)
-everything once the climate is known, wait-and-see         219432.86
+everything at the root, what a two-stage problem can say   2275376.14
+the exact optimum, extensive_two_stage.py                  2222993.75
+SMS++ on the file emit_two_stage.py writes                 2.22299e+06  (6 digits)
+everything once the climate is known, wait-and-see         2202994.58
 ```
 
 The optimum sits strictly between the two bounds, which says the second
-decision stage is there, and it agrees with what SMS++ makes of the emitted
-file, which says the file states the tree we mean.
+decision stage is there and is worth 52382, and it agrees with what SMS++
+makes of the emitted file, which says the file states the tree we mean.
 
-Note on this instance: none of its networks carries a `p_max_pu`, so the solar
-is available all the time and the climate acts on the demand alone. It
-exercises the second decision stage, not the stochasticity of the renewables.
+The instance these numbers come from is the one written after the fix
+described below: an earlier one had no `p_max_pu` at all, and on it the same
+three scripts gave 229591.79, 221972.59 and 219432.86.
+
+## The one bug these references have caught so far
+
+`gen_two_stage_design.py` took the list of the solar Generator **after**
+`set_scenarios()`. On a stochastic network the index is a MultiIndex, so the
+element is a tuple and `"solar" in g` stops being a substring test and becomes
+an equality one: the list came out empty and the availability profile was never
+written. The climate then acted on the demand alone, and `renewable_maxpower`,
+which the conversion is asked to make stochastic, had nothing to vary.
+
+It is worth knowing how it surfaced, because the reference did its job and was
+not believed: `extensive_two_stage.py`, written with the profile, disagreed with
+the instance by a factor of ten. The first reading was that the reference was
+wrong, and the profile was taken out of it to make the two agree. Only the
+second reading looked at the instance.

@@ -90,6 +90,9 @@ def main():
     n, loads = deterministic_base(args.buses, args.days)
     base_pmaxpu = solar_profile(n.snapshots)
     root_design, late_design = split_expandable(n, args.late_premium)
+    # taken here, before any set_scenarios: on a stochastic network the index
+    # is a MultiIndex, so g is a tuple and "solar" in g stops being a
+    # substring test and becomes an equality one, giving an empty list
     solar = [g for g in n.generators.index if "solar" in g]
 
     climate_multipliers, climate_weights = climate_axis(args.climates)
@@ -143,14 +146,16 @@ def main():
     # the root-only network: no late twin at all, everything decided once
     root_only = n.copy()
     root_only.remove("Generator", late_design)
+    # the twins are gone from this one, and writing a profile for a Generator
+    # that is not there leaves an orphan column behind
+    root_solar = [g for g in solar if g in root_only.generators.index]
     root_only.set_scenarios({leaf["scenario"]: leaf["joint"]
                              for leaf in leaves})
     for leaf in leaves:
         for load in loads.columns:
             root_only.loads_t.p_set[leaf["scenario"], load] = \
                 leaf["load"][load].to_numpy()
-        for generator in [g for g in root_only.generators.index
-                          if "solar" in g]:
+        for generator in root_solar:
             root_only.generators_t.p_max_pu[leaf["scenario"], generator] = \
                 leaf["p_max_pu"].to_numpy()
     root_only.export_to_netcdf(str(DATA / f"{name}_flat.nc"))
@@ -164,7 +169,7 @@ def main():
         for load in loads.columns:
             full.loads_t.p_set[leaf["scenario"], load] = \
                 leaf["load"][load].to_numpy()
-        for generator in [g for g in full.generators.index if "solar" in g]:
+        for generator in solar:
             full.generators_t.p_max_pu[leaf["scenario"], generator] = \
                 leaf["p_max_pu"].to_numpy()
     full.export_to_netcdf(str(DATA / f"{name}_full.nc"))
@@ -174,6 +179,7 @@ def main():
         inner = n.copy()
         inner.remove("Generator", root_design)   # only the late part is left,
         inner.generators.loc[late_design, "capital_cost"] /= args.late_premium
+        inner_solar = [g for g in solar if g in inner.generators.index]
         weights = [leaf["conditional"] for leaf in branch["leaves"]]
         names = [leaf["scenario"] for leaf in branch["leaves"]]
         inner.set_scenarios(dict(zip(names, weights)))
@@ -181,8 +187,7 @@ def main():
             for load in loads.columns:
                 inner.loads_t.p_set[leaf["scenario"], load] = \
                     leaf["load"][load].to_numpy()
-            for generator in [g for g in inner.generators.index
-                              if "solar" in g]:
+            for generator in inner_solar:
                 inner.generators_t.p_max_pu[leaf["scenario"], generator] = \
                     leaf["p_max_pu"].to_numpy()
         inner.export_to_netcdf(str(DATA / f"{name}_{branch['name']}.nc"))

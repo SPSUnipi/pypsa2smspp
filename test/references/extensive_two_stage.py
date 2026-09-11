@@ -29,7 +29,8 @@ DATA = HERE.parent / "output" / "mssb_tree"
 DATA.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(HERE))
 
-from gen_tree_instance import climate_axis, demand_axis, deterministic_base
+from gen_tree_instance import (climate_axis, demand_axis, deterministic_base,
+                               solar_profile)
 
 LATE = "late"
 
@@ -37,6 +38,7 @@ LATE = "late"
 def build(climates, demands, buses, days, premium):
     """One network holding every leaf, and who shares what with whom."""
     base, loads = deterministic_base(buses, days)
+    profile = solar_profile(base.snapshots)
     horizon = len(base.snapshots)
 
     # the design of the base network: the extendable Generator are the root
@@ -49,8 +51,7 @@ def build(climates, demands, buses, days, premium):
     leaves = []
     for climate, (availability, probability) in enumerate(
             zip(climate_multipliers, climate_weights)):
-        # the fixture carries no availability profile: the climate acts on
-        # the demand alone, exactly as the networks the bounds are read from
+        p_max_pu = (profile * availability).clip(upper=1.0)
         multipliers, conditionals = demand_axis(demands, climate, climates)
         for demand, (multiplier, conditional) in enumerate(
                 zip(multipliers, conditionals)):
@@ -59,6 +60,7 @@ def build(climates, demands, buses, days, premium):
                 "name": f"c{climate}_d{demand}",
                 "weight": float(probability * conditional),
                 "load": loads * multiplier,
+                "p_max_pu": p_max_pu,
                 })
 
     n = pypsa.Network()
@@ -91,6 +93,13 @@ def build(climates, demands, buses, days, premium):
                       marginal_cost=generator.marginal_cost,
                       # paid once by the set of copies that share it
                       capital_cost=cost * leaf["weight"])
+
+                if generator.carrier == "solar":
+                    # the climate scales the availability, and it does so for
+                    # the late twin exactly as for the root part
+                    series = pd.Series(0.0, index=n.snapshots)
+                    series.loc[window] = leaf["p_max_pu"].to_numpy()
+                    n.generators_t.p_max_pu[copy] = series
 
                 if generator.p_nom_extendable:
                     # the root part is one decision for the whole tree, the
