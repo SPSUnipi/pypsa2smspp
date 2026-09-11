@@ -31,6 +31,13 @@ jobs:
         shell: bash -el {0}
     env:
       MPLBACKEND: Agg  # https://github.com/orgs/community/discussions/26434
+      # the runner exposes an RDMA device (the Azure network adapter) that UCX
+      # tries to open with ud_verbs and cannot, which aborts MPI_Init() inside
+      # the SMS++ tools. SMS++ pre-seeds these itself since tools 9d698dc, but
+      # the conda-forge package installed below is older than that
+      UCX_TLS: tcp,self
+      OMPI_MCA_btl: tcp,self
+      OMPI_MCA_pml: ob1
     steps:
     - uses: actions/checkout@v6
       with:
@@ -83,6 +90,13 @@ jobs:
         - ubuntu-latest
     env:
       MPLBACKEND: Agg  # https://github.com/orgs/community/discussions/26434
+      # the runner exposes an RDMA device (the Azure network adapter) that UCX
+      # tries to open with ud_verbs and cannot, which aborts MPI_Init() inside
+      # the SMS++ tools. SMS++ pre-seeds these itself since tools 9d698dc, but
+      # the conda-forge package installed below is older than that
+      UCX_TLS: tcp,self
+      OMPI_MCA_btl: tcp,self
+      OMPI_MCA_pml: ob1
     steps:
     - uses: actions/checkout@v6
       with:
