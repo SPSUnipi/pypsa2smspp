@@ -1417,6 +1417,24 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
+def zero_investment_cost(IntermittentUnitBlock_parameters=None,
+                         BatteryUnitBlock_store_parameters=None):
+    """
+    Make the units state a design Variable they do not pay for.
+
+    The capacity of an extendable unit keeps being a Variable of the unit, with
+    its own bounds, but its InvestmentCost is zeroed: whoever states that cost
+    outside the scenarios, in an InvestmentBlock above them, would otherwise
+    count it twice. What this buys is that the value of a scenario becomes
+    monotone in the design, which is the property a generic Benders solver
+    reads the sign of its cuts from.
+    """
+    for d in ( IntermittentUnitBlock_parameters ,
+               BatteryUnitBlock_store_parameters ):
+        if d is not None and "InvestmentCost" in d:
+            d[ "InvestmentCost" ] = lambda *args , **kwargs : 0.0
+
+
 def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
@@ -1433,10 +1451,14 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
-        # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
+        # An uncapped p_nom_max stays infinite: a finite sentinel is a bound the
+        # solver has to carry on a column that appears in every time step, which
+        # keeps that column in the model and costs the barrier a denser
+        # factorization, while the design is already kept finite by its cost
+        # (the zero-cost extendable assets are made non-extendable upstream, see
+        # preprocess_zero_capital_cost_extendable_generators)
         def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(p_nom_max_safe)
+            return (first_scalar(p_nom_max)
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
         d["MaxCapacityDesign"] = _max_cap_design
@@ -1463,9 +1485,9 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(e_nom_max_safe)
+            return (first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
@@ -1481,10 +1503,10 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "ConverterMaxCapacityDesign"
     if "ConverterMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
             # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
-            return (10.0 * first_scalar(e_nom_max_safe)
+            return (10.0 * first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
@@ -1513,13 +1535,16 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     
     
     # --- InvestmentBlockParameters ---
+    # left alone when no template is given, which is what states that the
+    # InvestmentBlock keeps naming assets rather than design lines
     i = InvestmentBlock
-    
-    # DesignLines
-    i['InvestmentCost'] = i.pop('Cost')
-    i['MinCapacityDesign'] = i.pop('LowerBound')
-    i['MaxCapacityDesign'] = i.pop('UpperBound')
-    i.pop('InstalledQuantity')    
+
+    if i is not None:
+        # DesignLines
+        i['InvestmentCost'] = i.pop('Cost')
+        i['MinCapacityDesign'] = i.pop('LowerBound')
+        i['MaxCapacityDesign'] = i.pop('UpperBound')
+        i.pop('InstalledQuantity')    
 
 
 def build_dc_index(n, links_merged_df_before_split, links_df_after_split):

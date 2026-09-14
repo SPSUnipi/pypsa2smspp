@@ -5,6 +5,8 @@
 ### New Features and Major Changes
 
 * Support snapshot_weightings != 1 [PR #47](https://github.com/SPSUnipi/pypsa2smspp/pull/47)
+* Emit a MultiStageStochasticBlock from a two-level scenario tree
+* State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 
 ### Minor Changes and Bug Fixes
 

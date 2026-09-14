@@ -45,6 +45,7 @@ from pypsa2smspp.utils import (
     explode_multilinks_into_branches,
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
+    zero_investment_cost,
     build_dc_index,
     get_param_as_dense,
     ucblock_variables,
@@ -366,7 +367,13 @@ class Transformation:
 
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.capacity_expansion_ucblock)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.capacity_expansion_ucblock, nominal_attrs)
+        # with the cost of the design stated outside, the InvestmentBlock
+        # names assets, as it does when the units carry no design at all
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(
+            n ,
+            self.capacity_expansion_ucblock and
+            not self.problem_structure.get("design_cost_outside", False) ,
+            nominal_attrs )
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
         
         
@@ -499,7 +506,8 @@ class Transformation:
             stores_df,
             links_merged_df,
             n,
-            self.capacity_expansion_ucblock,
+            self.capacity_expansion_ucblock and
+            not self.problem_structure.get("design_cost_outside", False),
             fixed_investment_generators=fixed_investment_generators,
             fixed_investment_lines_links=fixed_investment_lines_links,
         )
@@ -511,13 +519,24 @@ class Transformation:
         self._dc_types = list(self._dc_index["physical"]["types"])
     
         if self.capacity_expansion_ucblock:
+            design_cost_outside = self.problem_structure.get(
+                                              "design_cost_outside", False)
             apply_expansion_overrides(
                 self.config.IntermittentUnitBlock_parameters,
                 self.config.BatteryUnitBlock_store_parameters,
                 self.config.IntermittentUnitBlock_inverse,
                 self.config.BatteryUnitBlock_inverse,
-                self.config.InvestmentBlock_parameters,
+                None if design_cost_outside
+                     else self.config.InvestmentBlock_parameters,
             )
+
+            if design_cost_outside:
+                # the design Variable stay where they are, their cost does not:
+                # it is stated once in the InvestmentBlock above the scenarios
+                zero_investment_cost(
+                    self.config.IntermittentUnitBlock_parameters,
+                    self.config.BatteryUnitBlock_store_parameters,
+                )
     
         return {
             "n": n,
@@ -565,6 +584,7 @@ class Transformation:
     
             use_investmentblock = (
                 not self.capacity_expansion_ucblock
+                or self.problem_structure.get("design_cost_outside", False)
                 or components_type in ["lines", "links"]
             )
     
@@ -892,6 +912,10 @@ class Transformation:
         solution_data = {}
     
         if self.problem_structure.get("is_stochastic", False):
+            if self.problem_structure.get("stochastic_type") == "mssb":
+                return self._parse_multistage_solution_to_unitblocks(
+                    solution, n, solution_data
+                )
             return self._parse_stochastic_solution_to_unitblocks(solution, n, solution_data)
     
         return self._parse_deterministic_solution_to_unitblocks(solution, n, solution_data)
@@ -990,6 +1014,71 @@ class Transformation:
         return solution_data
     
     
+    def _parse_multistage_solution_to_unitblocks(self, solution, n, solution_data):
+        """
+        Parse the solution of a MultiStageStochasticBlock.
+
+        Expected layout, one level deeper than the two-stage one, since each
+        outer scenario is itself a TwoStageStochasticBlock:
+            Solution_0
+                ScenarioSolution_0              (outer scenario 0)
+                    ScenarioSolution_0          (its inner scenarios)
+                    ScenarioSolution_1
+                    ...
+                ScenarioSolution_1
+                ...
+
+        The leaves are stored under the very scenario names of the flat
+        network, so that everything downstream reads them as usual.
+        """
+        num_units = self.dimensions["UCBlock"]["NumberUnits"]
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        solution_0 = solution.blocks["Solution_0"]
+        solution_data["MSSB"] = solution_0
+
+        self.networkblock.setdefault("Scenarios", {})
+
+        for outer, group in enumerate(groups):
+            outer_key = f"ScenarioSolution_{outer}"
+
+            if outer_key not in solution_0.blocks:
+                raise KeyError(
+                    f"{outer_key} not found in Solution_0. Expected one block "
+                    "per outer scenario of the scenario tree."
+                )
+
+            outer_block = solution_0.blocks[outer_key]
+
+            for inner, (scenario_name, _) in enumerate(group["scenarios"]):
+                inner_key = f"ScenarioSolution_{inner}"
+
+                if inner_key not in outer_block.blocks:
+                    raise KeyError(
+                        f"{inner_key} not found in {outer_key}. Expected one "
+                        f"block per inner scenario of {group['name']!r}."
+                    )
+
+                scenario_block = outer_block.blocks[inner_key]
+                solution_data[f"{outer_key}/{inner_key}"] = scenario_block
+
+                if self.dimensions["UCBlock"]["NumberLines"] > 0:
+                    self.parse_networkblock_lines(
+                        scenario_block, scenario_name=scenario_name
+                    )
+                    self.generate_line_unitblocks(n, scenario_name=scenario_name)
+
+                self._parse_unitblocks_from_solution_block(
+                    solution_block=scenario_block,
+                    num_units=num_units,
+                    scenario_name=scenario_name,
+                    solution_data=solution_data,
+                )
+
+        split_merged_dcnetworkblocks(self.unitblocks)
+        return solution_data
+
+
     def _parse_unitblocks_from_solution_block(
         self,
         solution_block,
@@ -1483,10 +1572,41 @@ class Transformation:
         if self.problem_structure.get("is_stochastic", False):
             stochastic_type = self.problem_structure.get("stochastic_type", None)
     
-            if stochastic_type != "tssb":
+            if stochastic_type not in ("tssb", "mssb"):
                 raise ValueError(
                     f"Unsupported stochastic_type in convert_to_blocks: {stochastic_type!r}"
                 )
+    
+            # the "Benders form": the investment decision is taken out of the
+            # scenarios and stated once, in an InvestmentBlock wrapping the
+            # whole stochastic Block, rather than replicated in each scenario
+            # and tied by the non-anticipativity Constraint of the extensive
+            # form. The two are the same problem, stated the other way round
+            if self.problem_structure.get("investment_outside", False):
+                self.convert_to_investmentblock(master, 0, "Block_0")
+                master = sn.blocks["Block_0"]
+                index_id = 0
+
+                if stochastic_type == "mssb":
+                    self.convert_to_mssb(master, name_id="InnerBlock")
+                else:
+                    self.convert_to_tssb(master, index_id=0,
+                                         name_id="InnerBlock")
+                    # the investment is stated above: inside the scenarios
+                    # there is the deterministic model alone
+                    self.add_deterministic_model(
+                        master.blocks["InnerBlock"].blocks["StochasticBlock"],
+                        0, inside_stochastic=True, with_investment=False)
+
+                self.sms_network = sn
+                return sn
+
+            if stochastic_type == "mssb":
+                # the multi-stage block builds its own inner blocks, one per
+                # outer-stage scenario, each with the deterministic model in it
+                self.convert_to_mssb(master, name_id="Block_0")
+                self.sms_network = sn
+                return sn
     
             self.convert_to_tssb(master, index_id=0, name_id="Block_0")
     
@@ -1498,7 +1618,24 @@ class Transformation:
         # --------------------------------------------------
         # Deterministic investment / UC nesting
         # --------------------------------------------------
-        if self.problem_structure.get("has_investment_block", False):
+        self.add_deterministic_model(master, index_id, inside_stochastic=inside_tssb)
+    
+        self.sms_network = sn
+        return sn
+    
+    def add_deterministic_model(self, master, index_id=0,
+                                inside_stochastic=False, with_investment=True):
+        """
+        Add the deterministic model, i.e. the optional InvestmentBlock and the
+        UCBlock inside it, to master. This is what every scenario sees, and
+        it is therefore built once per inner Block of a multi-stage problem.
+
+        With with_investment false the InvestmentBlock is left out: this is
+        what the scenarios of the "Benders form" look like, the investment
+        having been taken out of them and stated once, above.
+        """
+        if with_investment and self.problem_structure.get("has_investment_block",
+                                                          False):
             name_id = "InvestmentBlock"
             self.convert_to_investmentblock(master, index_id, name_id)
     
@@ -1506,15 +1643,10 @@ class Transformation:
             index_id += 1
             name_id = "InnerBlock"
         else:
-            name_id = "Block" if inside_tssb else "Block_0"
+            name_id = "Block" if inside_stochastic else "Block_0"
     
-        # --------------------------------------------------
-        # UCBlock always present
-        # --------------------------------------------------
         self.convert_to_ucblock(master, index_id, name_id)
-    
-        self.sms_network = sn
-        return sn
+        return master
     
     def convert_to_tssb(self, master, index_id, name_id):
         """
@@ -1523,8 +1655,17 @@ class Transformation:
         Structure:
         TwoStageStochasticBlock
         ├── DiscreteScenarioSet
-        ├── StaticAbstractPath
+        ├── StaticAbstractPath      (only if it has first-stage variables)
         └── StochasticBlock
+
+        With the investment stated above, in an InvestmentBlock wrapping this
+        Block, the scenarios hold no here-and-now variable at all: there is
+        then nothing for the StaticAbstractPath to address and nothing for
+        the non-anticipativity Constraint to tie, so the path is left out.
+        With the cost alone stated above ("design_cost_outside") the design
+        Variable are instead where they always were, one copy per scenario,
+        so the path is emitted as usual: it is what ties the copies, and what
+        anybody wanting to reach them reads.
         """
         dims = self.dimensions["tssb"]["dss"]
         number_scenarios = dims["NumberScenarios"]
@@ -1539,11 +1680,160 @@ class Transformation:
         tssb_block = master.blocks[name_id]
     
         self.convert_to_discrete_scenario_set(tssb_block, "DiscreteScenarioSet")
-        self.convert_to_static_abstract_path(tssb_block, "StaticAbstractPath")
+        if ( ( not self.problem_structure.get("investment_outside", False) )
+             or self.problem_structure.get("design_cost_outside", False) ):
+            self.convert_to_static_abstract_path(tssb_block,
+                                                 "StaticAbstractPath")
         self.convert_to_stochastic_block(tssb_block, "StochasticBlock")
     
         return master
     
+    def convert_to_mssb(self, master, name_id="Block_0"):
+        """
+        Add a MultiStageStochasticBlock to the SMSNetwork hierarchy.
+
+        Structure:
+        MultiStageStochasticBlock
+        ├── ScenarioGenerator          (the whole scenario tree)
+        ├── StaticAbstractPath         (the first-stage design variables)
+        ├── Block_0                    (TwoStageStochasticBlock, outer scenario 0)
+        │   ├── StaticAbstractPath
+        │   └── StochasticBlock        (data mappings + the model template)
+        └── Block_1 ...
+
+        Unlike the two-stage case the inner blocks carry no DiscreteScenarioSet
+        of their own: each of them reads its own scenarios from the shared tree,
+        which is what ties the inner realizations to the outer branch they hang
+        from.
+        """
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        # pySMSpp knows nothing of this block type, so it is built as a plain
+        # Block carrying the type: everything below it is standard again
+        mssb_block = Block(
+            block_type="MultiStageStochasticBlock",
+            NumberSubBlocks=Dimension("NumberSubBlocks", len(groups)),
+        )
+        master.add_block(name_id, block=mssb_block)
+        mssb_block = master.blocks[name_id]
+
+        self.convert_to_scenario_tree(mssb_block, "ScenarioGenerator")
+        if not self.problem_structure.get("investment_outside", False):
+            self.convert_to_static_abstract_path(
+                mssb_block , "StaticAbstractPath" ,
+                root_only=bool( self.tssb_data.get(
+                                    "static_abstract_path_root" ) ) )
+
+        for index, group in enumerate(groups):
+            inner_id = f"Block_{index}"
+
+            mssb_block.add(
+                "TwoStageStochasticBlock",
+                inner_id,
+                id=f"{index}",
+                NumberScenarios=Dimension(
+                    "NumberScenarios", len(group["scenarios"])
+                ),
+            )
+
+            inner_block = mssb_block.blocks[inner_id]
+
+            if not self.problem_structure.get("investment_outside", False):
+                self.convert_to_static_abstract_path(inner_block,
+                                                     "StaticAbstractPath")
+            self.convert_to_stochastic_block(inner_block, "StochasticBlock")
+            # with the investment stated above, in an InvestmentBlock
+            # wrapping this one, the scenarios hold the deterministic model
+            # alone [see add_deterministic_model()]
+            self.add_deterministic_model(
+                inner_block.blocks["StochasticBlock"], 0,
+                inside_stochastic=True,
+                with_investment=not self.problem_structure.get(
+                    "investment_outside", False),
+            )
+
+        return master
+
+
+    def convert_to_scenario_tree(self, master, name_id="ScenarioGenerator"):
+        """
+        Add the scenario tree, a MultiStageDiscreteScenarioSet, to a MSSB block.
+
+        The tree has one node per realization: the root, one node per outer
+        scenario carrying its probability, and one leaf per inner scenario
+        carrying its probability conditional on the outer one it hangs from,
+        together with the very data the flat two-stage form would have put in
+        the DiscreteScenarioSet. Only the leaves carry data, which is what
+        StageScenarioSize says.
+        """
+        dss_data = self.tssb_data["discrete_scenario_set"]
+        dims = self.dimensions["tssb"]["dss"]
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        scenarios = np.asarray(dss_data["scenarios"], dtype=float)
+        scenario_size = int(dims["ScenarioSize"])
+        row_of = {
+            name: index
+            for index, name in enumerate(self.problem_structure["scenario_names"])
+        }
+
+        stages, parents, probabilities, data = [], [], [], []
+
+        stages.append(0)                            # the root
+        parents.append(-1)
+        probabilities.append(1.0)
+        data.append(np.zeros(scenario_size))
+
+        for group in groups:
+            outer = len(stages)
+            stages.append(1)
+            parents.append(0)
+            probabilities.append(group["probability"])
+            data.append(np.zeros(scenario_size))
+
+            for name, probability in group["scenarios"]:
+                stages.append(2)
+                parents.append(outer)
+                probabilities.append(probability)
+                data.append(scenarios[row_of[name]])
+
+        number_nodes = len(stages)
+        # the root has no parent: any index past the last node says so
+        parents = [number_nodes if p < 0 else p for p in parents]
+
+        tree_block = Block(
+            block_type="MultiStageDiscreteScenarioSet",
+            NumberStages=Dimension("NumberStages", 3),
+            NumberNodes=Dimension("NumberNodes", number_nodes),
+            ScenarioDataSize=Dimension("ScenarioDataSize", scenario_size),
+            StageScenarioSize=Variable(
+                "StageScenarioSize",
+                "u4",
+                ("NumberStages",),
+                np.array([0, 0, scenario_size], dtype="u4"),
+            ),
+            NodeStage=Variable(
+                "NodeStage", "u4", ("NumberNodes",),
+                np.array(stages, dtype="u4"),
+            ),
+            NodeParent=Variable(
+                "NodeParent", "u4", ("NumberNodes",),
+                np.array(parents, dtype="u4"),
+            ),
+            NodeProbability=Variable(
+                "NodeProbability", "double", ("NumberNodes",),
+                np.array(probabilities, dtype=float),
+            ),
+            NodeData=Variable(
+                "NodeData", "double", ("NumberNodes", "ScenarioDataSize"),
+                np.vstack(data),
+            ),
+        )
+
+        master.add_block(name_id, block=tree_block)
+        return master
+
+
     def convert_to_discrete_scenario_set(self, master, name_id="DiscreteScenarioSet"):
         """
         Add the DiscreteScenarioSet block to a TSSB block.
@@ -1573,12 +1863,20 @@ class Transformation:
         return master
     
     
-    def convert_to_static_abstract_path(self, master, name_id="StaticAbstractPath"):
+    def convert_to_static_abstract_path(self, master,
+                                        name_id="StaticAbstractPath",
+                                        root_only=False):
         """
         Add the StaticAbstractPath block to a TSSB block.
+
+        With root_only the path names the design decisions taken at the
+        root alone, which is what the outer level of a tree with a second
+        decision stage ties; everywhere else the path names them all.
         """
-        sap_data = self.tssb_data["static_abstract_path"]
-        dims = self.dimensions["tssb"]["sap"]
+        which = "static_abstract_path_root" if root_only \
+                else "static_abstract_path"
+        sap_data = self.tssb_data[ which ]
+        dims = self.dimensions["tssb"][ "sap_root" if root_only else "sap" ]
     
         sap_block = Block(
             block_type="AbstractPath",
@@ -1969,13 +2267,21 @@ class Transformation:
         if self.problem_structure.get("is_stochastic", False):
             stochastic_type = self.problem_structure.get("stochastic_type", None)
     
-            if stochastic_type != "tssb":
+            if stochastic_type not in ("tssb", "mssb"):
                 raise ValueError(
                     f"Unsupported stochastic_type in optimize: {stochastic_type!r}"
                 )
     
-            block_type = "TwoStageStochasticBlock"
-            inner_block_name = "Block_0"
+            if self.problem_structure.get("investment_outside", False):
+                # the stochastic Block is wrapped by an InvestmentBlock, which
+                # is therefore the one the Solver is attached to
+                block_type = "InvestmentBlock"
+                inner_block_name = "Block_0"
+            else:
+                block_type = ("MultiStageStochasticBlock"
+                              if stochastic_type == "mssb"
+                              else "TwoStageStochasticBlock")
+                inner_block_name = "Block_0"
     
         elif self.problem_structure.get("has_investment_block", False):
             block_type = "InvestmentBlock"
@@ -1992,6 +2298,7 @@ class Transformation:
             "UCBlock": "UCBlock/uc_solverconfig.txt",
             "InvestmentBlock": "InvestmentBlock/BSPar.txt",
             "TwoStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
+            "MultiStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
         }
     
         cfg = self.configfile
@@ -2046,6 +2353,13 @@ class Transformation:
         # --------------------------------------------------
         solver_options = dict(self.pysmspp_options or {})
     
+        # pySMSpp has no tool of its own for the multi-stage block: the command
+        # line of mssb_solver is the one of tssb_solver, so the same wrapper
+        # serves, pointed at the other executable
+        if block_type == "MultiStageStochasticBlock":
+            solver_options.setdefault("smspp_solver", "TSSBSolver")
+            solver_options.setdefault("solver_path", "mssb_solver")
+    
         self.result = self.sms_network.optimize(
             configfile=configfile,
             fp_temp=fp_temp,
@@ -2092,11 +2406,51 @@ class Transformation:
                     "in stochastic_parameters."
                 )
     
-            if self.problem_structure["stochastic_type"] != "tssb":
+            if self.problem_structure["stochastic_type"] not in ("tssb", "mssb"):
                 raise ValueError(
                     f"Unsupported stochastic type: "
                     f"{self.problem_structure['stochastic_type']!r}"
                 )
+
+            if ( self.problem_structure.get("investment_outside", False)
+                 and not self.problem_structure.get("has_investment_block",
+                                                    False) ):
+                raise ValueError(
+                    "'investment_outside' states the investment in an "
+                    "InvestmentBlock wrapping the stochastic Block, hence it "
+                    "needs the investment to go through an InvestmentBlock: "
+                    "set capacity_expansion_ucblock=False, or ask for "
+                    "'design_cost_outside' to keep the design Variable in the "
+                    "units and take out their cost alone."
+                )
+
+            if ( self.problem_structure.get("design_cost_outside", False)
+                 and not self.capacity_expansion_ucblock ):
+                raise ValueError(
+                    "'design_cost_outside' takes the cost of design Variable "
+                    "that live in the units out of them, so the units have to "
+                    "have them: set capacity_expansion_ucblock=True."
+                )
+
+            if self.problem_structure["stochastic_type"] == "mssb":
+                tree = self.problem_structure.get("scenario_tree", None)
+                if tree is None:
+                    raise ValueError(
+                        "A multi-stage problem needs the scenario tree saying "
+                        "how the scenarios are grouped. Set stochastic_parameters"
+                        "={'stochastic_type': 'mssb', 'parameters': [...], "
+                        "'tree': {...}}."
+                    )
+
+                in_tree = [name for group in tree["groups"]
+                           for name, _ in group["scenarios"]]
+                in_network = list(self.problem_structure["scenario_names"])
+                if sorted(in_tree) != sorted(in_network):
+                    raise ValueError(
+                        "The leaves of the scenario tree are not the scenarios "
+                        f"of the network: {sorted(in_tree)} against "
+                        f"{sorted(in_network)}."
+                    )
     
             if self.problem_structure["number_scenarios"] <= 0:
                 raise ValueError(
@@ -2152,9 +2506,9 @@ class Transformation:
         if not self.problem_structure.get("is_stochastic", False):
             return None
 
-        if self.problem_structure.get("stochastic_type") != "tssb":
+        if self.problem_structure.get("stochastic_type") not in ("tssb", "mssb"):
             raise ValueError(
-                f"prepare_tssb_interface only supports 'tssb', got "
+                f"prepare_tssb_interface only supports 'tssb' and 'mssb', got "
                 f"{self.problem_structure.get('stochastic_type')!r}."
             )
         
@@ -2169,12 +2523,27 @@ class Transformation:
             "TotalLength": sap_data["TotalLength"],
         }
 
+        # with a second decision stage the two levels of the tree tie
+        # different things: the outer one only what is decided at the root,
+        # the inner one everything, so that what is decided once the branch
+        # is known is common to its leaves and free across branches
+        root_variables = self._root_design_variables(design_variables)
+        if root_variables is not None:
+            sap_root = build_tssb_static_abstract_path(root_variables)
+            self.dimensions["tssb"]["sap_root"] = {
+                "PathDim": sap_root["PathDim"],
+                "TotalLength": sap_root["TotalLength"],
+            }
+        else:
+            sap_root = None
+
         stochastic_block = self.build_tssb_stochastic_block(n)
 
         self.tssb_data = {
             "enabled": True,
             "discrete_scenario_set": dss_data,
             "static_abstract_path": sap_data,
+            "static_abstract_path_root": sap_root,
             "stochastic_block": stochastic_block,
         }
 
@@ -2340,6 +2709,48 @@ class Transformation:
             )
             
             
+    def _root_design_variables(self, design_variables):
+        """
+        The subset of the design descriptors that is decided at the root.
+
+        Returns None when every decision is taken there, which is the ordinary
+        two-stage case and the one where the two levels of the tree tie the
+        very same things. The assignment comes by component name, and the
+        descriptors carry the index of their Block, so the names are resolved
+        through the unit blocks the converter has just built.
+        """
+        stages = self.problem_structure.get("design_stages", None)
+        if not stages:
+            return None
+
+        wanted = set( stages[ "root" ] )
+        indices = set()
+        for name, unitblock in self.unitblocks.items():
+            if ( name in wanted ) or ( unitblock.get( "name" ) in wanted ):
+                position = str( unitblock.get( "enumerate" , "" ) ).split( "_" )
+                if len( position ) == 2 and position[ 1 ].isdigit():
+                    indices.add( int( position[ 1 ] ) )
+
+        missing = len( wanted ) - len( indices )
+        if missing > 0:
+            raise ValueError(
+                f"{missing} of the components said to be decided at the root "
+                "have no unit Block: design_stages names components of the "
+                "network, and only the expandable ones have a design Variable."
+            )
+
+        root = [ dv for dv in design_variables
+                 if int( dv[ "block_index" ] ) in indices ]
+
+        if not root:
+            raise ValueError(
+                "no design Variable is left at the root: with everything "
+                "decided after the branch is known the branches do not share "
+                "anything and the problem is not a tree."
+            )
+
+        return root
+
     def _collect_design_variables(self):
         """
         Collect design-variable descriptors for the TSSB StaticAbstractPath.

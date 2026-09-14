@@ -854,6 +854,10 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     Add a high-cost slack generator only to buses that actually host at least one load,
     excluding buses whose names end with specific suffixes (e.g. H2, battery).
 
+    A slack already sitting on a bus is resized rather than left as it is: an
+    under-sized one would silently make the network infeasible instead of
+    absorbing the unserved demand it is there for.
+
     Parameters
     ----------
     n : pypsa.Network
@@ -867,10 +871,21 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     n : pypsa.Network
         The network with slack generators added.
     """
-    # Compute the maximum and minimum total demand over all time steps
-    total_demand = n.loads_t.p_set.sum(axis=1)
-    max_total_demand = total_demand.max()
-    min_total_demand = total_demand.min()
+    # Compute the maximum and minimum total demand over all time steps. On a
+    # stochastic network the loads are indexed by (scenario, name), and the
+    # demand of the scenarios is not served together: sum within each scenario
+    # and take the worst one, summing across them would size the slack on a
+    # demand that never occurs
+    demand = n.loads_t.p_set
+    if isinstance(demand.columns, pd.MultiIndex) and "scenario" in (
+        demand.columns.names or []
+    ):
+        demand = demand.T.groupby(level="scenario").sum().T
+    else:
+        demand = demand.sum(axis=1).to_frame("total")
+
+    max_total_demand = float(demand.to_numpy().max()) if demand.size else 0.0
+    min_total_demand = float(demand.to_numpy().min()) if demand.size else 0.0
 
     # Helper to decide if a bus should be excluded
     def _is_excluded(bus_name: str) -> bool:
@@ -880,19 +895,48 @@ def add_slack_unit(n, exclude_suffixes=("H2", "battery")):
     # Keep only buses that actually have at least one load attached
     load_buses = set(n.loads.bus.dropna().astype(str))
 
+    # on a stochastic network the components are indexed by (scenario, name),
+    # and a bus is one bus whatever the scenario: iterate over the names alone,
+    # or every bus would be seen as many times as there are scenarios
+    bus_index = n.buses.index
+    buses = (
+        bus_index.get_level_values("name").unique()
+        if isinstance(bus_index, pd.MultiIndex)
+        else bus_index
+    )
+
     # Iterate only over buses with load and not excluded
-    for bus in n.buses.index:
+    for bus in buses:
         if str(bus) not in load_buses:
             continue
         if _is_excluded(bus):
             continue
 
+        name = f"slack_unit {bus}"
+        p_nom = 10 * max_total_demand if max_total_demand > 0 else -min_total_demand
+
+        gen_index = n.generators.index
+        gen_names = (
+            gen_index.get_level_values("name")
+            if isinstance(gen_index, pd.MultiIndex)
+            else gen_index
+        )
+        existing = gen_names == name
+
+        if existing.any():
+            # only ever grow it, so that a slack deliberately sized larger than
+            # the demand is not cut back
+            n.generators.loc[existing, "p_nom"] = np.maximum(
+                n.generators.loc[existing, "p_nom"], p_nom
+            )
+            continue
+
         n.add(
             "Generator",
-            name=f"slack_unit {bus}",
+            name=name,
             carrier="slack",
             bus=bus,
-            p_nom=10 * max_total_demand if max_total_demand > 0 else -min_total_demand,
+            p_nom=p_nom,
             p_max_pu=1 if max_total_demand > 0 else 0,
             p_min_pu=0 if max_total_demand > 0 else -1,
             marginal_cost=10000 if max_total_demand > 0 else -10000,

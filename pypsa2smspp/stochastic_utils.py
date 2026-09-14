@@ -198,6 +198,78 @@ def get_scenario_probabilities(n) -> np.ndarray:
 # Stochastic parameter normalization and problem structure
 # =============================================================================
 
+def normalize_scenario_tree(tree: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """
+    Normalize the description of a two-level scenario tree.
+
+    A multi-stage problem needs more than the flat list of scenarios a PyPSA
+    network carries: it needs to know which of them descend from the same
+    outer-stage realization, and with which conditional probability. That is
+    what this tree describes, and what tells a MultiStageStochasticBlock apart
+    from a TwoStageStochasticBlock over the same leaves.
+
+    The tree has two levels, i.e. the problem has three stages: the first-stage
+    design, then the outer realizations, then the inner ones. Deeper trees are
+    representable in SMS++, which nests a MultiStageStochasticBlock into
+    another one, but not here yet.
+
+    Accepted forms
+    --------------
+    {"groups": {"dry": {"probability": 0.3,
+                        "scenarios": {"dry_low": 0.2, "dry_high": 0.8}}, ...}}
+
+    or the same with "groups" as a list of dicts carrying a "name" key.
+
+    Returns
+    -------
+    {"groups": [{"name": str, "probability": float,
+                 "scenarios": [(name, conditional probability), ...]}, ...]}
+    or None if no tree was given.
+    """
+    if tree is None:
+        return None
+
+    groups = tree.get("groups", tree) if isinstance(tree, Mapping) else tree
+
+    if isinstance(groups, Mapping):
+        items = [(str(name), spec) for name, spec in groups.items()]
+    else:
+        items = [(str(spec["name"]), spec) for spec in groups]
+
+    normalized = []
+    for name, spec in items:
+        scenarios = spec["scenarios"]
+        if isinstance(scenarios, Mapping):
+            pairs = [(str(k), float(v)) for k, v in scenarios.items()]
+        else:
+            pairs = [(str(k), float(v)) for k, v in scenarios]
+
+        if not pairs:
+            raise ValueError(f"Outer scenario {name!r} has no inner scenario.")
+
+        total = sum(p for _, p in pairs)
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(
+                f"The conditional probabilities of the inner scenarios of "
+                f"{name!r} sum to {total}, not to one."
+            )
+
+        normalized.append({
+            "name": name,
+            "probability": float(spec["probability"]),
+            "scenarios": pairs,
+        })
+
+    total = sum(g["probability"] for g in normalized)
+    if abs(total - 1.0) > 1e-9:
+        raise ValueError(
+            f"The probabilities of the outer scenarios sum to {total}, "
+            "not to one."
+        )
+
+    return {"groups": normalized}
+
+
 def _normalize_stochastic_parameters(
     stochastic_parameters: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -210,6 +282,30 @@ def _normalize_stochastic_parameters(
         "stochastic_type": "tssb",
         "parameters": ["demand", "renewable_maxpower"]
     }
+
+    A multi-stage problem asks for "mssb" and for the scenario tree that says
+    how the flat scenarios are grouped [see normalize_scenario_tree()]:
+
+    {
+        "stochastic_type": "mssb",
+        "parameters": ["demand", "renewable_maxpower"],
+        "tree": {"groups": {...}}
+    }
+
+    "investment_outside" states the investment decision once, in an
+    InvestmentBlock wrapping the whole stochastic Block, instead of
+    replicating it in every scenario and tying the copies with the
+    non-anticipativity Constraint of the extensive form. The two are the same
+    problem written the other way round, the second one being what a Benders
+    decomposition of it wants to see.
+
+    "design_cost_outside" leaves the design Variable where the extensive form
+    puts them, one copy per scenario inside the units, but moves their COST
+    out, into the InvestmentBlock wrapping the stochastic Block. The units
+    then state their capacity against a Variable they no longer pay for, so
+    the value of a scenario can only go down when the design grows: that
+    monotonicity is what a generic Benders solver reads the sign of its cuts
+    from, and it is lost when each scenario pays the design itself.
     """
     sp = dict(stochastic_parameters or {})
 
@@ -237,7 +333,55 @@ def _normalize_stochastic_parameters(
     return {
         "stochastic_type": stochastic_type,
         "parameters": parameters,
+        "scenario_tree": normalize_scenario_tree(
+            sp.get("tree", sp.get("scenario_tree", None))
+        ),
+        "investment_outside": bool( sp.get("investment_outside", False) ),
+        "design_cost_outside": bool( sp.get("design_cost_outside", False) ),
+        "design_stages": normalize_design_stages( sp.get("design_stages",
+                                                          None) ),
     }
+
+
+def normalize_design_stages(design_stages):
+    """
+    Read which design decisions are taken when.
+
+    A two-stage problem decides them all at the root and says nothing here. A
+    problem with a second decision stage says which components are decided at
+    the root and which are decided one stage later, once the branch is known:
+
+        {"root": ["bus0 solar", ...], "branch": ["bus0 solar late", ...]}
+
+    The two lists are what tells the writer which here-and-now paths to put at
+    which level of the tree, the outer one naming the root decisions alone and
+    the inner one naming all of them, so that the later ones are tied inside a
+    branch and free across branches.
+    """
+    if not design_stages:
+        return None
+
+    root = [ str( name ) for name in design_stages.get( "root" , [] ) ]
+    branch = [ str( name ) for name in design_stages.get( "branch" , [] ) ]
+
+    if not branch:
+        return None          # nothing is decided later: a plain two-stage one
+
+    if not root:
+        raise ValueError(
+            "design_stages names decisions taken after the branch is known "
+            "but none taken at the root: with nothing decided before, the "
+            "problem is a collection of independent branches, not a tree."
+        )
+
+    common = set( root ) & set( branch )
+    if common:
+        raise ValueError(
+            "a design decision is taken either at the root or after the "
+            "branch is known, not both: " + ", ".join( sorted( common ) )
+        )
+
+    return { "root": root , "branch": branch }
 
 
 def describe_problem_structure(
@@ -261,9 +405,17 @@ def describe_problem_structure(
         "stochastic_type": stochastic_type,
         "number_scenarios": len(scenario_names),
         "scenario_names": scenario_names,
-        "has_investment_block": not bool(capacity_expansion_ucblock),
+        "has_investment_block": ( ( not bool(capacity_expansion_ucblock) )
+                                  or ( is_stochastic
+                                       and sp["design_cost_outside"] ) ),
         "stochastic_parameters": stochastic_parameters_list,
         "stochastic_parameter_set": stochastic_parameter_set,
+        "scenario_tree": sp["scenario_tree"] if is_stochastic else None,
+        "investment_outside": sp["investment_outside"] if is_stochastic
+                              else False,
+        "design_cost_outside": sp["design_cost_outside"] if is_stochastic
+                               else False,
+        "design_stages": sp["design_stages"] if is_stochastic else None,
     }
 
 

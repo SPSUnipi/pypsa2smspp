@@ -65,7 +65,8 @@ from pypsa2smspp.network_correction import (
     clean_stores,
     parse_txt_file,
     compare_networks,
-    add_slack_unit
+    add_slack_unit,
+    clean_dispatch_setpoints
     )
 
 def get_datafile(fname):
@@ -259,6 +260,10 @@ for scenario in SCENARIOS:
 
 
 n_pypsa = nd.n.copy()
+
+# a finite p_set on a dispatchable component is enforced as a fixed dispatch,
+# which would freeze it and inflate the reference
+clean_dispatch_setpoints(n_pypsa)
 
 n_pypsa.optimize(solver_name='gurobi') # , solver_options=SOLVER_OPTIONS)
 obj_pypsa = n_pypsa.objective + n_pypsa.objective_constant
