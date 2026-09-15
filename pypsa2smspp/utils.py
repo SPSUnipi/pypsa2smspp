@@ -334,6 +334,95 @@ def has_time_dependent_link_data(n):
 
     return False
 
+def pollutant_budget_data(n, generator_owner):
+    """
+    Translate the primary energy limits of a PyPSA network into the pollutant
+    budget constraints of a UCBlock.
+
+    Each GlobalConstraint of type "primary_energy" becomes one pollutant with
+    a single zone spanning all the nodes, whose budget is the constant of the
+    constraint. As in PyPSA, the emission of a generator g at snapshot t is
+
+        attribute[ carrier_g ] / efficiency_{t,g} * weighting_t * p_{t,g} ,
+
+    so the conversion factor of the UCBlock is everything that multiplies the
+    active power. A limit that cannot be written this way (a sense other than
+    "<=", an investment period, or non-cyclic storage with a nonzero
+    attribute, which PyPSA charges for the change of its state of charge) is
+    skipped with a warning, and left out of the model as before.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The (deterministic) PyPSA network.
+    generator_owner : list of tuple
+        For each electrical generator of the UCBlock, in order, the pair
+        (component list name, component name) it comes from.
+
+    Returns
+    -------
+    tuple
+        (names, budget, rho) with the names of the translated constraints,
+        the array of their budgets and the array of the conversion factors
+        indexed over (TimeHorizon, NumberPollutants,
+        NumberElectricalGenerators); names is empty if there is nothing to
+        translate.
+    """
+    names, budget, rho = [], [], []
+
+    glcs = n.global_constraints
+    if glcs.empty or "type" not in glcs.columns:
+        return names, np.array(budget), np.zeros((len(n.snapshots), 0, len(generator_owner)))
+
+    weights = n.snapshot_weightings.generators.values
+    efficiency = get_param_as_dense(n, "Generator", "efficiency", weights=False)
+
+    for name, glc in glcs[glcs.type == "primary_energy"].iterrows():
+        attribute = glc.carrier_attribute
+        emissions = n.carriers[attribute]
+        emissions = emissions[emissions != 0]
+
+        sus = n.storage_units
+        stores = n.stores
+        if glc.sense != "<=":
+            reason = f"sense {glc.sense!r} is not '<='"
+        elif not pd.isna(glc.get("investment_period", np.nan)):
+            reason = "it refers to an investment period"
+        elif (not sus.empty) and (sus.carrier.isin(emissions.index)
+                                  & ~sus.cyclic_state_of_charge).any():
+            reason = f"non-cyclic storage units have a nonzero {attribute}"
+        elif (not stores.empty) and (stores.bus.map(n.buses.carrier)
+                                     .isin(emissions.index) & ~stores.e_cyclic).any():
+            reason = f"non-cyclic stores have a nonzero {attribute}"
+        else:
+            reason = None
+
+        if reason is not None:
+            logger.warning(
+                f"GlobalConstraint {name} is not translated into a pollutant "
+                f"budget: {reason}."
+            )
+            continue
+
+        rho_p = np.zeros((len(n.snapshots), len(generator_owner)))
+        for g, (list_name, component) in enumerate(generator_owner):
+            if list_name != "generators":
+                continue
+            carrier = n.generators.at[component, "carrier"]
+            if carrier in emissions.index:
+                rho_p[:, g] = (emissions[carrier]
+                               / efficiency[component].values * weights)
+
+        names.append(name)
+        budget.append(glc.constant)
+        rho.append(rho_p)
+
+    if not names:
+        return names, np.array(budget), np.zeros((len(n.snapshots), 0, len(generator_owner)))
+
+    return names, np.array(budget), np.stack(rho, axis=1)
+
+
 def ucblock_dimensions(n):
     """
     Computes the dimensions of the UCBlock from the PyPSA network.
