@@ -334,22 +334,24 @@ def has_time_dependent_link_data(n):
 
     return False
 
-def pollutant_budget_data(n, generator_owner):
+def pollutant_budget_data(n, generator_owner, storage_owner):
     """
-    Translate the primary energy limits of a PyPSA network into the pollutant
-    budget constraints of a UCBlock.
+    Translate the global constraints of a PyPSA network on the dispatch into
+    the pollutant budget constraints of a UCBlock.
 
-    Each GlobalConstraint of type "primary_energy" becomes one pollutant with
-    a single zone spanning all the nodes, whose budget is the constant of the
-    constraint. As in PyPSA, the emission of a generator g at snapshot t is
-
-        attribute[ carrier_g ] / efficiency_{t,g} * weighting_t * p_{t,g} ,
-
-    so the conversion factor of the UCBlock is everything that multiplies the
-    active power. A limit that cannot be written this way (a sense other than
-    "<=", an investment period, or non-cyclic storage with a nonzero
-    attribute, which PyPSA charges for the change of its state of charge) is
-    skipped with a warning, and left out of the model as before.
+    The constraints are read from the model that PyPSA builds, so that each
+    GlobalConstraint is taken exactly as PyPSA writes it: a primary energy
+    limit, an operational limit, one restricted to an investment period, with
+    the terms on the state of charge of non-cyclic storage and the constants
+    of their initial state already moved to the right-hand side. Each one
+    whose terms are only on the active power of generators and on the levels
+    of storage units and stores becomes a pollutant with a single zone
+    spanning all the nodes: the coefficients of the active power are the
+    conversion factors (PollutantRho), those of the levels the factors of the
+    storages (PollutantStorageRho), and the right-hand side the upper bound,
+    the lower bound or both according to the sense. A global constraint with
+    terms on anything else (e.g., on a capacity) is not a budget on the
+    dispatch, and it is skipped with a warning and left out of the model.
 
     Parameters
     ----------
@@ -358,69 +360,119 @@ def pollutant_budget_data(n, generator_owner):
     generator_owner : list of tuple
         For each electrical generator of the UCBlock, in order, the pair
         (component list name, component name) it comes from.
+    storage_owner : list of tuple
+        For each storage of the UCBlock, in order, the pair (component list
+        name, component name) it comes from.
 
     Returns
     -------
-    tuple
-        (names, budget, rho) with the names of the translated constraints,
-        the array of their budgets and the array of the conversion factors
-        indexed over (TimeHorizon, NumberPollutants,
-        NumberElectricalGenerators); names is empty if there is nothing to
-        translate.
+    dict or None
+        None if there is nothing to translate, otherwise a dict with the names
+        of the translated constraints ("names"), the arrays of their upper and
+        lower bounds ("budget", "min_budget", with +inf and -inf where there
+        is none), the conversion factors indexed over (TimeHorizon,
+        NumberPollutants, NumberElectricalGenerators) ("rho") and the factors
+        of the storages indexed over (TimeHorizon, NumberPollutants,
+        NumberStorages) ("storage_rho").
     """
-    names, budget, rho = [], [], []
-
     glcs = n.global_constraints
-    if glcs.empty or "type" not in glcs.columns:
-        return names, np.array(budget), np.zeros((len(n.snapshots), 0, len(generator_owner)))
+    if glcs.empty:
+        return None
 
-    weights = n.snapshot_weightings.generators.values
-    efficiency = get_param_as_dense(n, "Generator", "efficiency", weights=False)
+    # the model is built on a copy, and PyPSA does not copy a solved network
+    # that still holds the model of its solver: the model is set aside for the
+    # copy and put back right after, untouched
+    attached = getattr(n, "_model", None)
+    try:
+        n._model = None
+        network = n.copy()
+    finally:
+        n._model = attached
+    model = network.optimize.create_model()
 
-    for name, glc in glcs[glcs.type == "primary_energy"].iterrows():
-        attribute = glc.carrier_attribute
-        emissions = n.carriers[attribute]
-        emissions = emissions[emissions != 0]
+    # for each variable of PyPSA that can be in a budget, the map from the
+    # labels of the model to the time and to the position in the UCBlock of
+    # the generator or storage, -1 for a component the UCBlock does not have
+    owners = {
+        "Generator-p": ("generators", generator_owner),
+        "StorageUnit-state_of_charge": ("storage_units", storage_owner),
+        "Store-e": ("stores", storage_owner),
+    }
+    T = len(n.snapshots)
+    maps = {}
+    for var_name, (list_name, owner) in owners.items():
+        if var_name not in model.variables:
+            continue
+        position = {name: i for i, (ln, name) in enumerate(owner) if ln == list_name}
+        labels = model.variables[var_name].labels.transpose("snapshot", "name")
+        where = np.array([position.get(name, -1)
+                          for name in labels.coords["name"].values])
+        values = labels.values
+        valid = values >= 0
+        if not valid.any():
+            continue
+        start = values[valid].min()
+        t_of = np.full(values[valid].max() - start + 1, -1)
+        pos_of = np.full(values[valid].max() - start + 1, -1)
+        t_idx, c_idx = np.nonzero(valid)
+        t_of[values[valid] - start] = t_idx
+        pos_of[values[valid] - start] = where[c_idx]
+        maps[var_name] = (start, t_of, pos_of)
 
-        sus = n.storage_units
-        stores = n.stores
-        if glc.sense != "<=":
-            reason = f"sense {glc.sense!r} is not '<='"
-        elif not pd.isna(glc.get("investment_period", np.nan)):
-            reason = "it refers to an investment period"
-        elif (not sus.empty) and (sus.carrier.isin(emissions.index)
-                                  & ~sus.cyclic_state_of_charge).any():
-            reason = f"non-cyclic storage units have a nonzero {attribute}"
-        elif (not stores.empty) and (stores.bus.map(n.buses.carrier)
-                                     .isin(emissions.index) & ~stores.e_cyclic).any():
-            reason = f"non-cyclic stores have a nonzero {attribute}"
-        else:
-            reason = None
+    names, budget, min_budget, rho, storage_rho = [], [], [], [], []
+    for name in glcs.index:
+        cname = f"GlobalConstraint-{name}"
+        if cname not in model.constraints:
+            continue
+        con = model.constraints[cname]
 
-        if reason is not None:
+        labels = con.lhs.vars.values.ravel()
+        coeffs = con.lhs.coeffs.values.ravel()
+        keep = (labels >= 0) & (coeffs != 0)
+        labels, coeffs = labels[keep], coeffs[keep]
+
+        rho_p = np.zeros((T, len(generator_owner)))
+        storage_rho_p = np.zeros((T, len(storage_owner)))
+        mapped = np.zeros(len(labels), dtype=bool)
+        for var_name, (start, t_of, pos_of) in maps.items():
+            offset = labels - start
+            inside = (offset >= 0) & (offset < len(t_of))
+            clipped = np.clip(offset, 0, len(t_of) - 1)
+            t = np.where(inside, t_of[clipped], -1)
+            pos = np.where(inside, pos_of[clipped], -1)
+            here = inside & (t >= 0) & (pos >= 0)
+            if here.any():
+                target = rho_p if var_name == "Generator-p" else storage_rho_p
+                np.add.at(target, (t[here], pos[here]), coeffs[here])
+                mapped |= here
+
+        if not mapped.all():
+            first = labels[~mapped][0]
+            var_name, coords = model.variables.get_label_position(first)
             logger.warning(
                 f"GlobalConstraint {name} is not translated into a pollutant "
-                f"budget: {reason}."
+                f"budget: it has a term on {var_name}[{coords.get('name')}]."
             )
             continue
 
-        rho_p = np.zeros((len(n.snapshots), len(generator_owner)))
-        for g, (list_name, component) in enumerate(generator_owner):
-            if list_name != "generators":
-                continue
-            carrier = n.generators.at[component, "carrier"]
-            if carrier in emissions.index:
-                rho_p[:, g] = (emissions[carrier]
-                               / efficiency[component].values * weights)
-
+        sign = str(con.sign.item())
+        rhs = float(con.rhs.item())
         names.append(name)
-        budget.append(glc.constant)
+        budget.append(np.inf if sign == ">=" else rhs)
+        min_budget.append(-np.inf if sign == "<=" else rhs)
         rho.append(rho_p)
+        storage_rho.append(storage_rho_p)
 
     if not names:
-        return names, np.array(budget), np.zeros((len(n.snapshots), 0, len(generator_owner)))
+        return None
 
-    return names, np.array(budget), np.stack(rho, axis=1)
+    return {
+        "names": names,
+        "budget": np.array(budget),
+        "min_budget": np.array(min_budget),
+        "rho": np.stack(rho, axis=1),
+        "storage_rho": np.stack(storage_rho, axis=1),
+    }
 
 
 def ucblock_dimensions(n):

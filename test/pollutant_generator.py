@@ -2,10 +2,12 @@
 """
 Generator of the resilient UCBlock instances with pollutant budget constraints.
 
-Each instance is one of the Excel test networks whose fossil carriers are given
-an emission rate and whose emissions are bounded by primary energy limits, i.e.,
-PyPSA GlobalConstraint of type "primary_energy", set to a fraction of the
-emissions of the unconstrained dispatch. The network is solved with PyPSA, which
+Each instance is one of the Excel test networks whose carriers are given an
+attribute (e.g., an emission rate) and whose dispatch is bounded by PyPSA
+GlobalConstraint on it, set to a fraction of the value of the unconstrained
+dispatch: primary energy limits from above and from below, an operational
+limit, and a primary energy limit where a store contributes through its
+state of charge. The network is solved with PyPSA, which
 gives the reference objective value, and converted by pypsa2smspp, where each
 limit becomes a pollutant budget constraint of the UCBlock; the netCDF file of
 the UCBlock is written in the output directory, and the reference values are
@@ -40,16 +42,25 @@ from pypsa2smspp.network_correction import clean_ciclicity_storage, add_slack_un
 # INPUT PARAMETERS
 # =============================================================================
 
-# name: (Excel case, {carrier attribute: (rate by carrier, fraction of the
-#        unconstrained emissions allowed by the limit)})
+# name: (Excel case, {carrier attribute: rate by carrier},
+#        [(GlobalConstraint type, carrier attribute, sense, fraction of the
+#          value of the unconstrained dispatch)])
 VARIANTS = {
-    "co2_200": ("3n_3c_1gext_1h_1bext_2l",
-                {"co2_emissions": ({"CCGT": 0.35}, 2.0)}),
-    "co2_50": ("3n_3c_1gext_1h_1bext_2l",
-               {"co2_emissions": ({"CCGT": 0.35}, 0.5)}),
+    "co2_200": ("3n_3c_1gext_1h_1bext_2l", {"co2_emissions": {"CCGT": 0.35}},
+                [("primary_energy", "co2_emissions", "<=", 2.0)]),
+    "co2_50": ("3n_3c_1gext_1h_1bext_2l", {"co2_emissions": {"CCGT": 0.35}},
+               [("primary_energy", "co2_emissions", "<=", 0.5)]),
     "co2_nox": ("3n_3c_1gext_1h_1bext_2l",
-                {"co2_emissions": ({"CCGT": 0.35}, 0.6),
-                 "nox_emissions": ({"CCGT": 0.001}, 0.7)}),
+                {"co2_emissions": {"CCGT": 0.35}, "nox_emissions": {"CCGT": 0.001}},
+                [("primary_energy", "co2_emissions", "<=", 0.6),
+                 ("primary_energy", "nox_emissions", "<=", 0.7)]),
+    "co2_min": ("3n_3c_1gext_1h_1bext_2l", {"co2_emissions": {"CCGT": 0.35}},
+                [("primary_energy", "co2_emissions", ">=", 1.1)]),
+    "ccgt_limit": ("3n_3c_1gext_1h_1bext_2l", {},
+                   [("operational_limit", "CCGT", "<=", 0.5)]),
+    "co2_h2": ("3n_3c_1gext_1h_1bext_2l",
+               {"co2_emissions": {"CCGT": 0.35, "H2": -0.1}},
+               [("primary_energy", "co2_emissions", "<=", 0.5)]),
 }
 
 # (component, nominal attribute, cap) for the uncapped extendable assets
@@ -68,8 +79,17 @@ SOLVER_NAME = "highs"
 # FUNCTIONS
 # =============================================================================
 
+def dispatch_value(n, gc_type, attribute):
+    """The value of the generators of an optimized network that a limit bounds."""
+    if gc_type == "operational_limit":
+        gens = n.generators.index[n.generators.carrier == attribute]
+        return (n.generators_t.p[gens].multiply(n.snapshot_weightings.generators,
+                                                axis=0)).sum().sum()
+    return emissions(n, attribute)
+
+
 def emissions(n, attribute):
-    """Emissions of the dispatch of an optimized network, as PyPSA counts them."""
+    """Emissions of the dispatch of an optimized network, generators only."""
     weights = n.snapshot_weightings.generators
     efficiency = n.get_switchable_as_dense("Generator", "efficiency")
     total = 0.0
@@ -90,7 +110,7 @@ def cap_extendable_assets(n):
         df.loc[uncapped, f"{attribute}_max"] = cap
 
 
-def generate(name, case, limits, out_dir):
+def generate(name, case, rates, limits, out_dir):
     """Write the instance of one variant and return its reference objective."""
     paths = {p.stem: p for p in test_cases["xlsx_paths"]}
     n = NetworkDefinition(create_test_config(paths[case])).n
@@ -98,18 +118,18 @@ def generate(name, case, limits, out_dir):
     n = add_slack_unit(n)
     cap_extendable_assets(n)
 
-    for attribute, (rates, _) in limits.items():
+    for attribute, by_carrier in rates.items():
         if attribute not in n.carriers.columns:
             n.carriers[attribute] = 0.0
-        for carrier, rate in rates.items():
+        for carrier, rate in by_carrier.items():
             n.carriers.at[carrier, attribute] = rate
 
     free = n.copy()
     free.optimize(solver_name=SOLVER_NAME)
-    for attribute, (_, fraction) in limits.items():
-        n.add("GlobalConstraint", f"limit_{attribute}", type="primary_energy",
-              carrier_attribute=attribute, sense="<=",
-              constant=fraction * emissions(free, attribute))
+    for i, (gc_type, attribute, sense, fraction) in enumerate(limits):
+        n.add("GlobalConstraint", f"limit_{i}", type=gc_type,
+              carrier_attribute=attribute, sense=sense,
+              constant=fraction * dispatch_value(free, gc_type, attribute))
 
     network = n.copy()
     network.optimize(solver_name=SOLVER_NAME)
@@ -138,6 +158,6 @@ def generate(name, case, limits, out_dir):
 if __name__ == "__main__":
     out_dir = Path(sys.argv[1]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, (case, limits) in VARIANTS.items():
-        file_name, obj_pypsa, obj_smspp = generate(name, case, limits, out_dir)
+    for name, (case, rates, limits) in VARIANTS.items():
+        file_name, obj_pypsa, obj_smspp = generate(name, case, rates, limits, out_dir)
         print(f"REF_OBJ[{file_name}]={obj_pypsa:.9e}  # SMS++ {obj_smspp:.9e}")

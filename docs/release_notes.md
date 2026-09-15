@@ -7,12 +7,14 @@
 * Support snapshot_weightings != 1 [PR #47](https://github.com/SPSUnipi/pypsa2smspp/pull/47)
 * Emit a MultiStageStochasticBlock from a two-level scenario tree
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
+* Translate the global constraints on the dispatch (primary energy and operational limits, with any sense, an investment period, and the terms on the state of charge of non-cyclic storage) into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 ### Minor Changes and Bug Fixes
 
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
+* The initial state of charge of a non-cyclic storage unit becomes the InitialStorage of its BatteryUnitBlock, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 
 ## v0.0.5

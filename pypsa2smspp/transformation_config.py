@@ -74,7 +74,7 @@ class TransformationConfig:
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
-            "InitialStorage": lambda cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else 0,
+            "InitialStorage": lambda cyclic_state_of_charge, state_of_charge_initial: -1 if cyclic_state_of_charge.values else state_of_charge_initial,
             "Cost": lambda marginal_cost: abs(marginal_cost),
             # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
             # "ConverterInvestmentCost": 0.0,

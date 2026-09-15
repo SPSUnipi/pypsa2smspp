@@ -397,6 +397,7 @@ class Transformation:
         return {
             "generator_node": [],
             "generator_owner": [],
+            "storage_owner": [],
             "investment_meta": {
                 "Blocks": [],
                 "index_extendable": [],
@@ -565,6 +566,7 @@ class Transformation:
         
         generator_node = state["generator_node"]
         generator_owner = state["generator_owner"]
+        storage_owner = state["storage_owner"]
         investment_meta = state["investment_meta"]
         unitblock_index = state["unitblock_index"]
         lines_index = state["lines_index"]
@@ -630,6 +632,9 @@ class Transformation:
                     k = 2 if carrier in ["hydro", "PHS"] else 1
                     generator_node.extend([bus] * k)
                     generator_owner.extend([(components_type, name)] * k)
+                    # one storage: the charge of a battery, the reservoir of
+                    # a hydro unit
+                    storage_owner.append((components_type, name))
     
             else:
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
@@ -637,6 +642,10 @@ class Transformation:
                 generator_owner.extend(
                     (components_type, name) for name in components_df.index
                 )
+                if components_type == "stores":
+                    storage_owner.extend(
+                        (components_type, name) for name in components_df.index
+                    )
     
             for component in components_df.index:
                 carrier = (
@@ -705,6 +714,7 @@ class Transformation:
             "value": generator_node,
         }
         self._generator_owner = generator_owner
+        self._storage_owner = storage_owner
     
         self.investmentblock["Blocks"] = investment_meta["Blocks"]
         self.investmentblock["Assets"] = {
@@ -721,28 +731,23 @@ class Transformation:
     ### 3b ###
     def add_pollutant_budget(self, n):
         """
-        Add the pollutant budget constraints of the UCBlock, one per primary
-        energy limit (e.g., a CO2 limit) of the network.
-
-        Each GlobalConstraint of type "primary_energy" becomes a pollutant with
-        a single zone spanning all the nodes: the UCBlock bounds the emission
-        summed over the whole horizon by the constant of the constraint, with
-        the conversion factors of pollutant_budget_data().
+        Add the pollutant budget constraints of the UCBlock, one per global
+        constraint of the network on the dispatch (a primary energy or an
+        operational limit), as translated by pollutant_budget_data().
         """
-        self.pollutant_budget = None
-        names, budget, rho = pollutant_budget_data(n, self._generator_owner)
-        if not names:
+        self.pollutant_budget = pollutant_budget_data(
+            n, self._generator_owner, self._storage_owner
+        )
+        if self.pollutant_budget is None:
             return
 
         number_generators = self.dimensions["UCBlock"]["NumberElectricalGenerators"]
-        if rho.shape[2] != number_generators:
+        if self.pollutant_budget["rho"].shape[2] != number_generators:
             raise ValueError(
                 "add_pollutant_budget: the conversion factors cover "
-                f"{rho.shape[2]} electrical generators, the UCBlock has "
-                f"{number_generators}."
+                f"{self.pollutant_budget['rho'].shape[2]} electrical generators, "
+                f"the UCBlock has {number_generators}."
             )
-
-        self.pollutant_budget = {"names": names, "budget": budget, "rho": rho}
 
     ### 4 ###  
     def add_InvestmentBlock(self, n, components_df, components_type):
@@ -2188,11 +2193,23 @@ class Transformation:
                 "PollutantBudget", "float", ("TotalNumberPollutantZones",),
                 pb["budget"],
             )
+            if np.isfinite(pb["min_budget"]).any():
+                ucblock.add_variable(
+                    "PollutantMinBudget", "float", ("TotalNumberPollutantZones",),
+                    pb["min_budget"],
+                )
             ucblock.add_variable(
                 "PollutantRho", "float",
                 ("TimeHorizon", "NumberPollutants", "NumberElectricalGenerators"),
                 pb["rho"],
             )
+            if np.any(pb["storage_rho"]):
+                ucblock.add_dimension("NumberStorages", pb["storage_rho"].shape[2])
+                ucblock.add_variable(
+                    "PollutantStorageRho", "float",
+                    ("TimeHorizon", "NumberPollutants", "NumberStorages"),
+                    pb["storage_rho"],
+                )
     
         # -----------------
         # Add all UnitBlocks inside UCBlock
