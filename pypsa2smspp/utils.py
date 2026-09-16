@@ -341,9 +341,9 @@ def pollutant_budget_data(n, generator_owner, storage_owner):
 
     The constraints are read from the model that PyPSA builds, so that each
     GlobalConstraint is taken exactly as PyPSA writes it: a primary energy
-    limit, an operational limit, one restricted to an investment period, with
-    the terms on the state of charge of non-cyclic storage and the constants
-    of their initial state already moved to the right-hand side. Each one
+    limit or an operational limit, with the terms on the state of charge of
+    non-cyclic storage and the constants of their initial state already moved
+    to the right-hand side. Each one
     whose terms are only on the active power of generators and on the levels
     of storage units and stores becomes a pollutant with a single zone
     spanning all the nodes: the coefficients of the active power are the
