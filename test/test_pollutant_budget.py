@@ -32,14 +32,16 @@ CO2_FRACTIONS = [2.0, 0.5]
 
 def solver_reads_pollutant_budget():
     """
-    True if the ucblock_solver on PATH loads a UCBlock with a pollutant budget.
+    True if the smspp_ucblock_solver on PATH loads a UCBlock with a pollutant
+    budget (under the name it had before the prefix, ucblock_solver, if it is
+    not found).
 
     The pollutant budget constraints are in SMS++ since UCBlock b5e68de9: an
-    older ucblock_solver does not accept the file, and then the test is skipped
-    rather than failed. The check loads, without solving it, a one-unit UCBlock
+    older smspp_ucblock_solver does not accept the file, and then the test is
+    skipped rather than failed. The check loads, without solving it, a one-unit UCBlock
     with a CO2 budget.
     """
-    solver = shutil.which("ucblock_solver")
+    solver = shutil.which("smspp_ucblock_solver") or shutil.which("ucblock_solver")
     if solver is None:
         return False
 
@@ -149,7 +151,7 @@ fossil_cases = [
 
 @pytest.mark.skipif(
     not solver_reads_pollutant_budget(),
-    reason="the SMS++ ucblock_solver on PATH does not read pollutant budgets",
+    reason="the smspp_ucblock_solver on PATH does not read pollutant budgets",
 )
 @pytest.mark.parametrize("fraction", CO2_FRACTIONS)
 @pytest.mark.parametrize(

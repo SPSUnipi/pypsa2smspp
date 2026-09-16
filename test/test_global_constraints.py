@@ -113,7 +113,7 @@ def run_case(name):
 
 @pytest.mark.skipif(
     not solver_reads_pollutant_budget(),
-    reason="the SMS++ ucblock_solver on PATH does not read pollutant budgets",
+    reason="the smspp_ucblock_solver on PATH does not read pollutant budgets",
 )
 @pytest.mark.parametrize("name", list(CASES))
 def test_global_constraints(name):
