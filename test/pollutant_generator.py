@@ -5,9 +5,10 @@ Generator of the resilient UCBlock instances with pollutant budget constraints.
 Each instance is one of the Excel test networks whose carriers are given an
 attribute (e.g., an emission rate) and whose dispatch is bounded by PyPSA
 GlobalConstraint on it, set to a fraction of the value of the unconstrained
-dispatch: primary energy limits from above and from below, an operational
-limit, and a primary energy limit where a store contributes through its
-state of charge. The network is solved with PyPSA, which
+dispatch: primary energy limits from above, from below and with equality, an
+operational limit, and primary energy limits where a store and a storage unit
+(both not cyclic) contribute through their state of charge. The network is
+solved with PyPSA, which
 gives the reference objective value, and converted by pypsa2smspp, where each
 limit becomes a pollutant budget constraint of the UCBlock; the netCDF file of
 the UCBlock is written in the output directory, and the reference values are
@@ -61,6 +62,11 @@ VARIANTS = {
     "co2_h2": ("3n_3c_1gext_1h_1bext_2l",
                {"co2_emissions": {"CCGT": 0.35, "H2": -0.1}},
                [("primary_energy", "co2_emissions", "<=", 0.5)]),
+    "co2_eq": ("3n_3c_1gext_1h_1bext_2l", {"co2_emissions": {"CCGT": 0.35}},
+               [("primary_energy", "co2_emissions", "==", 0.8)]),
+    "co2_hydro": ("3n_3c_1gext_1h_1bext_2l",
+                  {"co2_emissions": {"CCGT": 0.35, "hydro": 0.1}},
+                  [("primary_energy", "co2_emissions", "<=", 0.5)]),
 }
 
 # (component, nominal attribute, cap) for the uncapped extendable assets

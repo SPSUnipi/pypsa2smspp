@@ -140,6 +140,12 @@ DO_CLEAN_STORES = False
 REMOVE_STORE_BUSES = False
 REMOVE_GENERATORS_ON_REMOVED_BUSES = False
 DO_CLEAN_GLOBAL_CONSTRAINTS = True
+
+# The global constraints of the network are removed above, and a primary
+# energy limit on co2_emissions is put back at this fraction of the emissions
+# of the unconstrained dispatch (None for no limit), so that the pollutant
+# budget constraints of UCBlock are exercised in every scenario
+EMISSION_LIMIT_FRACTION = 0.5
 DO_MEAN_EFFICIENCIES = False
 
 # Exports
@@ -184,6 +190,8 @@ from pypsa2smspp.network_correction import (
 )
 
 from pypsa2smspp.utils import preprocess_dynamic_link_parameters_to_static_means
+
+from emission_limit import add_emission_limit
 
 
 # =============================================================================
@@ -551,6 +559,11 @@ for target_snapshots in REDUCE_SNAPSHOTS_TARGETS:
             # Clean network
             # -----------------------------------------------------------------
             network = clean_network(network)
+
+            if EMISSION_LIMIT_FRACTION is not None:
+                add_emission_limit(network, EMISSION_LIMIT_FRACTION,
+                                   solver_name=SOLVER_NAME,
+                                   solver_options=SOLVER_OPTIONS)
 
             metrics["n_snapshots_final"] = len(network.snapshots)
 

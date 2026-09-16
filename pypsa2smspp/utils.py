@@ -339,18 +339,34 @@ def pollutant_budget_data(n, generator_owner, storage_owner):
     Translate the global constraints of a PyPSA network on the dispatch into
     the pollutant budget constraints of a UCBlock.
 
-    The constraints are read from the model that PyPSA builds, so that each
-    GlobalConstraint is taken exactly as PyPSA writes it: a primary energy
-    limit or an operational limit, with the terms on the state of charge of
-    non-cyclic storage and the constants of their initial state already moved
-    to the right-hand side. Each one
-    whose terms are only on the active power of generators and on the levels
-    of storage units and stores becomes a pollutant with a single zone
-    spanning all the nodes: the coefficients of the active power are the
-    conversion factors (PollutantRho), those of the levels the factors of the
-    storages (PollutantStorageRho), and the right-hand side the upper bound,
-    the lower bound or both according to the sense. A global constraint with
-    terms on anything else (e.g., on a capacity) is not a budget on the
+    PyPSA writes a primary energy limit on the carrier attribute e (e.g.,
+    co2_emissions) with constant C as
+
+        sum_t w_t sum_g ( e_c(g) / eta_g ) p_g,t
+          + sum_s e_c(s) ( l_s,-1 - l_s,T ) <= C          (or >=, or ==)
+
+    where w_t is the weighting of snapshot t, eta_g the efficiency of
+    generator g, and the second sum is on the storage units and stores whose
+    carrier has the attribute and whose level is not cyclic, l_s,T being the
+    level at the last snapshot and l_s,-1 the initial one; an operational
+    limit on the carrier c is the same with e_c(g) / eta_g replaced by 1 for
+    the generators of carrier c and 0 for the others, and with the storages
+    of carrier c. The UCBlock constraint (5) of zone B of pollutant p is
+
+        O^mn_B,p <= sum_t sum_g rho_t,p,g p_g,t + sum_t sum_s sigma_t,p,s v_s,t
+                 <= O_B,p
+
+    hence rho_t,p,g = w_t e_c(g) / eta_g, sigma_T,p,s = - e_c(s) (zero at the
+    other times), and O_B,p and O^mn_B,p are C - sum_s e_c(s) l_s,-1 on the
+    sides the sense bounds (+inf and -inf on the others).
+
+    The coefficients are not recomputed from these formulas but read from the
+    model that PyPSA builds, so that each GlobalConstraint is taken exactly as
+    PyPSA writes it, with the constants of the initial levels already moved
+    to the right-hand side. Each one whose terms are only on the active power
+    of generators and on the levels of storage units and stores becomes a
+    pollutant with a single zone spanning all the nodes. A global constraint
+    with terms on anything else (e.g., on a capacity) is not a budget on the
     dispatch, and it is skipped with a warning and left out of the model.
 
     Parameters

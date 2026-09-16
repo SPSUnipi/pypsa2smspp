@@ -48,6 +48,8 @@ DATA.mkdir(parents=True, exist_ok=True)
 TEST = HERE.parents[1]
 sys.path.insert(0, str(TEST))
 
+sys.path.insert(0, str(HERE.parent))
+from emission_limit import add_emission_limit             # noqa: E402
 from pypsa2smspp.network_correction import (            # noqa: E402
     add_slack_unit,
     clean_ciclicity_storage,
@@ -130,6 +132,12 @@ def main():
                         help="remove the storage units, as the two-stage "
                              "generator optionally does; this also removes "
                              "the hydro inflow from the outer stage")
+    parser.add_argument("--emission-limit", type=float, default=0.5,
+                        help="put back a primary energy limit on "
+                             "co2_emissions at this fraction of the emissions "
+                             "of the unconstrained dispatch, after the global "
+                             "constraints of the network have been removed; "
+                             "a negative value adds no limit")
     parser.add_argument("--name", default=None)
     args = parser.parse_args()
 
@@ -147,6 +155,8 @@ def main():
         )
 
     n = prepare_network(source, args.snapshots, args.drop_storage_units)
+    if args.emission_limit >= 0:
+        add_emission_limit(n, args.emission_limit)
     rng = np.random.default_rng(args.seed)
 
     base_load = n.loads_t.p_set.copy()
