@@ -340,7 +340,13 @@ class Transformation:
         # --- your existing logic ---
         self.read_excel_components() # 1
         self.add_dimensions(n) # 2
-        self.iterate_components(n) # 3
+        # the dense series of an attribute are built once per conversion and
+        # shared by all the components of its type [see resolve_param_value()]
+        self._dense_cache = {}
+        try:
+            self.iterate_components(n) # 3
+        finally:
+            self._dense_cache = None
         self.add_pollutant_budget(n) # 3b
         self.add_demand(n) # 4
         self.lines_links(n) # 5
@@ -842,7 +848,8 @@ class Transformation:
             components_t,
             n,
             components_type,
-            component
+            component,
+            dense_cache=getattr(self, "_dense_cache", None)
         )
         
         name = get_block_name(attr_name, index, components_df)
