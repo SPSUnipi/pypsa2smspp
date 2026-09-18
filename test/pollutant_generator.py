@@ -26,6 +26,7 @@ Usage:
     python pollutant_generator.py <output directory>
 """
 
+import numpy as np
 import shutil
 import sys
 from pathlib import Path
@@ -46,6 +47,10 @@ from pypsa2smspp.network_correction import clean_ciclicity_storage, add_slack_un
 # name: (Excel case, {carrier attribute: rate by carrier},
 #        [(GlobalConstraint type, carrier attribute, sense, fraction of the
 #          value of the unconstrained dispatch)])
+# the seed of the network, the same one instance_generator.py uses, so that
+# these instances and the plain one of the same case are the same network
+SEED = 20260918
+
 VARIANTS = {
     "co2_200": ("3n_3c_1gext_1h_1bext_2l", {"co2_emissions": {"CCGT": 0.35}},
                 [("primary_energy", "co2_emissions", "<=", 2.0)]),
@@ -119,6 +124,7 @@ def cap_extendable_assets(n):
 def generate(name, case, rates, limits, out_dir):
     """Write the instance of one variant and return its reference objective."""
     paths = {p.stem: p for p in test_cases["xlsx_paths"]}
+    np.random.seed(SEED)
     n = NetworkDefinition(create_test_config(paths[case])).n
     n = clean_ciclicity_storage(n)
     n = add_slack_unit(n)
