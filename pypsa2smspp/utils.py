@@ -334,40 +334,38 @@ def has_time_dependent_link_data(n):
 
     return False
 
+# the types of GlobalConstraint that bound the dispatch, hence the ones a
+# pollutant budget can hold; a constraint of any other type, a limit on the
+# capacities above all, is left out of the model with a warning
+POLLUTANT_BUDGET_TYPES = ( "primary_energy" , "operational_limit" )
+
+
 def pollutant_budget_data(n, generator_owner, storage_owner):
     """
     Translate the global constraints of a PyPSA network on the dispatch into
     the pollutant budget constraints of a UCBlock.
 
-    PyPSA writes a primary energy limit on the carrier attribute e (e.g.,
-    co2_emissions) with constant C as
+    PyPSA writes a primary energy limit on the carrier attribute e with
+    constant C as
 
-        sum_t w_t sum_g ( e_c(g) / eta_g ) p_g,t
+        sum_t w_t sum_g ( e_c(g) / eta_g,t ) p_g,t
           + sum_s e_c(s) ( l_s,-1 - l_s,T ) <= C          (or >=, or ==)
 
-    where w_t is the weighting of snapshot t, eta_g the efficiency of
+    where w_t is the weighting of snapshot t, eta_g,t the efficiency of
     generator g, and the second sum is on the storage units and stores whose
     carrier has the attribute and whose level is not cyclic, l_s,T being the
     level at the last snapshot and l_s,-1 the initial one; an operational
-    limit on the carrier c is the same with e_c(g) / eta_g replaced by 1 for
-    the generators of carrier c and 0 for the others, and with the storages
-    of carrier c. The UCBlock constraint (5) of zone B of pollutant p is
+    limit on the carrier c is the same with the factor of a generator of that
+    carrier equal to 1 and the others left out. The UCBlock constraint of zone
+    B of pollutant p is
 
         O^mn_B,p <= sum_t sum_g rho_t,p,g p_g,t + sum_t sum_s sigma_t,p,s v_s,t
                  <= O_B,p
 
-    hence rho_t,p,g = w_t e_c(g) / eta_g, sigma_T,p,s = - e_c(s) (zero at the
-    other times), and O_B,p and O^mn_B,p are C - sum_s e_c(s) l_s,-1 on the
-    sides the sense bounds (+inf and -inf on the others).
-
-    The coefficients are not recomputed from these formulas but read from the
-    model that PyPSA builds, so that each GlobalConstraint is taken exactly as
-    PyPSA writes it, with the constants of the initial levels already moved
-    to the right-hand side. Each one whose terms are only on the active power
-    of generators and on the levels of storage units and stores becomes a
-    pollutant with a single zone spanning all the nodes. A global constraint
-    with terms on anything else (e.g., on a capacity) is not a budget on the
-    dispatch, and it is skipped with a warning and left out of the model.
+    hence rho_t,p,g = w_t e_c(g) / eta_g,t, sigma_T,p,s = - e_c(s) (zero at
+    the other times), and O_B,p and O^mn_B,p are C - sum_s e_c(s) l_s,-1 on
+    the sides the sense bounds (+inf and -inf on the others). Each constraint
+    becomes a pollutant with a single zone spanning all the nodes.
 
     Parameters
     ----------
@@ -377,105 +375,110 @@ def pollutant_budget_data(n, generator_owner, storage_owner):
         For each electrical generator of the UCBlock, in order, the pair
         (component list name, component name) it comes from.
     storage_owner : list of tuple
-        For each storage of the UCBlock, in order, the pair (component list
-        name, component name) it comes from.
+        For each storage of the UCBlock, in order, the same pair.
 
     Returns
     -------
     dict or None
-        None if there is nothing to translate, otherwise a dict with the names
-        of the translated constraints ("names"), the arrays of their upper and
-        lower bounds ("budget", "min_budget", with +inf and -inf where there
-        is none), the conversion factors indexed over (TimeHorizon,
-        NumberPollutants, NumberElectricalGenerators) ("rho") and the factors
-        of the storages indexed over (TimeHorizon, NumberPollutants,
-        NumberStorages) ("storage_rho").
+        None if there is nothing to translate, otherwise the names of the
+        translated constraints ("names"), their upper and lower bounds
+        ("budget", "min_budget"), the factors of the generators over
+        (TimeHorizon, NumberPollutants, NumberElectricalGenerators) ("rho")
+        and those of the storages ("storage_rho").
     """
     glcs = n.global_constraints
     if glcs.empty:
         return None
 
-    # the model is built on a copy, and PyPSA does not copy a solved network
-    # that still holds the model of its solver: the model is set aside for the
-    # copy and put back right after, untouched
-    attached = getattr(n, "_model", None)
-    try:
-        n._model = None
-        network = n.copy()
-    finally:
-        n._model = attached
-    model = network.optimize.create_model()
-
-    # for each variable of PyPSA that can be in a budget, the map from the
-    # labels of the model to the time and to the position in the UCBlock of
-    # the generator or storage, -1 for a component the UCBlock does not have
-    owners = {
-        "Generator-p": ("generators", generator_owner),
-        "StorageUnit-state_of_charge": ("storage_units", storage_owner),
-        "Store-e": ("stores", storage_owner),
-    }
     T = len(n.snapshots)
-    maps = {}
-    for var_name, (list_name, owner) in owners.items():
-        if var_name not in model.variables:
-            continue
-        position = {name: i for i, (ln, name) in enumerate(owner) if ln == list_name}
-        labels = model.variables[var_name].labels.transpose("snapshot", "name")
-        where = np.array([position.get(name, -1)
-                          for name in labels.coords["name"].values])
-        values = labels.values
-        valid = values >= 0
-        if not valid.any():
-            continue
-        start = values[valid].min()
-        t_of = np.full(values[valid].max() - start + 1, -1)
-        pos_of = np.full(values[valid].max() - start + 1, -1)
-        t_idx, c_idx = np.nonzero(valid)
-        t_of[values[valid] - start] = t_idx
-        pos_of[values[valid] - start] = where[c_idx]
-        maps[var_name] = (start, t_of, pos_of)
+    weightings = n.snapshot_weightings.loc[n.snapshots, "generators"].to_numpy()
+
+    # the UCBlock position of each component, a storage unit having one as a
+    # storage and one (two, when it is a hydro unit) as a generator
+    generator_position = {}
+    for position, owner in enumerate(generator_owner):
+        generator_position.setdefault(owner, position)
+    storage_position = {owner: position
+                        for position, owner in enumerate(storage_owner)}
 
     names, budget, min_budget, rho, storage_rho = [], [], [], [], []
-    for name in glcs.index:
-        cname = f"GlobalConstraint-{name}"
-        if cname not in model.constraints:
-            continue
-        con = model.constraints[cname]
 
-        labels = con.lhs.vars.values.ravel()
-        coeffs = con.lhs.coeffs.values.ravel()
-        keep = (labels >= 0) & (coeffs != 0)
-        labels, coeffs = labels[keep], coeffs[keep]
-
-        rho_p = np.zeros((T, len(generator_owner)))
-        storage_rho_p = np.zeros((T, len(storage_owner)))
-        mapped = np.zeros(len(labels), dtype=bool)
-        for var_name, (start, t_of, pos_of) in maps.items():
-            offset = labels - start
-            inside = (offset >= 0) & (offset < len(t_of))
-            clipped = np.clip(offset, 0, len(t_of) - 1)
-            t = np.where(inside, t_of[clipped], -1)
-            pos = np.where(inside, pos_of[clipped], -1)
-            here = inside & (t >= 0) & (pos >= 0)
-            if here.any():
-                target = rho_p if var_name == "Generator-p" else storage_rho_p
-                np.add.at(target, (t[here], pos[here]), coeffs[here])
-                mapped |= here
-
-        if not mapped.all():
-            first = labels[~mapped][0]
-            var_name, coords = model.variables.get_label_position(first)
+    for name, glc in glcs.iterrows():
+        if glc.type not in POLLUTANT_BUDGET_TYPES:
             logger.warning(
                 f"GlobalConstraint {name} is not translated into a pollutant "
-                f"budget: it has a term on {var_name}[{coords.get('name')}]."
+                f"budget: its type, {glc.type}, does not bound the dispatch."
             )
             continue
 
-        sign = str(con.sign.item())
-        rhs = float(con.rhs.item())
+        # the factor of each carrier: the attribute itself for a primary
+        # energy limit, 1 for the one carrier an operational limit is on
+        if glc.type == "primary_energy":
+            factors = n.carriers[glc.carrier_attribute]
+            factors = factors[factors != 0]
+        else:
+            factors = pd.Series(1.0, index=[glc.carrier_attribute])
+
+        if factors.empty:
+            continue
+
+        rho_p = np.zeros((T, len(generator_owner)))
+        storage_rho_p = np.zeros((T, len(storage_owner)))
+        constant = 0.0
+        missing = None
+
+        # the generators, whose factor is divided by the efficiency where the
+        # limit is on a primary energy, and weighted as the objective is
+        gens = n.generators[n.generators.carrier.isin(factors.index)]
+        if not gens.empty:
+            efficiency = (
+                n.get_switchable_as_dense("Generator", "efficiency")
+                .loc[n.snapshots, gens.index].to_numpy()
+                if glc.type == "primary_energy"
+                else np.ones((T, len(gens)))
+            )
+            factor = gens.carrier.map(factors).to_numpy()
+            for j, gen in enumerate(gens.index):
+                position = generator_position.get(("generators", gen))
+                if position is None:
+                    missing = gen
+                    break
+                rho_p[:, position] += weightings * factor[j] / efficiency[:, j]
+
+        # the storages, which are charged for what their level has lost over
+        # the horizon, the initial one being a constant of the row
+        levels = [("storage_units", "cyclic_state_of_charge",
+                   "state_of_charge_initial"),
+                  ("stores", "e_cyclic", "e_initial")]
+        for list_name, cyclic, initial in levels:
+            if missing is not None:
+                break
+            components = getattr(n, list_name)
+            components = components[components.carrier.isin(factors.index)
+                                    & ~components[cyclic].astype(bool)]
+            for component in components.index:
+                position = storage_position.get((list_name, component))
+                if position is None:
+                    missing = component
+                    break
+                factor = factors[components.carrier[component]]
+                storage_rho_p[T - 1, position] -= factor
+                constant += factor * components[initial][component]
+
+        if missing is not None:
+            logger.warning(
+                f"GlobalConstraint {name} is not translated into a pollutant "
+                f"budget: {missing} is not a unit of the UCBlock."
+            )
+            continue
+
+        # the constant of the initial levels sits on the left-hand side, so
+        # what bounds the sum of the terms is the constant of PyPSA less it
+        rhs = float(glc.constant) - constant
+        sense = str(glc.sense)
         names.append(name)
-        budget.append(np.inf if sign == ">=" else rhs)
-        min_budget.append(-np.inf if sign == "<=" else rhs)
+        budget.append(np.inf if sense == ">=" else rhs)
+        min_budget.append(-np.inf if sense == "<=" else rhs)
         rho.append(rho_p)
         storage_rho.append(storage_rho_p)
 

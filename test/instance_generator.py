@@ -55,6 +55,12 @@ IB_CONFIG = (HERE.parents[0] / "pypsa2smspp" / "data" / "configs" /
              "InvestmentBlock" / "BSPar_2.0.txt")
 
 
+# the Excel cases that give a network another case already gives: their
+# instances came out byte for byte the same, so they are written no more
+DUPLICATES = {"inv_1n_1c_1g_ext": "1n_1c_1gext",
+              "inv_2n_1c_1g_1b_ext": "2n_1c_1gext_1bext_2l"}
+
+
 def build(xlsx_path):
     """Builds the network of a case, always the same one."""
     np.random.seed(SEED)
@@ -106,7 +112,8 @@ def main(argv):
     wanted = set(argv[3:])
 
     cases = [(p, i) for p, i in zip(test_cases["xlsx_paths"], test_cases["ids"])
-             if (not wanted) or (Path(p).stem in wanted)]
+             if ( (not wanted) or (Path(p).stem in wanted) )
+             and ( Path(p).stem not in DUPLICATES )]
 
     uc_refs, inv_refs = [], []
 
