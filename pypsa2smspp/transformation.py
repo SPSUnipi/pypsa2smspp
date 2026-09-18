@@ -629,7 +629,8 @@ class Transformation:
                 for name, bus, carrier in zip(components_df.index,
                                               components_df["bus_idx"].values,
                                               components_df["carrier"]):
-                    k = 2 if carrier in ["hydro", "PHS"] else 1
+                    # the turbine, the pump and the spillway of a hydro unit
+                    k = 3 if carrier in ["hydro", "PHS"] else 1
                     generator_node.extend([bus] * k)
                     generator_owner.extend([(components_type, name)] * k)
                     # one storage: the charge of a battery, the reservoir of
@@ -863,7 +864,10 @@ class Transformation:
         
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']
-            self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"] 
+            # the loop above counts one generator for the storage unit, while
+            # the block has one per arc: a turbine, a pump and a spillway
+            self.dimensions['UCBlock']["NumberElectricalGenerators"] += (
+                dimensions["NumberArcs"] - 1)
             
             self.unitblocks[name]['dimensions'] = dimensions
         

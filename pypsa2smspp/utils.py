@@ -394,7 +394,7 @@ def pollutant_budget_data(n, generator_owner, storage_owner):
     weightings = n.snapshot_weightings.loc[n.snapshots, "generators"].to_numpy()
 
     # the UCBlock position of each component, a storage unit having one as a
-    # storage and one (two, when it is a hydro unit) as a generator
+    # storage and one (three, when it is a hydro unit) as a generator
     generator_position = {}
     for position, owner in enumerate(generator_owner):
         generator_position.setdefault(owner, position)
@@ -622,8 +622,9 @@ def hydroblock_dimensions():
     """
     dimensions = dict()
     dimensions["NumberReservoirs"] = 1
-    dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-    dimensions["TotalNumberPieces"] = 2
+    # the arcs of a reservoir: turbine, pump, spillway
+    dimensions["NumberArcs"] = 3 * dimensions["NumberReservoirs"]
+    dimensions["TotalNumberPieces"] = 3
     return dimensions
 
 # -------------------------------- Correction --------------------------------------
