@@ -70,6 +70,7 @@ from pypsa2smspp.inverse import (
     dataarray_components,
     block_to_dataarrays_stochastic,
     broadcast_static_variables_over_scenarios,
+    merge_by_variable,
 )
 from pypsa2smspp.io_parser import (
     parse_txt_to_unitblocks,
@@ -1582,12 +1583,14 @@ class Transformation:
                 )
     
             if dataarrays:
-                datasets.append(xr.Dataset(dataarrays))
+                datasets.append(dataarrays)
     
         if not datasets:
             return {}
     
-        ds = xr.merge(datasets, join="outer", compat="no_conflicts")
+        # the same merge as one xr.merge() of a Dataset per block, done
+        # variable by variable [see merge_by_variable()]
+        ds = merge_by_variable(datasets)
         ds = broadcast_static_variables_over_scenarios(
             ds,
             self.problem_structure.get("scenario_names", []),
