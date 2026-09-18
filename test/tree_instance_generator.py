@@ -49,20 +49,20 @@ PARAMETERS = ["demand", "renewable_maxpower"]
 # MultiStageStochasticBlock one, and the ones with the investment outside,
 # where "mssb" is the tree itself and "tssb" its flat equivalent
 TREES = {
-    "network_small_fewsectors__snap100__c3_d3_renewables": {
-        "mssb": "smspp_network_small_fewsectors__snap100__c3_d3_renewables.nc",
+    "network_small_fewsectors__snap24__c3_d3_renewables": {
+        "mssb": "smspp_network_small_fewsectors__snap24__c3_d3_renewables.nc",
         "investment_tssb": "smspp_stoch_tssb_c3_d3_renewables.nc",
     },
-    "network_small_fewsectors__snap100__c3_d3_hydro": {
-        "mssb": "smspp_network_small_fewsectors__snap100__c3_d3_hydro.nc",
+    "network_small_fewsectors__snap24__c3_d3_hydro": {
+        "mssb": "smspp_network_small_fewsectors__snap24__c3_d3_hydro.nc",
     },
-    "network_small_fewsectors__snap100__c3_d3_both": {
-        "mssb": "smspp_network_small_fewsectors__snap100__c3_d3_both.nc",
+    "network_small_fewsectors__snap24__c3_d3_both": {
+        "mssb": "smspp_network_small_fewsectors__snap24__c3_d3_both.nc",
         "investment_tssb": "smspp_stoch_tssb_c3_d3_both.nc",
         "investment_mssb": "smspp_stoch_mssb_c3_d3_both.nc",
     },
-    "network_small_fewsectors__snap100__c4_d3_both": {
-        "mssb": "smspp_network_small_fewsectors__snap100__c4_d3_both.nc",
+    "network_small_fewsectors__snap24__c4_d3_both": {
+        "mssb": "smspp_network_small_fewsectors__snap24__c4_d3_both.nc",
     },
 }
 

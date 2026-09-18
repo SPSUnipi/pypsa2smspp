@@ -47,13 +47,16 @@ intMnSSC    0     # min number of consecutive SS with the same t for a t increas
 intMnNSC    3     # min number of consecutive NS with the same t for a t decrease
 inttSPar1   0     # long-term t-strategy (0 = none, 4 = soft, 8 = hard, 12 = balancing)
 intMaxNrEvls 2    # maximum number of function evaluations at each iteration
-intMPName  15      # MP solver: 0 = QPP, 7 = Cplex/Gurobi with quadratic stabilization
-                  # 15 = OSI, the master that takes constraints: a
-                  # feasibility cut of the InvestmentBlock reaches it as
-                  # one, and QPPenalty answers "CheckCnst: adding
-                  # constraints is not supported". It is also the one
-                  # that finds the optimum where an asset sits at 0
-                  # + 8 = check for duplicate linearizations
+intMPName  8      # MP solver: 0 = QPP, 7 = Cplex/Gurobi with quadratic stabilization
+                  # + 8 = check for duplicate linearizations.
+                  # 15, the OSI master, is what a feasibility cut takes,
+                  # the cut reaching the master as a constraint and
+                  # QPPenalty answering "CheckCnst: adding constraints is
+                  # not supported"; it is also the one that finds the
+                  # optimum where the design of an asset sits at 0. A
+                  # build without Osi has no such master, and the released
+                  # SMS++ is one of those: it answers "MPName & 2 not
+                  # supported", hence the 8 here
 
 # QPPenalty's parameters :- - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -90,10 +93,12 @@ dbltInit   1e+0   # initial value for t
 dbltSPar2  1e-2   # parameter for the long-term t-strategy
 dblCtOff   0.01   # cut-off factor for pricing in MinQuad
 
-1 # number of string parameters
+0 # number of string parameters
 
 # now all the string parameters
-strInnerBSC	BSCfg.txt   # inner UCBlock solver (HiGHS defaults); without it -> Error #18
+# the inner Block is solved by the BSCfg.txt of this folder, which is the
+# name the tool looks for: strInnerBSC would say so, but a name the SMS++
+# at hand does not know makes the whole ComputeConfig fail to load
 #str_LagBF_BSCfg	LPBSCfg.txt   # BlockSolverConfig for the LagBFunctions
 # not needed if intDoEasy >= 1 && USE_BundleSolver > 0, this is done "by hand"
 
