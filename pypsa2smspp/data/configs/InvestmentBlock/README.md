@@ -1,18 +1,32 @@
 # The configuration of an InvestmentBlock
 
 What `Transformation` hands to SMS++ when it writes an InvestmentBlock and
-`configfile` is left at "auto". It is the configuration of the BundleSolver
-2.0, i.e. the one whose master is a MasterProblemBlock solved by a
-:MILPSolver, and it differs from the template of pySMSpp in the three things
-that decide whether these instances are solved at all:
+`configfile` is left at "auto". `BSPar.txt` is the one that is used, and it
+differs from the template of pySMSpp in two things, both of which decide
+whether these instances are solved at all:
 
-- `BSPar.txt` names the master through `strMPBSolverCfg`, and the inner Block
-  through `strInnerBSC`;
-- `BSCfg1.txt`, the inner Block, is on GUROBI and sets
-  `intHomogeneousDirection 1`: a design that can starve the inner Block is
-  answered with a feasibility cut, which is read off the unbounded dual
-  direction, and that takes a Solver that returns one in the form - A' y.
-  `BSCfg2.txt` is the same one on HiGHS, which does not, hence an instance
-  whose inner Block the design can make infeasible ends with no answer;
-- `MPBCfg.txt` leaves the presolve of the master at its default: with it off
-  the master of a design over several extendable lines fails outright.
+- the master of the bundle is the OSI one, `intMPName 15`, and not QPPenalty:
+  a feasibility cut reaches the master as a constraint, which QPPenalty
+  refuses outright, and on an instance where the design of an asset sits at 0
+  QPPenalty also stops on a point four times the optimum;
+- `BSCfg.txt`, the inner Block, says what a feasibility cut takes:
+  `intHomogeneousDirection 1` and a Solver that returns the unbounded dual
+  direction, i.e. CPLEX or GUROBI. It is left on HiGHS, which is what every
+  build has, so an instance whose inner Block the design can starve, a
+  sector-coupled network with an extendable generator for one, ends with no
+  answer until that line is uncommented.
+
+A configuration is read as a whole: a parameter the SMS++ at hand does not
+know makes its whole ComputeConfig fail to load, and it is dropped in silence,
+taking with it the ones that would have been read. This is why the default
+here is the one the released SMS++ reads, the BundleSolver being 1.0 there.
+
+`test/instance_generator.py` passes the 2.0 one explicitly, being run against
+a build of the 2.0.
+
+`BSPar_2.0.txt` is the same configuration for the BundleSolver 2.0, whose
+master is a MasterProblemBlock solved by a :MILPSolver (`strMPBSolverCfg` ->
+`MPBCfg.txt`, `strInnerBSC` -> `BSCfg1.txt` on GUROBI). It solves every
+instance of the set, and the presolve of its master is left at its default:
+with it off the master of a design over several extendable lines ends in
+"Bundle::FormD: unrecoverable MP failure".

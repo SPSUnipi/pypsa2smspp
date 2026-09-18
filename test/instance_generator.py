@@ -47,6 +47,13 @@ SEED = 20260918
 
 OUT = HERE / "output" / "instances"
 
+# the InvestmentBlock is written here with the configuration of the
+# BundleSolver 2.0, the one every instance of the set is solved by; what the
+# package uses by default is the configuration the released SMS++ reads, the
+# BundleSolver being 1.0 there [see data/configs/InvestmentBlock/README.md]
+IB_CONFIG = (HERE.parents[0] / "pypsa2smspp" / "data" / "configs" /
+             "InvestmentBlock" / "BSPar_2.0.txt")
+
 
 def build(xlsx_path):
     """Builds the network of a case, always the same one."""
@@ -77,7 +84,7 @@ def write(n, case_name, ucblock, out_dir):
         fp_temp="smspp_{name}_temp.nc",
         fp_log="smspp_{name}_log.txt",
         fp_solution="smspp_{name}_solution.nc",
-        configfile="auto",
+        configfile="auto" if ucblock else IB_CONFIG,
         pysmspp_options={},
     )
     transformation.run(n.copy(), verbose=False)
