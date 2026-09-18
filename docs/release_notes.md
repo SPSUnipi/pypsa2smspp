@@ -8,6 +8,7 @@
 * Emit a MultiStageStochasticBlock from a two-level scenario tree
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 * Translate the global constraints on the dispatch (primary energy and operational limits, with any sense, and the terms on the state of charge of non-cyclic storage) into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* Solve an InvestmentBlock with the configuration this package ships (`pypsa2smspp/data/configs/InvestmentBlock`) rather than with the template of pySMSpp: the master of the bundle is the one that takes constraints, a feasibility cut being one, and the inner Block is solved by a Solver that returns the unbounded dual direction such a cut is read off [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 ### Minor Changes and Bug Fixes
 
@@ -15,6 +16,8 @@
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
 * The initial state of charge of a non-cyclic storage unit becomes the InitialStorage of its BatteryUnitBlock, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* Refuse an answer SMS++ did not prove: pySMSpp calls a run a success whenever the log carries a finite objective value, so an InvestmentBlock whose bundle stopped on an inexact oracle handed back the 0 it had written as if it were the optimum [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* `test/instance_generator.py` writes each test network in both the UCBlock and the InvestmentBlock form from one build of it, with a fixed seed and finite caps on the extendable assets, so that the two are the same problem and are held to the same PyPSA objective [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 
 ## v0.0.5
