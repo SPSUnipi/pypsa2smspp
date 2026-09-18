@@ -60,6 +60,11 @@ IB_CONFIG = (HERE.parents[0] / "pypsa2smspp" / "data" / "configs" /
 DUPLICATES = {"inv_1n_1c_1g_ext": "1n_1c_1gext",
               "inv_2n_1c_1g_1b_ext": "2n_1c_1gext_1bext_2l"}
 
+# the Excel cases that carry a global constraint, which the tests of this
+# package run: the instances with a pollutant budget of the SMS++ batches are
+# written by pollutant_generator.py from a network of its own
+NOT_INSTANCES = ("co2_",)
+
 
 def build(xlsx_path):
     """Builds the network of a case, always the same one."""
@@ -113,7 +118,8 @@ def main(argv):
 
     cases = [(p, i) for p, i in zip(test_cases["xlsx_paths"], test_cases["ids"])
              if ( (not wanted) or (Path(p).stem in wanted) )
-             and ( Path(p).stem not in DUPLICATES )]
+             and ( Path(p).stem not in DUPLICATES )
+             and ( not Path(p).stem.startswith(NOT_INSTANCES) )]
 
     uc_refs, inv_refs = [], []
 
