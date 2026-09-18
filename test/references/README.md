@@ -13,7 +13,7 @@ it is not there.
 |---|---|
 | `gen_tree_instance.py` | builds the two-level tree, climate outside and demand inside |
 | `gen_two_stage_design.py` | the same tree with a second decision stage, every expandable technology split in a root part and a later one carrying a premium |
-| `gen_resilient_tree.py` | the resilient tree instances |
+| `gen_pypsa_tree.py` | the tree instances drawn from a PyPSA-Eur network |
 | `emit_two_stage.py` | converts the two-decision tree to SMS++ |
 | `emit_design_cost_outside.py` | converts it with the design cost stated outside the units |
 | `bounds_two_stage.py` | the two values the optimum has to sit between: everything decided at the root, and everything decided once the climate is known |
