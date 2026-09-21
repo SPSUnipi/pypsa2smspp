@@ -2376,23 +2376,13 @@ class Transformation:
         cfg = self.configfile
     
         if cfg is None or cfg == "auto":
-            if block_type == "InvestmentBlock":
-                # the InvestmentBlock is solved with the configuration of
-                # this package rather than with the template of pySMSpp, which
-                # is of the BundleSolver 1.0 and leaves out what these
-                # instances take [see data/configs/InvestmentBlock/README.md]
-                configfile = pysmspp.SMSConfig(
-                    fp=str(Path(DIR) / "data" / "configs" / "InvestmentBlock"
-                           / "BSPar.txt")
-                )
-            elif block_type not in default_template_map:
+            if block_type not in default_template_map:
                 raise ValueError(
                     f"No default config template is defined for block type {block_type!r}. "
                     f"Please provide self.configfile explicitly."
                 )
-            else:
-                template = default_template_map[block_type]
-                configfile = pysmspp.SMSConfig(template=str(template))
+            template = default_template_map[block_type]
+            configfile = pysmspp.SMSConfig(template=str(template))
         else:
             if isinstance(cfg, pysmspp.SMSConfig):
                 configfile = cfg

@@ -64,7 +64,6 @@ version_scheme = "no-guess-dev"
 
 [tool.setuptools.package-data]
 "pysmspp" = ["py.typed"]
-"pypsa2smspp" = ["data/configs/*/*.txt"]
 
 # Pytest settings
 

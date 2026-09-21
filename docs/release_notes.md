@@ -8,7 +8,6 @@
 * Emit a MultiStageStochasticBlock from a two-level scenario tree
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 * Translate the global constraints on the dispatch into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
-* Ship the configuration an InvestmentBlock is solved with, which the template of pySMSpp cannot be: a feasibility cut needs a master that takes constraints [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 ### Minor Changes and Bug Fixes
 
@@ -17,7 +16,6 @@
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
 * Set InitialStorage from the state of charge of a non-cyclic storage unit, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 * Refuse an answer SMS++ did not prove: a finite objective in the log is not a success [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
-* Write both forms of each test network from one seeded build, so that they are the same problem [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 
 ## v0.0.5
