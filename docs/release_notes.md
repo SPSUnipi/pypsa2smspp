@@ -15,7 +15,7 @@
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
 * Set InitialStorage from the state of charge of a non-cyclic storage unit, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
-* Give a storage unit translated into a `HydroUnitBlock` a spillway of its own, bounded by its inflow, instead of leaving the turbine free to let the water through without producing: that freedom stands in for a spill in SMS++, while PyPSA spills only what flows in, so that a pumped storage unit, which has none, was able to throw energy away. On a PyPSA-Eur network of 8 countries and 16 clusters the SMS++ optimum was 1.1e-4 below the PyPSA one, and now the two agree to 3e-10
+* Give the storage units a spillway bounded by the inflow, as in PyPSA [PR #60](https://github.com/SPSUnipi/pypsa2smspp/pull/60)
 
 
 ## v0.0.5
