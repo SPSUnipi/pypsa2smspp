@@ -48,7 +48,6 @@ from pypsa2smspp.utils import (
     zero_investment_cost,
     build_dc_index,
     get_param_as_dense,
-    check_solver_status,
     pollutant_budget_data,
     ucblock_variables,
     preprocess_zero_capital_cost_extendable_generators,
@@ -2440,8 +2439,6 @@ class Transformation:
             inner_block_name=inner_block_name,
             **solver_options,
         )
-
-        check_solver_status(self.result, fp_log)
 
         return self.result
 

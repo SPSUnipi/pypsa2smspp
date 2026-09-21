@@ -15,7 +15,6 @@
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
 * Set InitialStorage from the state of charge of a non-cyclic storage unit, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
-* Refuse an answer SMS++ did not prove: a finite objective in the log is not a success [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 
 
 ## v0.0.5
