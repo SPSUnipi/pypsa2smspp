@@ -34,7 +34,7 @@ def component_definition(n, unit_block: dict) -> str:
     match block:
         case "IntermittentUnitBlock":
             return "Generator"
-        case "ThermalUnitBlock":
+        case "ThermalUnitBlock" | "NuclearUnitBlock":
             return "Generator"
         case "HydroUnitBlock":
             return "StorageUnit"
