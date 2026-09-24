@@ -251,6 +251,35 @@ def get_nominal_aliases(component_type, nominal_attrs):
     }
 
 
+def module_size(p_nom_mod):
+    """The size of a module of an extendable asset, 1 if it is not modular.
+
+    PyPSA writes the capacity of a modular asset as an integer number of
+    modules of size p_nom_mod; the design of the unit that translates it
+    counts modules too, so its maximum power and its investment cost are
+    those of a module, and its capacity is the design times this size.
+    """
+    value = first_scalar(p_nom_mod)
+    return value if value > 0 else 1.0
+
+
+def module_factor(p_nom_extendable, p_nom_mod):
+    """The size of a module where the asset is extendable and modular, 1 elsewhere.
+
+    It works element by element, the arguments being scalars, 1-length
+    containers or frames aligned with the value it multiplies.
+    """
+    extendable = np.asarray(p_nom_extendable, dtype=bool)
+    size = np.asarray(p_nom_mod, dtype=float)
+    factor = np.where(extendable & (size > 0), size, 1.0)
+    return float(factor.ravel()[0]) if factor.size == 1 else factor
+
+
+def is_modular(p_nom_mod):
+    """True if the asset is built in modules of size p_nom_mod."""
+    return first_scalar(p_nom_mod) > 0
+
+
 def first_scalar(x):
     """Return the first scalar value from a pandas/NumPy 1-length container, else cast to float.
     This keeps code robust when inputs come as 1-length Series/Index/ndarray.
@@ -1619,7 +1648,34 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "InvestmentCost"
     if "InvestmentCost" not in d:
         # Pass-through of capital_cost (assumed already scalar or 1-length)
-        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if bool(first_scalar(p_nom_extendable)) else 0.0
+        # the cost of a module when the asset is modular, the design then
+        # counting modules
+        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable, p_nom_mod: capital_cost * module_size(p_nom_mod) if bool(first_scalar(p_nom_extendable)) else 0.0
+
+    # a modular asset has a design that counts modules, hence the powers of
+    # the unit are those of a module; this only holds here, the design of an
+    # InvestmentBlock being a capacity in any case
+    def _signature(f):
+        return f.__code__.co_varnames[:f.__code__.co_argcount]
+
+    max_power = d.get("MaxPower")
+    if callable(max_power) and _signature(max_power) == (
+            "p_nom", "p_max_pu", "p_nom_extendable", "capital_cost",
+            "p_nom_max"):
+        d["MaxPower"] = (
+            lambda p_nom, p_max_pu, p_nom_extendable, capital_cost, p_nom_max,
+                   p_nom_mod:
+                max_power(p_nom, p_max_pu, p_nom_extendable, capital_cost,
+                          p_nom_max)
+                * module_factor(p_nom_extendable, p_nom_mod))
+
+    min_power = d.get("MinPower")
+    if callable(min_power) and _signature(min_power) == (
+            "p_nom", "p_min_pu", "p_nom_extendable"):
+        d["MinPower"] = (
+            lambda p_nom, p_min_pu, p_nom_extendable, p_nom_mod:
+                min_power(p_nom, p_min_pu, p_nom_extendable)
+                * module_factor(p_nom_extendable, p_nom_mod))
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
@@ -1629,19 +1685,31 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
         # factorization, while the design is already kept finite by its cost
         # (the zero-cost extendable assets are made non-extendable upstream, see
         # preprocess_zero_capital_cost_extendable_generators)
-        def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            return (first_scalar(p_nom_max)
-                    if bool(first_scalar(p_nom_extendable))
-                    else first_scalar(p_nom))
+        # a modular asset has an integer design, the number of modules, which
+        # the unit reads off a negative bound: at most -MaxCapacityDesign
+        # modules
+        def _max_cap_design(p_nom, p_nom_extendable, p_nom_max, p_nom_mod):
+            if not bool(first_scalar(p_nom_extendable)):
+                return first_scalar(p_nom)
+            if is_modular(p_nom_mod):
+                most = first_scalar(p_nom_max)
+                if not np.isfinite(most):
+                    raise ValueError("a modular extendable asset needs a "
+                                     "finite p_nom_max, the number of its "
+                                     "modules being bounded by it")
+                return -float(np.floor(most / module_size(p_nom_mod) + 1e-9))
+            return first_scalar(p_nom_max)
         d["MaxCapacityDesign"] = _max_cap_design
         
     # "MinCapacityDesign
     if "MinCapacityDesign" not in d:
-        def _min_cap_design(p_nom, p_nom_extendable, p_nom_min):
-            p_nom_min_safe = p_nom_min
-            return (first_scalar(p_nom_min_safe)
-                    if bool(first_scalar(p_nom_extendable))
-                    else first_scalar(p_nom))
+        def _min_cap_design(p_nom, p_nom_extendable, p_nom_min, p_nom_mod):
+            if not bool(first_scalar(p_nom_extendable)):
+                return first_scalar(p_nom)
+            if is_modular(p_nom_mod):
+                return float(np.ceil(first_scalar(p_nom_min)
+                                     / module_size(p_nom_mod) - 1e-9))
+            return first_scalar(p_nom_min)
         d["MinCapacityDesign"] = _min_cap_design
 
     # --- BatteryUnitBlock_store ---
@@ -1697,7 +1765,8 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     
     # --- IntermittentUnitBlock_inverse ---
     IntermittentUnitBlock_inverse["p_nom"] = (
-        lambda intermittentdesign: intermittentdesign
+        lambda intermittentdesign, p_nom_mod:
+            intermittentdesign * module_size(p_nom_mod)
     )
 
     # --- BatteryUnitBlock_inverse ---
