@@ -62,7 +62,9 @@ def get_param_as_dense(n, component, field, weights=True):
         weighting = weighting.loc[sns]
 
     if field in n.components[component].static.columns:
-        field_val = n.get_switchable_as_dense(component, field, sns)
+        # all the snapshots of the network are the default, and passing them
+        # explicitly makes PyPSA check each of them again at every call
+        field_val = n.get_switchable_as_dense(component, field)
     else:
         field_val = n.dynamic(component)[field]
 
@@ -1841,7 +1843,8 @@ def parse_unitblock_parameters(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
 
     """
@@ -1865,6 +1868,9 @@ def parse_unitblock_parameters(
         The component type name (e.g. "Generator").
     component : str or None
         Single component name, or None.
+    dense_cache : dict or None, default None
+        Dense time series already built during this conversion, keyed by
+        component type, attribute and weighting [see resolve_param_value()].
 
     Returns
     -------
@@ -1887,7 +1893,8 @@ def parse_unitblock_parameters(
                     components_t,
                     n,
                     components_type,
-                    component
+                    component,
+                    dense_cache=dense_cache
                 )
                 for param in param_names
             ]
@@ -1943,7 +1950,8 @@ def resolve_param_value(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
     """
     Resolves the correct parameter value to be passed to the lambda function.
@@ -1972,7 +1980,17 @@ def resolve_param_value(
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
             'stand_by_cost'
         ]
-        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
+        # the dense series covers every component of the type, so one built for
+        # a unit serves all the others of the same conversion
+        cache_key = (components_type, param, weight)
+        if dense_cache is None:
+            dense = get_param_as_dense(n, components_type, param, weight)
+        elif cache_key in dense_cache:
+            dense = dense_cache[cache_key]
+        else:
+            dense = get_param_as_dense(n, components_type, param, weight)
+            dense_cache[cache_key] = dense
+        arg = dense[[component]]
     elif param in components_df.index or param in components_df.columns:
         if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
             arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
