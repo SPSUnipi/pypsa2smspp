@@ -16,6 +16,8 @@ across multiple components.
 They are typically imported and used within the Transformation class.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import re
@@ -702,6 +704,7 @@ def get_attr_name(
     enable_thermal_units: bool = False,
     intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
     default_intermittent: Sequence[str] = (),
+    nuclear_carriers: Optional[Union[str, Sequence[str]]] = None,
 ) -> str:
     """
     Maps a PyPSA component type and its carrier to the corresponding
@@ -713,6 +716,7 @@ def get_attr_name(
       - else:
           intermittent set = intermittent_carriers if provided else default_intermittent
           carrier in intermittent set -> IntermittentUnitBlock_parameters
+          carrier in nuclear_carriers -> NuclearUnitBlock_parameters
           otherwise -> ThermalUnitBlock_parameters
     """
     c = carrier.lower() if carrier else None
@@ -734,6 +738,13 @@ def get_attr_name(
 
         if c is not None and c in intermittent_set:
             return "IntermittentUnitBlock_parameters"
+
+        if (
+            c is not None
+            and nuclear_carriers is not None
+            and c in _normalize_carrier_list(nuclear_carriers)
+        ):
+            return "NuclearUnitBlock_parameters"
 
         return "ThermalUnitBlock_parameters"
 
@@ -1985,6 +1996,223 @@ def get_block_name(attr_name, index, components_df):
         return f"{attr_name.split('_')[0]}_{index}"
     
     
+def forbid_unreachable_switches(thermal_variables, time_horizon):
+    """
+    Translates the start-up and shut-down limits below the minimum power.
+
+    PyPSA bounds the output of a starting unit by its start-up limit and that
+    of the last instant before a shut-down by its shut-down limit, while the
+    output of a unit on is at least its minimum power: with a limit below the
+    minimum power the unit can never start up (or shut down). A
+    ThermalUnitBlock rejects such limits, so they are raised to the minimum
+    power and the switch is forbidden by a minimum down (or up) time that
+    covers the horizon together with the instants the unit has already been
+    down (or up) before it, which gives the same set of schedules.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    if "MinPower" not in thermal_variables:
+        return
+
+    min_power = np.asarray(thermal_variables["MinPower"]["value"], dtype=float)
+    init = int(np.asarray(thermal_variables["InitUpDownTime"]["value"]).ravel()[0])
+
+    for limit, time, before in (("StartUpLimit", "MinDownTime", max(-init, 0)),
+                                ("ShutDownLimit", "MinUpTime", max(init, 0))):
+        if limit not in thermal_variables:
+            continue
+        value = np.asarray(thermal_variables[limit]["value"], dtype=float)
+        if not np.any(value < min_power - 1e-9 * np.maximum(1.0, np.abs(min_power))):
+            continue
+        raised = np.maximum(value, min_power)
+        original = thermal_variables[limit]["value"]
+        thermal_variables[limit]["value"] = (
+            float(raised.ravel()[0]) if np.isscalar(original) else
+            raised.reshape(np.shape(original)))
+        thermal_variables[time]["value"] = int(time_horizon) + before
+
+
+def fix_commitment_on(thermal_variables, time_horizon):
+    """
+    Keeps the unit on over the whole horizon, as a non-committable generator.
+
+    PyPSA gives a unit commitment only to a `committable` generator: any other
+    one produces between its minimum and its maximum power at every snapshot,
+    with no choice of being off, while a ThermalUnitBlock always has the
+    commitment variables. They are fixed to 1 by declaring the unit on before
+    the horizon and a minimum up time longer than the horizon itself, which is
+    how a ThermalUnitBlock states that the commitment is not free.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    for name, value in (("InitUpDownTime", 1),
+                        ("MinUpTime", int(time_horizon) + 1),
+                        ("MinDownTime", 1)):
+        entry = thermal_variables.setdefault(name, {"type": "int", "size": ()})
+        entry["value"] = value
+
+    # a unit that is never off pays neither to start up nor to shut down
+    for name in ("StartUpCost", "ShutDownCost"):
+        thermal_variables.pop(name, None)
+
+
+def free_initial_ramp(thermal_variables, time_horizon):
+    """
+    Frees the first instant of the horizon, which PyPSA leaves free.
+
+    A ThermalUnitBlock always starts from its initial power: the output of the
+    first instant is within a ramp of it, and the unit can only shut down there
+    if that power is below the shut-down limit. PyPSA instead bounds the first
+    snapshot only when the network gives `p_init`, and with no `p_init` it
+    drops that row altogether. The two models then agree if nothing of the
+    first instant can bind, which is what this does: the initial power becomes
+    the maximum power of the first instant, and the ramps and the shut-down
+    limit there are raised to the largest maximum power, an upper bound of any
+    change of the output.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    if "MaxPower" not in thermal_variables:
+        return
+
+    max_power = np.atleast_1d(np.asarray(thermal_variables["MaxPower"]["value"],
+                                         dtype=float)).ravel()
+    free = float(np.max(max_power))
+
+    for name in ("DeltaRampUp", "DeltaRampDown", "ShutDownLimit"):
+        if name not in thermal_variables:
+            continue
+        value = np.atleast_1d(np.array(thermal_variables[name]["value"],
+                                       dtype=float)).ravel()
+        if value[0] >= free:
+            continue
+        if value.size == 1:   # one value for the whole horizon: unfold it
+            value = np.full(int(time_horizon), value[0])
+            thermal_variables[name]["size"] = ("TimeHorizon",)
+        value[0] = free
+        thermal_variables[name]["value"] = value
+
+    if "InitialPower" in thermal_variables:
+        thermal_variables["InitialPower"]["value"] = float(max_power[0])
+
+
+def nuclear_rule_variables(rules, thermal_variables, snapshot_hours):
+    """
+    Computes the variables that turn a ThermalUnitBlock into a NuclearUnitBlock.
+
+    Parameters
+    ----------
+    rules : dict
+        Operating rules, with the keys and the meaning of
+        `constants.nuclear_rules_default`; a rule set to None is not emitted.
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit ("MinPower",
+        "MaxPower", "DeltaRampUp", "DeltaRampDown"), as returned by
+        `parse_unitblock_parameters`.
+    snapshot_hours : float
+        The duration of a snapshot in hours, used to turn the durations of the
+        rules into numbers of snapshots.
+
+    Returns
+    -------
+    variables : dict
+        Variable name -> {"value", "type", "size"}.
+    dimensions : dict
+        The dimensions the variables need ("NumberPowerBands").
+    """
+    def periods(hours, minimum):
+        return max(minimum, int(round(float(hours) / snapshot_hours)))
+
+    def as_array(name):
+        return np.asarray(thermal_variables[name]["value"], dtype=float).ravel()
+
+    def scalar(value, var_type):
+        return {"value": value, "type": var_type, "size": ()}
+
+    variables = {}
+    dimensions = {}
+
+    p_min = float(as_array("MinPower").min())
+    p_max = float(as_array("MaxPower").max())
+    width = p_max - p_min
+
+    modulation_time = periods(rules["modulation_time"], 2)
+    variables["ModulationTime"] = scalar(modulation_time, "uint")
+    variables["InitModulation"] = scalar(modulation_time, "uint")
+
+    fraction = rules.get("modulation_ramp_fraction")
+    if fraction:
+        for key, ramp in (("ModulationDeltaRampUp", "DeltaRampUp"),
+                          ("ModulationDeltaRampDown", "DeltaRampDown")):
+            value = fraction * as_array(ramp)
+            if value.size == 1:
+                variables[key] = scalar(float(value[0]), "float")
+            else:
+                variables[key] = {"value": value, "type": "float",
+                                  "size": ("TimeHorizon",)}
+
+    if rules.get("max_modulation_length") is not None:
+        length = periods(rules["max_modulation_length"], 1)
+        if length > 1:
+            variables["MaxModulationLength"] = scalar(length, "uint")
+
+    if rules.get("stability_after_start_up"):
+        variables["StabilityAfterStartUp"] = scalar(
+            periods(rules["stability_after_start_up"], 1), "uint")
+
+    if rules.get("day_length"):
+        variables["DayLength"] = scalar(periods(rules["day_length"], 1), "uint")
+
+    for key, rule in (("ModulationsPerDay", "modulations_per_day"),
+                      ("StartUpsPerDay", "start_ups_per_day")):
+        if rules.get(rule) is not None:
+            variables[key] = scalar(int(rules[rule]), "uint")
+
+    bands = rules.get("power_bands")
+    if bands and width > 0:
+        dimensions["NumberPowerBands"] = 2
+        variables["PowerBands"] = {
+            "value": np.array([p_min + bands * width, p_max - bands * width]),
+            "type": "float",
+            "size": ("NumberPowerBands",),
+        }
+
+    if (rules.get("deep_decrease_threshold") is not None
+            and rules.get("deep_decrease_gradient") is not None):
+        variables["DeepDecreaseThreshold"] = scalar(
+            p_min + rules["deep_decrease_threshold"] * width, "float")
+        variables["DeepDecreaseGradient"] = scalar(
+            rules["deep_decrease_gradient"] * float(as_array("DeltaRampDown").min()),
+            "float")
+        if rules.get("deep_decreases_per_day") is not None:
+            variables["DeepDecreasesPerDay"] = scalar(
+                int(rules["deep_decreases_per_day"]), "uint")
+        if rules.get("deep_decrease_cost"):
+            variables["DeepDecreaseCost"] = scalar(
+                float(rules["deep_decrease_cost"]), "float")
+
+    if rules.get("down_modulation_cost"):
+        variables["DownModulationCost"] = scalar(
+            float(rules["down_modulation_cost"]), "float")
+
+    return variables, dimensions
+
+
 def determine_size_type(
     smspp_parameters,
     dimensions,

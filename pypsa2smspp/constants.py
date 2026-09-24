@@ -16,6 +16,8 @@ They are not meant to be modified by the user and do not depend on any
 specific instance or configuration of the network.
 """
 
+from pathlib import Path
+
 # Dictionary mapping internal shorthand dimensions to full SMS++ dimension names
 conversion_dict = {
     "T": "TimeHorizon",
@@ -148,3 +150,23 @@ STOCHASTIC_PARAMETER_REGISTRY = {
         "weights": False,
     },
 }
+
+def read_nuclear_rules(path):
+    """
+    The operating rules of a load-following nuclear unit written in a YAML
+    file, as a dict from the name of a rule to its value (None for a rule
+    that is not written) [see data/nuclear_rules.yaml].
+    """
+    import yaml
+
+    with open(path, encoding="utf-8") as stream:
+        rules = yaml.safe_load(stream) or {}
+    if not isinstance(rules, dict):
+        raise ValueError(f"read_nuclear_rules: {path} does not hold a mapping")
+    return rules
+
+
+# Default operating rules of a load-following nuclear unit, used by the
+# `nuclear_units` option of Transformation for every carrier mapped to True
+nuclear_rules_default = read_nuclear_rules(
+    Path(__file__).resolve().parent / "data" / "nuclear_rules.yaml")

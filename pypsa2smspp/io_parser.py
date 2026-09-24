@@ -43,7 +43,7 @@ def parse_txt_to_unitblocks(file_path: str, unitblocks: dict) -> None:
             if match_time:
                 continue  # Skip timing info
 
-            block_match = re.search(r"(ThermalUnitBlock|BatteryUnitBlock|IntermittentUnitBlock|HydroUnitBlock)\s*(\d+)", line)
+            block_match = re.search(r"(ThermalUnitBlock|NuclearUnitBlock|BatteryUnitBlock|IntermittentUnitBlock|HydroUnitBlock)\s*(\d+)", line)
             if block_match:
                 block_type, number = block_match.groups()
                 number = int(number)

@@ -12,12 +12,20 @@ from conftest import (
 )
 
 from network_definition import NetworkDefinition
+from pypsa2smspp.constants import nuclear_rules_default
 from pypsa2smspp.transformation import Transformation
 
 from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+
+
+# the rules of a nuclear unit switched off, the modulation ramps being the full
+# thermal ones: a NuclearUnitBlock that behaves as a ThermalUnitBlock
+NON_BINDING_NUCLEAR_RULES = {key: None for key in nuclear_rules_default}
+NON_BINDING_NUCLEAR_RULES.update(modulation_ramp_fraction=1.0,
+                                 modulation_time=2.0)
 
 
 def run_ucblock(xlsx_path: Path) -> None:
@@ -67,6 +75,12 @@ def run_ucblock(xlsx_path: Path) -> None:
     # ---- (2) SMS++ pipeline (ONE CALL) ----
     transformation = Transformation(
         capacity_expansion_ucblock=True,  # UCBlock
+        # a committable generator is a ThermalUnitBlock
+        enable_thermal_units=bool(network.generators.committable.any()),
+        # the nuclear units are NuclearUnitBlocks, with rules that do not bind
+        # so that the optimum is the one of PyPSA
+        nuclear_units=({"nuclear": NON_BINDING_NUCLEAR_RULES}
+                       if "nuclear" in set(network.generators.carrier) else None),
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,

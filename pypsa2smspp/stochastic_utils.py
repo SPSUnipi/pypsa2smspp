@@ -1555,8 +1555,10 @@ def collect_unitblock_indices_by_names_and_type(
         if name is None or block is None or enumerate_name is None:
             continue
 
-        key = (name, block)
-        matches.setdefault(key, []).append(enumerate_name)
+        matches.setdefault((name, block), []).append(enumerate_name)
+        # a NuclearUnitBlock is a ThermalUnitBlock
+        if block == "NuclearUnitBlock":
+            matches.setdefault((name, "ThermalUnitBlock"), []).append(enumerate_name)
 
     unitblock_indices = []
 
