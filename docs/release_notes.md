@@ -16,6 +16,7 @@
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
 * Set InitialStorage from the state of charge of a non-cyclic storage unit, which was 0 [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* Give the storage units a spillway bounded by the inflow, as in PyPSA [PR #60](https://github.com/SPSUnipi/pypsa2smspp/pull/60)
 * Start the ramps of a committable unit from `p_init`, and leave the first instant free without it [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Translate `shut_down_cost` into the `ShutDownCost` of the `ThermalUnitBlock` [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Keep a generator that PyPSA does not commit on at every snapshot [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
