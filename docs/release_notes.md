@@ -8,6 +8,7 @@
 * Emit a MultiStageStochasticBlock from a two-level scenario tree
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 * Translate the global constraints on the dispatch into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* Write a modular extendable asset (`p_nom_mod`) of an IntermittentUnitBlock with an integer design, the number of its modules [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Translate the thermal generators of chosen carriers into NuclearUnitBlocks (`nuclear_units`, off by default), with rules read from `data/nuclear_rules.yaml` or from a file of the user [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 
 ### Minor Changes and Bug Fixes
