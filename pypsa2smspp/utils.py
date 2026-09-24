@@ -1965,13 +1965,16 @@ def resolve_param_value(
     size = smspp_parameters[block_class]['Size'][key]
 
     if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]', '[L] | [NB]']:
+        # PyPSA charges a start-up and a shut-down once, whatever the
+        # weighting of the snapshot, and the costs of the energy by the
+        # weighting
         weight = param in [
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
-            'start_up_cost', 'stand_by_cost'
+            'stand_by_cost'
         ]
         arg = get_param_as_dense(n, components_type, param, weight)[[component]]
     elif param in components_df.index or param in components_df.columns:
-        if param in ['marginal_cost', 'marginal_cost_quadratic','start_up_cost', 'stand_by_cost']:
+        if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
             arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
         else:
             arg = components_df.get(param)

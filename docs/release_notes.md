@@ -24,6 +24,7 @@
 * Read the solution back with a recent xarray [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Forbid the switches that a start-up or shut-down limit below the minimum power makes unreachable [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Keep the index name of the generators split into modules by `split_traditional_generators_into_modules` [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
+* Charge a start-up once, whatever the weighting of the snapshot, as PyPSA does: it used to be multiplied by it, while PyPSA weights the cost of the energy and not the unit commitment terms
 
 
 ## v0.0.5
