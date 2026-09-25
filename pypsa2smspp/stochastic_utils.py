@@ -298,16 +298,16 @@ def _normalize_stochastic_parameters(
     non-anticipativity Constraint of the extensive form. The two are the same
     problem written the other way round, the second one being what a Benders
     decomposition of it wants to see.
-
-    "design_cost_outside" leaves the design Variable where the extensive form
-    puts them, one copy per scenario inside the units, but moves their COST
-    out, into the InvestmentBlock wrapping the stochastic Block. The units
-    then state their capacity against a Variable they no longer pay for, so
-    the value of a scenario can only go down when the design grows: that
-    monotonicity is what a generic Benders solver reads the sign of its cuts
-    from, and it is lost when each scenario pays the design itself.
     """
     sp = dict(stochastic_parameters or {})
+
+    if "design_cost_outside" in sp:
+        raise ValueError(
+            "'design_cost_outside' is gone: a unit has its design Variable "
+            "only when its investment cost is not zero, so moving the cost "
+            "out of the units took the Variable away with it, whatever the "
+            "unit."
+        )
 
     stochastic_type = sp.get("stochastic_type", None)
     parameters = sp.get("parameters", [])
@@ -337,7 +337,6 @@ def _normalize_stochastic_parameters(
             sp.get("tree", sp.get("scenario_tree", None))
         ),
         "investment_outside": bool( sp.get("investment_outside", False) ),
-        "design_cost_outside": bool( sp.get("design_cost_outside", False) ),
         "design_stages": normalize_design_stages( sp.get("design_stages",
                                                           None) ),
     }
@@ -405,16 +404,12 @@ def describe_problem_structure(
         "stochastic_type": stochastic_type,
         "number_scenarios": len(scenario_names),
         "scenario_names": scenario_names,
-        "has_investment_block": ( ( not bool(capacity_expansion_ucblock) )
-                                  or ( is_stochastic
-                                       and sp["design_cost_outside"] ) ),
+        "has_investment_block": not bool(capacity_expansion_ucblock),
         "stochastic_parameters": stochastic_parameters_list,
         "stochastic_parameter_set": stochastic_parameter_set,
         "scenario_tree": sp["scenario_tree"] if is_stochastic else None,
         "investment_outside": sp["investment_outside"] if is_stochastic
                               else False,
-        "design_cost_outside": sp["design_cost_outside"] if is_stochastic
-                               else False,
         "design_stages": sp["design_stages"] if is_stochastic else None,
     }
 

@@ -15,7 +15,6 @@ it is not there.
 | `gen_two_stage_design.py` | the same tree with a second decision stage, every expandable technology split in a root part and a later one carrying a premium |
 | `gen_pypsa_tree.py` | the tree instances drawn from a PyPSA-Eur network |
 | `emit_two_stage.py` | converts the two-decision tree to SMS++ |
-| `emit_design_cost_outside.py` | converts it with the design cost stated outside the units |
 | `bounds_two_stage.py` | the two values the optimum has to sit between: everything decided at the root, and everything decided once the climate is known |
 | `extensive_two_stage.py` | the exact optimum, the tree written out as one flat program with the sharing stated by hand |
 | `crosscheck_tssb.py`, `run_*.py`, `solve_flat.py` | run one form and report what it gives |
