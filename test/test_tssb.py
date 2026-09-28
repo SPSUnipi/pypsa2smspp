@@ -290,6 +290,39 @@ def test_tssb(xlsx_path, stochastic_parameters):
     )
 
 
+# ---------------------------------------------------------------------------
+# design_cost_outside, which is gone
+# ---------------------------------------------------------------------------
+
+def test_design_cost_outside_is_refused():
+    """
+    A unit has its design Variable only when its investment cost is not zero,
+    hence stating the cost outside the units took the Variable away with it:
+    the option is gone, and asking for it says so instead of doing nothing.
+    """
+    n = pypsa.Network(
+        str(Path(__file__).resolve().parent / "networks"
+            / "pypsa_stoch_load.nc"))
+
+    transformation = Transformation(
+        name="tssb_design_cost_outside",
+        configfile="TSSBlock/TSSBSCfg.txt",
+        enable_thermal_units=False,
+        capacity_expansion_ucblock=True,
+        workdir=str(OUT_TEST / "tssb" / "design_cost_outside"),
+        stochastic_parameters={
+            "stochastic_type": "tssb",
+            "parameters": ["demand"],
+            "design_cost_outside": True,
+        },
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+    )
+
+    with pytest.raises(ValueError, match="design_cost_outside"):
+        transformation.create_model(n, verbose=False)
+
+
 if __name__ == "__main__":
     safe_remove(OBJECTIVES_CSV)
 
