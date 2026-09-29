@@ -53,12 +53,17 @@ class TransformationConfig:
             "LinearTerm": lambda marginal_cost: marginal_cost,
             "ConstTerm": lambda stand_by_cost, p_nom, p_nom_extendable: stand_by_cost.where(~p_nom_extendable, stand_by_cost / p_nom.where(p_nom != 0, 1.0)),
             "StartUpCost": lambda start_up_cost, p_nom, p_nom_extendable: start_up_cost.where(~p_nom_extendable, start_up_cost / p_nom.where(p_nom != 0, 1.0)),
-            "InitialPower": lambda p_nom, up_time_before, p_nom_extendable: p_nom.where(~p_nom_extendable, 1.0) if up_time_before.values[0] > 0 else 0,
+            "ShutDownCost": lambda shut_down_cost, p_nom, p_nom_extendable: shut_down_cost.where(~p_nom_extendable, shut_down_cost / p_nom.where(p_nom != 0, 1.0)),
+            "InitialPower": lambda p_nom, p_init, up_time_before, p_nom_extendable: (p_nom if p_init is None else p_init.fillna(p_nom)).where(~p_nom_extendable, 1.0) if up_time_before.values[0] > 0 else 0,
             "FixedConsumption": 0.0, # How much the component consumes if off
             "InertiaCommitment": 1.0,
             "StartUpLimit": lambda ramp_limit_start_up, p_nom, p_nom_extendable: ramp_limit_start_up.where(p_nom_extendable, ramp_limit_start_up * p_nom).fillna(p_nom.where(~p_nom_extendable, 1.0)),
             "ShutDownLimit": lambda ramp_limit_shut_down, p_nom, p_nom_extendable: ramp_limit_shut_down.where(p_nom_extendable, ramp_limit_shut_down * p_nom).fillna(p_nom.where(~p_nom_extendable, 1.0)),
         }
+
+        # the thermal part of a NuclearUnitBlock; its operating rules are added
+        # by Transformation, since they come from the options and not from PyPSA
+        self.NuclearUnitBlock_parameters = self.ThermalUnitBlock_parameters
 
         self.BatteryUnitBlock_parameters = {
             # "Kappa": 1.0,
@@ -74,7 +79,7 @@ class TransformationConfig:
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
-            "InitialStorage": lambda cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else 0,
+            "InitialStorage": lambda cyclic_state_of_charge, state_of_charge_initial: -1 if cyclic_state_of_charge.values else state_of_charge_initial,
             "Cost": lambda marginal_cost: abs(marginal_cost),
             # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
             # "ConverterInvestmentCost": 0.0,
@@ -125,32 +130,37 @@ class TransformationConfig:
         self.HydroUnitBlock_parameters = {
             # "StartArc": lambda p_nom: np.full(len(p_nom)*2, 0),
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
-            "StartArc": lambda p_nom: np.array([0, 0]),
-            "EndArc": lambda p_nom: np.array([1, 1]),
+            "StartArc": lambda p_nom: np.array([0, 0, 0]),
+            "EndArc": lambda p_nom: np.array([1, 1, 1]),
             "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow, snapshots_weighting: (inflow.values * snapshots_weighting.values).transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
             # "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
             # "MaxFlow": lambda p_nom, p_max_pu, max_hours: (np.array([(p_nom*p_max_pu*max_hours), (0.*p_max_pu)])).squeeze().transpose(),
-            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow: (
-                np.array([
-                    (p_nom * max_hours * p_max_pu).clip(lower=inflow.sum().sum()),
-                    0. * p_max_pu
-                    ]).squeeze().transpose()
-                ),            
-            "MinFlow": lambda p_nom, p_min_pu, max_hours: (np.array([(0.*p_min_pu), (p_nom*p_min_pu*max_hours)])).squeeze().transpose(),
-            "MaxPower": lambda p_nom, p_max_pu: (np.array([(p_nom*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
-            "MinPower": lambda p_nom, p_min_pu: (np.array([(0.*p_min_pu), (p_nom*p_min_pu)])).squeeze().transpose(),
+            # the third arc is the spillway: it carries at most what flows in
+            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow, snapshots_weighting: np.column_stack(
+                np.broadcast_arrays(
+                    np.ravel(np.asarray((p_nom * max_hours * p_max_pu).clip(lower=inflow.sum().sum()), dtype=float)),
+                    0.0,
+                    np.ravel(np.asarray(inflow, dtype=float)) * float(np.ravel(np.asarray(snapshots_weighting, dtype=float))[0]),
+                    )
+                ),
+
+            "MinFlow": lambda p_nom, p_min_pu, max_hours: (np.array([(0.*p_min_pu), (p_nom*p_min_pu*max_hours), (0.*p_min_pu)])).squeeze().transpose(),
+            "MaxPower": lambda p_nom, p_max_pu: (np.array([(p_nom*p_max_pu), (0.*p_max_pu), (0.*p_max_pu)])).squeeze().transpose(),
+            "MinPower": lambda p_nom, p_min_pu: (np.array([(0.*p_min_pu), (p_nom*p_min_pu), (0.*p_min_pu)])).squeeze().transpose(),
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
-            "NumberPieces": lambda p_nom: np.full(len(p_nom)*2, 1),
-            "ConstantTerm": lambda p_nom: np.full(len(p_nom)*2, 0),
-            "LinearTerm": lambda efficiency_dispatch, efficiency_store, snapshots_weighting: np.array([efficiency_dispatch.values.max() / snapshots_weighting.values.max(), 1 / efficiency_store.values.max() / snapshots_weighting.values.max() if efficiency_store.values.max() != 0 else 0]),
+            "NumberPieces": lambda p_nom: np.full(len(p_nom)*3, 1),
+            "ConstantTerm": lambda p_nom: np.full(len(p_nom)*3, 0),
+            # the spillway carries no power, which is what tells the block
+            # that the unit has one [see hydroblock_dimensions()]
+            "LinearTerm": lambda efficiency_dispatch, efficiency_store, snapshots_weighting: np.array([efficiency_dispatch.values.max() / snapshots_weighting.values.max(), 1 / efficiency_store.values.max() / snapshots_weighting.values.max() if efficiency_store.values.max() != 0 else 0, 0.]),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
-            "DownhillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
-            "UphillFlow": lambda p_nom: np.full(len(p_nom)*2, 0.),
+            "DownhillFlow": lambda p_nom: np.full(len(p_nom)*3, 0.),
+            "UphillFlow": lambda p_nom: np.full(len(p_nom)*3, 0.),
             #"InertiaPower": 1.0,
             # "InitialFlowRate": lambda inflow: inflow.values[0],
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
@@ -179,6 +189,8 @@ class TransformationConfig:
             "p": lambda activepower, designvariable, extendable: activepower * designvariable if extendable else activepower,
             }
         
+        self.NuclearUnitBlock_inverse = self.ThermalUnitBlock_inverse
+
         self.HydroUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: activepower[0],

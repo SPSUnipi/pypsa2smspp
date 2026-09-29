@@ -21,6 +21,8 @@ from pypsa2smspp.constants import (
     conversion_dict,
     nominal_attrs,
     renewable_carriers,
+    nuclear_rules_default,
+    read_nuclear_rules,
     STOCHASTIC_PARAMETER_REGISTRY,
 )
 
@@ -37,6 +39,10 @@ from pypsa2smspp.utils import (
     process_dcnetworkblock,
     get_block_name,
     parse_unitblock_parameters,
+    nuclear_rule_variables,
+    forbid_unreachable_switches,
+    free_initial_ramp,
+    fix_commitment_on,
     determine_size_type,
     merge_lines_and_links,
     rename_links_to_lines,
@@ -47,6 +53,7 @@ from pypsa2smspp.utils import (
     apply_expansion_overrides,
     build_dc_index,
     get_param_as_dense,
+    pollutant_budget_data,
     ucblock_variables,
     preprocess_zero_capital_cost_extendable_generators,
     preprocess_zero_capital_cost_extendable_lines_links,
@@ -68,6 +75,7 @@ from pypsa2smspp.inverse import (
     dataarray_components,
     block_to_dataarrays_stochastic,
     broadcast_static_variables_over_scenarios,
+    merge_by_variable,
 )
 from pypsa2smspp.io_parser import (
     parse_txt_to_unitblocks,
@@ -125,6 +133,7 @@ class Transformation:
         capacity_expansion_ucblock: bool = True,
         enable_thermal_units: bool = False,
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
+        nuclear_units: Optional[Mapping[str, Union[bool, Mapping[str, Any], str, Path]]] = None,
 
         # --- I/O ---
         workdir: Union[str, Path] = "output",
@@ -191,6 +200,20 @@ class Transformation:
             Behaviour:
               - None: use the library default intermittent set (typically `renewable_carriers`).
               - str / list[str]: explicit override (case-insensitive).
+
+            Notes:
+              - Ignored when `enable_thermal_units=False`.
+
+        nuclear_units : Mapping[str, bool | Mapping[str, Any] | str | Path], optional
+            Carriers (case-insensitive) whose thermal generators become
+            NuclearUnitBlocks, i.e., ThermalUnitBlocks subject to the
+            operating rules of a load-following nuclear unit. Each carrier
+            maps to True, which applies the rules of
+            `data/nuclear_rules.yaml`, to the path of a YAML file written as
+            that one, or to a mapping; a file or a mapping may give some of
+            the rules only, the others keeping their default (a rule set to
+            None is not emitted). Durations are in hours, and need a uniform
+            snapshot weighting.
 
             Notes:
               - Ignored when `enable_thermal_units=False`.
@@ -282,6 +305,22 @@ class Transformation:
         self.enable_thermal_units = bool(enable_thermal_units)
 
         self.intermittent_carriers = intermittent_carriers
+        self.nuclear_units = {}
+        for carrier, rules in (nuclear_units or {}).items():
+            if rules is False:
+                continue
+            merged = dict(nuclear_rules_default)
+            if isinstance(rules, (str, Path)):
+                rules = read_nuclear_rules(rules)
+            if isinstance(rules, Mapping):
+                unknown = set(rules) - set(nuclear_rules_default)
+                if unknown:
+                    raise ValueError(
+                        f"Unknown nuclear rules for carrier {carrier!r}: "
+                        f"{sorted(unknown)}"
+                    )
+                merged.update(rules)
+            self.nuclear_units[str(carrier).strip().lower()] = merged
 
         self.workdir = Path(workdir)
         self.name = str(name)
@@ -389,7 +428,14 @@ class Transformation:
         # --- your existing logic ---
         self.read_excel_components() # 1
         self.add_dimensions(n) # 2
-        self.iterate_components(n) # 3
+        # the dense series of an attribute are built once per conversion and
+        # shared by all the components of its type [see resolve_param_value()]
+        self._dense_cache = {}
+        try:
+            self.iterate_components(n) # 3
+        finally:
+            self._dense_cache = None
+        self.add_pollutant_budget(n) # 3b
         self.add_demand(n) # 4
         self.lines_links(n) # 5
 
@@ -407,9 +453,9 @@ class Transformation:
             data for each UnitBlock type (or lines).
         """
         self.smspp_parameters = pd.read_excel(fp, sheet_name=None, index_col=0)
+        # the thermal part of a NuclearUnitBlock has the thermal sizes and types
+        self.smspp_parameters["NuclearUnitBlock"] = self.smspp_parameters["ThermalUnitBlock"]
 
-
-    ### 2 ###
     def add_dimensions(self, n):
         """
         Sets the .dimensions attribute with UCBlock, NetworkBlock, InvestmentBlock, HydroBlock dimensions.
@@ -417,7 +463,8 @@ class Transformation:
 
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.capacity_expansion_ucblock)
-        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(n, self.capacity_expansion_ucblock, nominal_attrs)
+        self.dimensions['InvestmentBlock'] = investmentblock_dimensions(
+            n , self.capacity_expansion_ucblock , nominal_attrs )
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
 
 
@@ -438,6 +485,8 @@ class Transformation:
 
         return {
             "generator_node": [],
+            "generator_owner": [],
+            "storage_owner": [],
             "investment_meta": {
                 "Blocks": [],
                 "index_extendable": [],
@@ -593,6 +642,8 @@ class Transformation:
         links_after = prep["links_after"]
 
         generator_node = state["generator_node"]
+        generator_owner = state["generator_owner"]
+        storage_owner = state["storage_owner"]
         investment_meta = state["investment_meta"]
         unitblock_index = state["unitblock_index"]
         lines_index = state["lines_index"]
@@ -651,15 +702,27 @@ class Transformation:
 
             elif components_type == "storage_units":
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
-                for bus, carrier in zip(components_df["bus_idx"].values, components_df["carrier"]):
-                    if carrier in ["hydro", "PHS"]:
-                        generator_node.extend([bus] * 2)
-                    else:
-                        generator_node.append(bus)
-
+                for name, bus, carrier in zip(components_df.index,
+                                              components_df["bus_idx"].values,
+                                              components_df["carrier"]):
+                    # the turbine, the pump and the spillway of a hydro unit
+                    k = 3 if carrier in ["hydro", "PHS"] else 1
+                    generator_node.extend([bus] * k)
+                    generator_owner.extend([(components_type, name)] * k)
+                    # one storage: the charge of a battery, the reservoir of
+                    # a hydro unit
+                    storage_owner.append((components_type, name))
+    
             else:
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
                 generator_node.extend(components_df["bus_idx"].values)
+                generator_owner.extend(
+                    (components_type, name) for name in components_df.index
+                )
+                if components_type == "stores":
+                    storage_owner.extend(
+                        (components_type, name) for name in components_df.index
+                    )
 
             for component in components_df.index:
                 carrier = (
@@ -674,6 +737,7 @@ class Transformation:
                     enable_thermal_units=self.enable_thermal_units,
                     intermittent_carriers=self.intermittent_carriers,
                     default_intermittent=renewable_carriers,
+                    nuclear_carriers=list(self.nuclear_units),
                 )
 
                 # UCBlock cannot expand a thermal unit: its commitment u_t is a
@@ -683,7 +747,8 @@ class Transformation:
                 # variable, silently corrupting the model.
                 if (
                     self.capacity_expansion_ucblock
-                    and attr_name == "ThermalUnitBlock_parameters"
+                    and attr_name in ("ThermalUnitBlock_parameters",
+                                      "NuclearUnitBlock_parameters")
                     and is_extendable(components_df.loc[[component]],
                                       components.name, nominal_attrs)
                 ):
@@ -740,7 +805,26 @@ class Transformation:
             "size": "NumAssets",
         }
 
-    ### 4 ###
+    def add_pollutant_budget(self, n):
+        """
+        Add the pollutant budget constraints of the UCBlock, one per global
+        constraint of the network on the dispatch (a primary energy or an
+        operational limit), as translated by pollutant_budget_data().
+        """
+        self.pollutant_budget = pollutant_budget_data(
+            n, self._generator_owner, self._storage_owner
+        )
+        if self.pollutant_budget is None:
+            return
+
+        number_generators = self.dimensions["UCBlock"]["NumberElectricalGenerators"]
+        if self.pollutant_budget["rho"].shape[2] != number_generators:
+            raise ValueError(
+                "add_pollutant_budget: the conversion factors cover "
+                f"{self.pollutant_budget['rho'].shape[2]} electrical generators, "
+                f"the UCBlock has {number_generators}."
+            )
+
     def add_InvestmentBlock(self, n, components_df, components_type):
         """
         Parse and add the InvestmentBlock to self.investmentblock.
@@ -833,8 +917,57 @@ class Transformation:
             components_t,
             n,
             components_type,
-            component
+            component,
+            dense_cache=getattr(self, "_dense_cache", None)
         )
+
+        dimensions = None
+        if attr_name in ("ThermalUnitBlock_parameters",
+                         "NuclearUnitBlock_parameters"):
+            # a ThermalUnitBlock has neither a bound on the energy of the
+            # whole horizon (which no Dynamic Programming Solver of it could
+            # enforce either) nor modules of its capacity, so a unit that has
+            # them is refused instead of being written without them
+            name = components_df.index[0]
+            for field in ("e_sum_min", "e_sum_max"):
+                if field in components_df and \
+                        np.isfinite(components_df[field].iloc[0]):
+                    raise ValueError(
+                        f"{name} has {field}, a bound on the energy it "
+                        "generates over the whole horizon, which a "
+                        "ThermalUnitBlock cannot express."
+                    )
+            if "p_nom_mod" in components_df and \
+                    float(components_df["p_nom_mod"].iloc[0]) != 0.0:
+                raise ValueError(
+                    f"{name} is a modular unit (p_nom_mod), whose commitment "
+                    "PyPSA counts in modules, which a ThermalUnitBlock cannot "
+                    "express."
+                )
+
+            # a unit that pays nothing to shut down has no such variable,
+            # as it has none in the block
+            if "ShutDownCost" in converted_dict and \
+                    not np.any(converted_dict["ShutDownCost"]["value"]):
+                del converted_dict["ShutDownCost"]
+
+            forbid_unreachable_switches(converted_dict, len(n.snapshots))
+            # PyPSA ramps from the output before the horizon only when the
+            # network gives it, while a ThermalUnitBlock always does
+            if "p_init" not in components_df or \
+                    components_df["p_init"].isna().all():
+                free_initial_ramp(converted_dict, len(n.snapshots))
+            # a generator that PyPSA does not commit is on at every snapshot
+            if not bool(components_df["committable"].iloc[0]):
+                fix_commitment_on(converted_dict, len(n.snapshots))
+        if attr_name == "NuclearUnitBlock_parameters":
+            carrier = str(components_df["carrier"].iloc[0]).strip().lower()
+            rule_variables, dimensions = nuclear_rule_variables(
+                self.nuclear_units[carrier],
+                converted_dict,
+                self._uniform_snapshot_hours(n),
+            )
+            converted_dict.update(rule_variables)
 
         name = get_block_name(attr_name, index, components_df)
 
@@ -851,14 +984,32 @@ class Transformation:
             )
 
             self.unitblocks[name] = {"name": components_df.index[0],"enumerate": f"UnitBlock_{index}" ,"block": attr_name.split("_")[0], design_key: components_df[nom].values, "Extendable":ext, "variables": converted_dict}
-
+            if dimensions:
+                self.unitblocks[name]["dimensions"] = dimensions
+        
         if attr_name == 'HydroUnitBlock_parameters':
             dimensions = self.dimensions['HydroUnitBlock']
-            self.dimensions['UCBlock']["NumberElectricalGenerators"] += 1*dimensions["NumberReservoirs"]
-
+            # the loop above counts one generator for the storage unit, while
+            # the block has one per arc: a turbine, a pump and a spillway
+            self.dimensions['UCBlock']["NumberElectricalGenerators"] += (
+                dimensions["NumberArcs"] - 1)
+            
             self.unitblocks[name]['dimensions'] = dimensions
+        
+    @staticmethod
+    def _uniform_snapshot_hours(n):
+        """
+        Returns the duration of a snapshot in hours, which the durations of the
+        nuclear rules are divided by; the weighting must be uniform.
+        """
+        weights = n.snapshot_weightings["generators"].to_numpy(dtype=float)
+        if weights.size == 0 or not np.allclose(weights, weights[0]):
+            raise ValueError(
+                "The nuclear rules need a uniform snapshot weighting, "
+                "their durations being given in hours."
+            )
+        return float(weights[0])
 
-    ### 6 ###
     def add_demand(self, n):
         """
         Build nodal active power demand for SMS++.
@@ -943,10 +1094,15 @@ class Transformation:
         solution_data = {}
 
         if self.problem_structure.get("is_stochastic", False):
-            if self.problem_structure.get("stochastic_type") == "sddp":
-                return self._parse_sddp_solution_to_unitblocks(solution, n, solution_data)
 
-            return self._parse_stochastic_solution_to_unitblocks(solution, n, solution_data)
+            if self.problem_structure.get("is_stochastic", False):
+                if self.problem_structure.get("stochastic_type") == "sddp":
+                    return self._parse_sddp_solution_to_unitblocks(solution, n, solution_data)
+                if self.problem_structure.get("stochastic_type") == "mssb":
+                    return self._parse_multistage_solution_to_unitblocks(
+                        solution, n, solution_data
+                    )
+                return self._parse_stochastic_solution_to_unitblocks(solution, n, solution_data)
 
         return self._parse_deterministic_solution_to_unitblocks(solution, n, solution_data)
 
@@ -1039,6 +1195,70 @@ class Transformation:
                 scenario_name=scenario_name,
                 solution_data=solution_data,
             )
+
+        split_merged_dcnetworkblocks(self.unitblocks)
+        return solution_data
+    
+    def _parse_multistage_solution_to_unitblocks(self, solution, n, solution_data):
+        """
+        Parse the solution of a MultiStageStochasticBlock.
+
+        Expected layout, one level deeper than the two-stage one, since each
+        outer scenario is itself a TwoStageStochasticBlock:
+            Solution_0
+                ScenarioSolution_0              (outer scenario 0)
+                    ScenarioSolution_0          (its inner scenarios)
+                    ScenarioSolution_1
+                    ...
+                ScenarioSolution_1
+                ...
+
+        The leaves are stored under the very scenario names of the flat
+        network, so that everything downstream reads them as usual.
+        """
+        num_units = self.dimensions["UCBlock"]["NumberUnits"]
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        solution_0 = solution.blocks["Solution_0"]
+        solution_data["MSSB"] = solution_0
+
+        self.networkblock.setdefault("Scenarios", {})
+
+        for outer, group in enumerate(groups):
+            outer_key = f"ScenarioSolution_{outer}"
+
+            if outer_key not in solution_0.blocks:
+                raise KeyError(
+                    f"{outer_key} not found in Solution_0. Expected one block "
+                    "per outer scenario of the scenario tree."
+                )
+
+            outer_block = solution_0.blocks[outer_key]
+
+            for inner, (scenario_name, _) in enumerate(group["scenarios"]):
+                inner_key = f"ScenarioSolution_{inner}"
+
+                if inner_key not in outer_block.blocks:
+                    raise KeyError(
+                        f"{inner_key} not found in {outer_key}. Expected one "
+                        f"block per inner scenario of {group['name']!r}."
+                    )
+
+                scenario_block = outer_block.blocks[inner_key]
+                solution_data[f"{outer_key}/{inner_key}"] = scenario_block
+
+                if self.dimensions["UCBlock"]["NumberLines"] > 0:
+                    self.parse_networkblock_lines(
+                        scenario_block, scenario_name=scenario_name
+                    )
+                    self.generate_line_unitblocks(n, scenario_name=scenario_name)
+
+                self._parse_unitblocks_from_solution_block(
+                    solution_block=scenario_block,
+                    num_units=num_units,
+                    scenario_name=scenario_name,
+                    solution_data=solution_data,
+                )
 
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
@@ -1394,9 +1614,9 @@ class Transformation:
         """
         Existing deterministic inverse transformation.
         """
-        all_dataarrays = self.iterate_blocks(n)
-        self.ds = xr.Dataset(all_dataarrays)
-
+        # iterate_blocks() merges the blocks into a Dataset already, and
+        # xarray refuses to build one out of a Dataset
+        self.ds = self.iterate_blocks(n)
         prepare_solution(
             n,
             self.ds,
@@ -1503,12 +1723,14 @@ class Transformation:
                 )
 
             if dataarrays:
-                datasets.append(xr.Dataset(dataarrays))
+                datasets.append(dataarrays)
 
         if not datasets:
             return {}
 
-        ds = xr.merge(datasets, join="outer", compat="no_conflicts")
+        # the same merge as one xr.merge() of a Dataset per block, done
+        # variable by variable [see merge_by_variable()]
+        ds = merge_by_variable(datasets)
         ds = broadcast_static_variables_over_scenarios(
             ds,
             self.problem_structure.get("scenario_names", []),
@@ -1540,33 +1762,59 @@ class Transformation:
         if self.problem_structure.get("is_stochastic", False):
             stochastic_type = self.problem_structure.get("stochastic_type", None)
 
-            # --------------------------------------------------
-            # SDDP branch
-            # --------------------------------------------------
-            # SDDP ha una struttura top-level completamente diversa da TSSB:
-            #   SDDPBlock
-            #   ├── AbstractPath
-            #   ├── StochasticBlock_0 -> BendersBlock -> BendersBFunction -> Block(filename)
-            #   ├── StochasticBlock_1 -> ...
-            #   └── ...
-            #
-            # NON annidiamo un UCBlock al top-level: ogni stadio ha il proprio
-            # UCBlock salvato in un file .nc4 separato, referenziato via filename.
-            #
-            # Per questo, dopo aver costruito l'SDDPBlock, usciamo immediatamente
-            # dalla funzione: NON dobbiamo eseguire la logica deterministica
-            # (InvestmentBlock / UCBlock) che segue.
+        # --------------------------------------------------
+        # SDDP branch
+        # --------------------------------------------------
+        # SDDP ha una struttura top-level completamente diversa da TSSB:
+        #   SDDPBlock
+        #   ├── AbstractPath
+        #   ├── StochasticBlock_0 -> BendersBlock -> BendersBFunction -> Block(filename)
+        #   ├── StochasticBlock_1 -> ...
+        #   └── ...
+        #
+        # NON annidiamo un UCBlock al top-level: ogni stadio ha il proprio
+        # UCBlock salvato in un file .nc4 separato, referenziato via filename.
+        #
+        # Per questo, dopo aver costruito l'SDDPBlock, usciamo immediatamente
+        # dalla funzione: NON dobbiamo eseguire la logica deterministica
+        # (InvestmentBlock / UCBlock) che segue.
 
             if stochastic_type == "sddp":
                 self.convert_to_sddp_block(master, index_id=0, name_id="Block_0")
                 self.sms_network = sn
                 return sn
 
-            if stochastic_type != "tssb":
+            if stochastic_type not in ("tssb", "mssb"):
                 raise ValueError(
                     f"Unsupported stochastic_type in convert_to_blocks: {stochastic_type!r}"
                 )
 
+            if self.problem_structure.get("investment_outside", False):
+                self.convert_to_investmentblock(master, 0, "Block_0")
+                master = sn.blocks["Block_0"]
+                index_id = 0
+
+                if stochastic_type == "mssb":
+                    self.convert_to_mssb(master, name_id="InnerBlock")
+                else:
+                    self.convert_to_tssb(master, index_id=0,
+                                         name_id="InnerBlock")
+                    self.add_deterministic_model(
+                        master.blocks["InnerBlock"].blocks["StochasticBlock"],
+                        0, inside_stochastic=True, with_investment=False)
+
+                self.sms_network = sn
+                return sn
+
+            if stochastic_type == "mssb":
+                self.convert_to_mssb(master, name_id="Block_0")
+                self.sms_network = sn
+                return sn
+
+            self.convert_to_tssb(master, index_id=0, name_id="Block_0")
+            master = sn.blocks["Block_0"].blocks["StochasticBlock"]
+            index_id = 0
+            inside_tssb = True
             self.convert_to_tssb(master, index_id=0, name_id="Block_0")
 
             # Move master to the inner block container of StochasticBlock
@@ -1577,7 +1825,24 @@ class Transformation:
         # --------------------------------------------------
         # Deterministic investment / UC nesting
         # --------------------------------------------------
-        if self.problem_structure.get("has_investment_block", False):
+        self.add_deterministic_model(master, index_id, inside_stochastic=inside_tssb)
+    
+        self.sms_network = sn
+        return sn
+    
+    def add_deterministic_model(self, master, index_id=0,
+                                inside_stochastic=False, with_investment=True):
+        """
+        Add the deterministic model, i.e. the optional InvestmentBlock and the
+        UCBlock inside it, to master. This is what every scenario sees, and
+        it is therefore built once per inner Block of a multi-stage problem.
+
+        With with_investment false the InvestmentBlock is left out: this is
+        what the scenarios of the "Benders form" look like, the investment
+        having been taken out of them and stated once, above.
+        """
+        if with_investment and self.problem_structure.get("has_investment_block",
+                                                          False):
             name_id = "InvestmentBlock"
             self.convert_to_investmentblock(master, index_id, name_id)
 
@@ -1585,15 +1850,10 @@ class Transformation:
             index_id += 1
             name_id = "InnerBlock"
         else:
-            name_id = "Block" if inside_tssb else "Block_0"
-
-        # --------------------------------------------------
-        # UCBlock always present
-        # --------------------------------------------------
+            name_id = "Block" if inside_stochastic else "Block_0"
+    
         self.convert_to_ucblock(master, index_id, name_id)
-
-        self.sms_network = sn
-        return sn
+        return master
 
     def convert_to_tssb(self, master, index_id, name_id):
         """
@@ -1602,8 +1862,13 @@ class Transformation:
         Structure:
         TwoStageStochasticBlock
         ├── DiscreteScenarioSet
-        ├── StaticAbstractPath
+        ├── StaticAbstractPath      (only if it has first-stage variables)
         └── StochasticBlock
+
+        With the investment stated above, in an InvestmentBlock wrapping this
+        Block, the scenarios hold no here-and-now variable at all: there is
+        then nothing for the StaticAbstractPath to address and nothing for
+        the non-anticipativity Constraint to tie, so the path is left out.
         """
         dims = self.dimensions["tssb"]["dss"]
         number_scenarios = dims["NumberScenarios"]
@@ -1618,9 +1883,156 @@ class Transformation:
         tssb_block = master.blocks[name_id]
 
         self.convert_to_discrete_scenario_set(tssb_block, "DiscreteScenarioSet")
-        self.convert_to_static_abstract_path(tssb_block, "StaticAbstractPath")
+        if not self.problem_structure.get("investment_outside", False):
+            self.convert_to_static_abstract_path(tssb_block,
+                                                 "StaticAbstractPath")
         self.convert_to_stochastic_block(tssb_block, "StochasticBlock")
 
+        return master
+    
+    def convert_to_mssb(self, master, name_id="Block_0"):
+        """
+        Add a MultiStageStochasticBlock to the SMSNetwork hierarchy.
+
+        Structure:
+        MultiStageStochasticBlock
+        ├── ScenarioGenerator          (the whole scenario tree)
+        ├── StaticAbstractPath         (the first-stage design variables)
+        ├── Block_0                    (TwoStageStochasticBlock, outer scenario 0)
+        │   ├── StaticAbstractPath
+        │   └── StochasticBlock        (data mappings + the model template)
+        └── Block_1 ...
+
+        Unlike the two-stage case the inner blocks carry no DiscreteScenarioSet
+        of their own: each of them reads its own scenarios from the shared tree,
+        which is what ties the inner realizations to the outer branch they hang
+        from.
+        """
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        # pySMSpp knows nothing of this block type, so it is built as a plain
+        # Block carrying the type: everything below it is standard again
+        mssb_block = Block(
+            block_type="MultiStageStochasticBlock",
+            NumberSubBlocks=Dimension("NumberSubBlocks", len(groups)),
+        )
+        master.add_block(name_id, block=mssb_block)
+        mssb_block = master.blocks[name_id]
+
+        self.convert_to_scenario_tree(mssb_block, "ScenarioGenerator")
+        if not self.problem_structure.get("investment_outside", False):
+            self.convert_to_static_abstract_path(
+                mssb_block , "StaticAbstractPath" ,
+                root_only=bool( self.tssb_data.get(
+                                    "static_abstract_path_root" ) ) )
+
+        for index, group in enumerate(groups):
+            inner_id = f"Block_{index}"
+
+            mssb_block.add(
+                "TwoStageStochasticBlock",
+                inner_id,
+                id=f"{index}",
+                NumberScenarios=Dimension(
+                    "NumberScenarios", len(group["scenarios"])
+                ),
+            )
+
+            inner_block = mssb_block.blocks[inner_id]
+
+            if not self.problem_structure.get("investment_outside", False):
+                self.convert_to_static_abstract_path(inner_block,
+                                                     "StaticAbstractPath")
+            self.convert_to_stochastic_block(inner_block, "StochasticBlock")
+            # with the investment stated above, in an InvestmentBlock
+            # wrapping this one, the scenarios hold the deterministic model
+            # alone [see add_deterministic_model()]
+            self.add_deterministic_model(
+                inner_block.blocks["StochasticBlock"], 0,
+                inside_stochastic=True,
+                with_investment=not self.problem_structure.get(
+                    "investment_outside", False),
+            )
+
+        return master
+
+
+    def convert_to_scenario_tree(self, master, name_id="ScenarioGenerator"):
+        """
+        Add the scenario tree, a MultiStageDiscreteScenarioSet, to a MSSB block.
+
+        The tree has one node per realization: the root, one node per outer
+        scenario carrying its probability, and one leaf per inner scenario
+        carrying its probability conditional on the outer one it hangs from,
+        together with the very data the flat two-stage form would have put in
+        the DiscreteScenarioSet. Only the leaves carry data, which is what
+        StageScenarioSize says.
+        """
+        dss_data = self.tssb_data["discrete_scenario_set"]
+        dims = self.dimensions["tssb"]["dss"]
+        groups = self.problem_structure["scenario_tree"]["groups"]
+
+        scenarios = np.asarray(dss_data["scenarios"], dtype=float)
+        scenario_size = int(dims["ScenarioSize"])
+        row_of = {
+            name: index
+            for index, name in enumerate(self.problem_structure["scenario_names"])
+        }
+
+        stages, parents, probabilities, data = [], [], [], []
+
+        stages.append(0)                            # the root
+        parents.append(-1)
+        probabilities.append(1.0)
+        data.append(np.zeros(scenario_size))
+
+        for group in groups:
+            outer = len(stages)
+            stages.append(1)
+            parents.append(0)
+            probabilities.append(group["probability"])
+            data.append(np.zeros(scenario_size))
+
+            for name, probability in group["scenarios"]:
+                stages.append(2)
+                parents.append(outer)
+                probabilities.append(probability)
+                data.append(scenarios[row_of[name]])
+
+        number_nodes = len(stages)
+        # the root has no parent: any index past the last node says so
+        parents = [number_nodes if p < 0 else p for p in parents]
+
+        tree_block = Block(
+            block_type="MultiStageDiscreteScenarioSet",
+            NumberStages=Dimension("NumberStages", 3),
+            NumberNodes=Dimension("NumberNodes", number_nodes),
+            ScenarioDataSize=Dimension("ScenarioDataSize", scenario_size),
+            StageScenarioSize=Variable(
+                "StageScenarioSize",
+                "u4",
+                ("NumberStages",),
+                np.array([0, 0, scenario_size], dtype="u4"),
+            ),
+            NodeStage=Variable(
+                "NodeStage", "u4", ("NumberNodes",),
+                np.array(stages, dtype="u4"),
+            ),
+            NodeParent=Variable(
+                "NodeParent", "u4", ("NumberNodes",),
+                np.array(parents, dtype="u4"),
+            ),
+            NodeProbability=Variable(
+                "NodeProbability", "double", ("NumberNodes",),
+                np.array(probabilities, dtype=float),
+            ),
+            NodeData=Variable(
+                "NodeData", "double", ("NumberNodes", "ScenarioDataSize"),
+                np.vstack(data),
+            ),
+        )
+
+        master.add_block(name_id, block=tree_block)
         return master
 
     def convert_to_discrete_scenario_set(self, master, name_id="DiscreteScenarioSet"):
@@ -1651,13 +2063,20 @@ class Transformation:
         master.add_block(name_id, block=dss_block)
         return master
 
-
-    def convert_to_static_abstract_path(self, master, name_id="StaticAbstractPath"):
+    def convert_to_static_abstract_path(self, master,
+                                        name_id="StaticAbstractPath",
+                                        root_only=False):
         """
         Add the StaticAbstractPath block to a TSSB block.
+
+        With root_only the path names the design decisions taken at the
+        root alone, which is what the outer level of a tree with a second
+        decision stage ties; everywhere else the path names them all.
         """
-        sap_data = self.tssb_data["static_abstract_path"]
-        dims = self.dimensions["tssb"]["sap"]
+        which = "static_abstract_path_root" if root_only \
+                else "static_abstract_path"
+        sap_data = self.tssb_data[ which ]
+        dims = self.dimensions["tssb"][ "sap_root" if root_only else "sap" ]
 
         sap_block = Block(
             block_type="AbstractPath",
@@ -1920,6 +2339,36 @@ class Transformation:
             id=f"{index_id}",
             **block_kwargs,
         )
+        # -----------------
+        # Pollutant budget, added to the Block directly
+        # -----------------
+        pb = getattr(self, "pollutant_budget", None)
+        if pb:
+            ucblock = master.blocks[name_id]
+            number_pollutants = len(pb["names"])
+            ucblock.add_dimension("NumberPollutants", number_pollutants)
+            ucblock.add_dimension("TotalNumberPollutantZones", number_pollutants)
+            ucblock.add_variable(
+                "PollutantBudget", "float", ("TotalNumberPollutantZones",),
+                pb["budget"],
+            )
+            if np.isfinite(pb["min_budget"]).any():
+                ucblock.add_variable(
+                    "PollutantMinBudget", "float", ("TotalNumberPollutantZones",),
+                    pb["min_budget"],
+                )
+            ucblock.add_variable(
+                "PollutantRho", "float",
+                ("TimeHorizon", "NumberPollutants", "NumberElectricalGenerators"),
+                pb["rho"],
+            )
+            if np.any(pb["storage_rho"]):
+                ucblock.add_dimension("NumberStorages", pb["storage_rho"].shape[2])
+                ucblock.add_variable(
+                    "PollutantStorageRho", "float",
+                    ("TimeHorizon", "NumberPollutants", "NumberStorages"),
+                    pb["storage_rho"],
+                )
 
         # -----------------
         # Add all UnitBlocks inside UCBlock
@@ -1937,14 +2386,35 @@ class Transformation:
             # Add also any special dimensions
             if "dimensions" in unit_block:
                 for dim_name, dim_value in unit_block["dimensions"].items():
-                    ub_kwargs[dim_name] = dim_value
+                    # without a table pySMSpp would take an int for an Attribute
+                    ub_kwargs[dim_name] = (
+                        Dimension(dim_name, dim_value)
+                        if unit_block["block"] == "NuclearUnitBlock"
+                        else dim_value
+                    )
+    
+            # pySMSpp has no ShutDownCost in its table of the
+            # ThermalUnitBlock: it is added to the Block afterwards, as the
+            # pollutant budget of the UCBlock is
+            shut_down_cost = ub_kwargs.pop("ShutDownCost", None)
 
-            # Create Block
-            unit_block_obj = Block().from_kwargs(
-                block_type=unit_block["block"],
-                name=unit_block["name"],
-                **ub_kwargs,
-            )
+            # Create Block (pySMSpp has no table for NuclearUnitBlock and
+            # infers the kinds from the values, which is what we want)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="Block type NuclearUnitBlock not found"
+                )
+                unit_block_obj = Block().from_kwargs(
+                    block_type=unit_block["block"],
+                    name=unit_block["name"],
+                    **ub_kwargs,
+                )
+    
+            if shut_down_cost is not None:
+                unit_block_obj.add_variable(
+                    "ShutDownCost", shut_down_cost.var_type,
+                    shut_down_cost.dimensions, shut_down_cost.data,
+                )
 
             # Attach to UCBlock
             master.blocks[name_id].add_block(
@@ -2047,20 +2517,22 @@ class Transformation:
         # --------------------------------------------------
         if self.problem_structure.get("is_stochastic", False):
             stochastic_type = self.problem_structure.get("stochastic_type", None)
-
             if stochastic_type == "sddp":
                 block_type = "SDDPBlock"
                 inner_block_name = "Block_0"
-
-            elif stochastic_type == "tssb":
-                block_type = "TwoStageStochasticBlock"
-                inner_block_name = "Block_0"
-
             else:
-                raise ValueError(
-                    f"Unsupported stochastic_type in optimize: {stochastic_type!r}"
-                )
-
+                if stochastic_type not in ("tssb", "mssb"):
+                    raise ValueError(
+                        f"Unsupported stochastic_type in optimize: {stochastic_type!r}"
+                    )
+                if self.problem_structure.get("investment_outside", False):
+                    block_type = "InvestmentBlock"
+                    inner_block_name = "Block_0"
+                else:
+                    block_type = ("MultiStageStochasticBlock"
+                                  if stochastic_type == "mssb"
+                                  else "TwoStageStochasticBlock")
+                    inner_block_name = "Block_0"
         elif self.problem_structure.get("has_investment_block", False):
             block_type = "InvestmentBlock"
             inner_block_name = "InvestmentBlock"
@@ -2079,6 +2551,7 @@ class Transformation:
             "UCBlock": "UCBlock/uc_solverconfig.txt",
             "InvestmentBlock": "InvestmentBlock/BSPar.txt",
             "TwoStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
+            "MultiStageStochasticBlock": "TSSBlock/TSSBSCfg.txt",
         }
 
         cfg = self.configfile
@@ -2133,6 +2606,13 @@ class Transformation:
         # --------------------------------------------------
         solver_options = dict(self.pysmspp_options or {})
 
+        # pySMSpp has no tool of its own for the multi-stage block: the command
+        # line of mssb_solver is the one of tssb_solver, so the same wrapper
+        # serves, pointed at the other executable
+        if block_type == "MultiStageStochasticBlock":
+            solver_options.setdefault("smspp_solver", "TSSBSolver")
+            solver_options.setdefault("solver_path", "mssb_solver")
+
         self.result = self.sms_network.optimize(
             configfile=configfile,
             fp_temp=fp_temp,
@@ -2179,11 +2659,41 @@ class Transformation:
                     "in stochastic_parameters."
                 )
 
-            if self.problem_structure["stochastic_type"] not in ("tssb", "sddp"):
+            if self.problem_structure["stochastic_type"] not in ("tssb", "mssb","sddp"):
                 raise ValueError(
                     f"Unsupported stochastic type: "
                     f"{self.problem_structure['stochastic_type']!r}"
                 )
+
+            if ( self.problem_structure.get("investment_outside", False)
+                 and not self.problem_structure.get("has_investment_block",
+                                                    False) ):
+                raise ValueError(
+                    "'investment_outside' states the investment in an "
+                    "InvestmentBlock wrapping the stochastic Block, hence it "
+                    "needs the investment to go through an InvestmentBlock: "
+                    "set capacity_expansion_ucblock=False."
+                )
+
+            if self.problem_structure["stochastic_type"] == "mssb":
+                tree = self.problem_structure.get("scenario_tree", None)
+                if tree is None:
+                    raise ValueError(
+                        "A multi-stage problem needs the scenario tree saying "
+                        "how the scenarios are grouped. Set stochastic_parameters"
+                        "={'stochastic_type': 'mssb', 'parameters': [...], "
+                        "'tree': {...}}."
+                    )
+
+                in_tree = [name for group in tree["groups"]
+                           for name, _ in group["scenarios"]]
+                in_network = list(self.problem_structure["scenario_names"])
+                if sorted(in_tree) != sorted(in_network):
+                    raise ValueError(
+                        "The leaves of the scenario tree are not the scenarios "
+                        f"of the network: {sorted(in_tree)} against "
+                        f"{sorted(in_network)}."
+                    )
 
             if self.problem_structure["number_scenarios"] <= 0:
                 raise ValueError(
@@ -2251,8 +2761,14 @@ class Transformation:
         if not self.problem_structure.get("is_stochastic", False):
             return None
 
-        if self.problem_structure.get("stochastic_type") != "tssb":
+        stochastic_type = self.problem_structure.get("stochastic_type")
+        if stochastic_type == "sddp":
             return None
+        if stochastic_type not in ("tssb", "mssb"):
+            raise ValueError(
+                f"prepare_tssb_interface only supports 'tssb' and 'mssb', got "
+                f"{stochastic_type!r}."
+            )
 
         #TODO build demand node by node instead of node0, node1, node0, node1
         dss_data = self.build_tssb_dss(n)
@@ -2265,12 +2781,27 @@ class Transformation:
             "TotalLength": sap_data["TotalLength"],
         }
 
+        # with a second decision stage the two levels of the tree tie
+        # different things: the outer one only what is decided at the root,
+        # the inner one everything, so that what is decided once the branch
+        # is known is common to its leaves and free across branches
+        root_variables = self._root_design_variables(design_variables)
+        if root_variables is not None:
+            sap_root = build_tssb_static_abstract_path(root_variables)
+            self.dimensions["tssb"]["sap_root"] = {
+                "PathDim": sap_root["PathDim"],
+                "TotalLength": sap_root["TotalLength"],
+            }
+        else:
+            sap_root = None
+
         stochastic_block = self.build_tssb_stochastic_block(n)
 
         self.tssb_data = {
             "enabled": True,
             "discrete_scenario_set": dss_data,
             "static_abstract_path": sap_data,
+            "static_abstract_path_root": sap_root,
             "stochastic_block": stochastic_block,
         }
 
@@ -2391,7 +2922,7 @@ class Transformation:
                 }
             )
 
-        elif block_type == "ThermalUnitBlock":
+        elif block_type in ("ThermalUnitBlock", "NuclearUnitBlock"):
             self.unitblock_design_data.append(
                 {
                     "block_index": unitblock_index,
@@ -2435,6 +2966,47 @@ class Transformation:
                 }
             )
 
+    def _root_design_variables(self, design_variables):
+        """
+        The subset of the design descriptors that is decided at the root.
+
+        Returns None when every decision is taken there, which is the ordinary
+        two-stage case and the one where the two levels of the tree tie the
+        very same things. The assignment comes by component name, and the
+        descriptors carry the index of their Block, so the names are resolved
+        through the unit blocks the converter has just built.
+        """
+        stages = self.problem_structure.get("design_stages", None)
+        if not stages:
+            return None
+
+        wanted = set( stages[ "root" ] )
+        indices = set()
+        for name, unitblock in self.unitblocks.items():
+            if ( name in wanted ) or ( unitblock.get( "name" ) in wanted ):
+                position = str( unitblock.get( "enumerate" , "" ) ).split( "_" )
+                if len( position ) == 2 and position[ 1 ].isdigit():
+                    indices.add( int( position[ 1 ] ) )
+
+        missing = len( wanted ) - len( indices )
+        if missing > 0:
+            raise ValueError(
+                f"{missing} of the components said to be decided at the root "
+                "have no unit Block: design_stages names components of the "
+                "network, and only the expandable ones have a design Variable."
+            )
+
+        root = [ dv for dv in design_variables
+                 if int( dv[ "block_index" ] ) in indices ]
+
+        if not root:
+            raise ValueError(
+                "no design Variable is left at the root: with everything "
+                "decided after the branch is known the branches do not share "
+                "anything and the problem is not a tree."
+            )
+
+        return root
 
     def _collect_design_variables(self):
         """

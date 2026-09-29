@@ -30,6 +30,7 @@ dependencies = [
     "pypsa>=1",
     "xarray<2026.4",
     "openpyxl",
+    "pyyaml",
     "pysmspp>=0.0.12",
 ]
 

@@ -23,6 +23,7 @@ from pypsa2smspp.network_correction import (
     clean_marginal_cost,
     clean_marginal_cost_intermittent,
     add_slack_unit,
+    clean_dispatch_setpoints,
     reduce_snapshots_and_scale_costs
 )
 
@@ -556,6 +557,9 @@ if __name__ == "__main__":
 
     if RUN_PYPSA_REFERENCE:
         print("\n>>> Solving PyPSA reference")
+        # a finite p_set on a dispatchable component is enforced as a fixed
+        # dispatch, which would freeze it and inflate the reference
+        clean_dispatch_setpoints(n_pypsa)
         n_pypsa.optimize(
             solver_name=SOLVER_NAME,
             solver_options=SOLVER_OPTIONS,

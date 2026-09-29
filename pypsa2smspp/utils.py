@@ -16,6 +16,8 @@ across multiple components.
 They are typically imported and used within the Transformation class.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import re
@@ -60,7 +62,9 @@ def get_param_as_dense(n, component, field, weights=True):
         weighting = weighting.loc[sns]
 
     if field in n.components[component].static.columns:
-        field_val = n.get_switchable_as_dense(component, field, sns)
+        # all the snapshots of the network are the default, and passing them
+        # explicitly makes PyPSA check each of them again at every call
+        field_val = n.get_switchable_as_dense(component, field)
     else:
         field_val = n.dynamic(component)[field]
 
@@ -334,6 +338,166 @@ def has_time_dependent_link_data(n):
 
     return False
 
+# the types of GlobalConstraint that bound the dispatch, hence the ones a
+# pollutant budget can hold; a constraint of any other type, a limit on the
+# capacities above all, is left out of the model with a warning
+POLLUTANT_BUDGET_TYPES = ( "primary_energy" , "operational_limit" )
+
+
+def pollutant_budget_data(n, generator_owner, storage_owner):
+    """
+    Translate the global constraints of a PyPSA network on the dispatch into
+    the pollutant budget constraints of a UCBlock.
+
+    PyPSA writes a primary energy limit on the carrier attribute e with
+    constant C as
+
+        sum_t w_t sum_g ( e_c(g) / eta_g,t ) p_g,t
+          + sum_s e_c(s) ( l_s,-1 - l_s,T ) <= C          (or >=, or ==)
+
+    where w_t is the weighting of snapshot t, eta_g,t the efficiency of
+    generator g, and the second sum is on the storage units and stores whose
+    carrier has the attribute and whose level is not cyclic, l_s,T being the
+    level at the last snapshot and l_s,-1 the initial one; an operational
+    limit on the carrier c is the same with the factor of a generator of that
+    carrier equal to 1 and the others left out. The UCBlock constraint of zone
+    B of pollutant p is
+
+        O^mn_B,p <= sum_t sum_g rho_t,p,g p_g,t + sum_t sum_s sigma_t,p,s v_s,t
+                 <= O_B,p
+
+    hence rho_t,p,g = w_t e_c(g) / eta_g,t, sigma_T,p,s = - e_c(s) (zero at
+    the other times), and O_B,p and O^mn_B,p are C - sum_s e_c(s) l_s,-1 on
+    the sides the sense bounds (+inf and -inf on the others). Each constraint
+    becomes a pollutant with a single zone spanning all the nodes.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The (deterministic) PyPSA network.
+    generator_owner : list of tuple
+        For each electrical generator of the UCBlock, in order, the pair
+        (component list name, component name) it comes from.
+    storage_owner : list of tuple
+        For each storage of the UCBlock, in order, the same pair.
+
+    Returns
+    -------
+    dict or None
+        None if there is nothing to translate, otherwise the names of the
+        translated constraints ("names"), their upper and lower bounds
+        ("budget", "min_budget"), the factors of the generators over
+        (TimeHorizon, NumberPollutants, NumberElectricalGenerators) ("rho")
+        and those of the storages ("storage_rho").
+    """
+    glcs = n.global_constraints
+    if glcs.empty:
+        return None
+
+    T = len(n.snapshots)
+    weightings = n.snapshot_weightings.loc[n.snapshots, "generators"].to_numpy()
+
+    # the UCBlock position of each component, a storage unit having one as a
+    # storage and one (three, when it is a hydro unit) as a generator
+    generator_position = {}
+    for position, owner in enumerate(generator_owner):
+        generator_position.setdefault(owner, position)
+    storage_position = {owner: position
+                        for position, owner in enumerate(storage_owner)}
+
+    names, budget, min_budget, rho, storage_rho = [], [], [], [], []
+
+    for name, glc in glcs.iterrows():
+        if glc.type not in POLLUTANT_BUDGET_TYPES:
+            logger.warning(
+                f"GlobalConstraint {name} is not translated into a pollutant "
+                f"budget: its type, {glc.type}, does not bound the dispatch."
+            )
+            continue
+
+        # the factor of each carrier: the attribute itself for a primary
+        # energy limit, 1 for the one carrier an operational limit is on
+        if glc.type == "primary_energy":
+            factors = n.carriers[glc.carrier_attribute]
+            factors = factors[factors != 0]
+        else:
+            factors = pd.Series(1.0, index=[glc.carrier_attribute])
+
+        if factors.empty:
+            continue
+
+        rho_p = np.zeros((T, len(generator_owner)))
+        storage_rho_p = np.zeros((T, len(storage_owner)))
+        constant = 0.0
+        missing = None
+
+        # the generators, whose factor is divided by the efficiency where the
+        # limit is on a primary energy, and weighted as the objective is
+        gens = n.generators[n.generators.carrier.isin(factors.index)]
+        if not gens.empty:
+            efficiency = (
+                n.get_switchable_as_dense("Generator", "efficiency")
+                .loc[n.snapshots, gens.index].to_numpy()
+                if glc.type == "primary_energy"
+                else np.ones((T, len(gens)))
+            )
+            factor = gens.carrier.map(factors).to_numpy()
+            for j, gen in enumerate(gens.index):
+                position = generator_position.get(("generators", gen))
+                if position is None:
+                    missing = gen
+                    break
+                rho_p[:, position] += weightings * factor[j] / efficiency[:, j]
+
+        # the storages, which are charged for what their level has lost over
+        # the horizon, the initial one being a constant of the row
+        levels = [("storage_units", "cyclic_state_of_charge",
+                   "state_of_charge_initial"),
+                  ("stores", "e_cyclic", "e_initial")]
+        for list_name, cyclic, initial in levels:
+            if missing is not None:
+                break
+            components = getattr(n, list_name)
+            components = components[components.carrier.isin(factors.index)
+                                    & ~components[cyclic].astype(bool)]
+            for component in components.index:
+                position = storage_position.get((list_name, component))
+                if position is None:
+                    missing = component
+                    break
+                factor = factors[components.carrier[component]]
+                storage_rho_p[T - 1, position] -= factor
+                constant += factor * components[initial][component]
+
+        if missing is not None:
+            logger.warning(
+                f"GlobalConstraint {name} is not translated into a pollutant "
+                f"budget: {missing} is not a unit of the UCBlock."
+            )
+            continue
+
+        # the constant of the initial levels sits on the left-hand side, so
+        # what bounds the sum of the terms is the constant of PyPSA less it
+        rhs = float(glc.constant) - constant
+        sense = str(glc.sense)
+        names.append(name)
+        budget.append(np.inf if sense == ">=" else rhs)
+        min_budget.append(-np.inf if sense == "<=" else rhs)
+        rho.append(rho_p)
+        storage_rho.append(storage_rho_p)
+
+    if not names:
+        return None
+
+    return {
+        "names": names,
+        "budget": np.array(budget),
+        "min_budget": np.array(min_budget),
+        "rho": np.stack(rho, axis=1),
+        "storage_rho": np.stack(storage_rho, axis=1),
+    }
+
+
 def ucblock_dimensions(n):
     """
     Computes the dimensions of the UCBlock from the PyPSA network.
@@ -462,8 +626,9 @@ def hydroblock_dimensions():
     """
     dimensions = dict()
     dimensions["NumberReservoirs"] = 1
-    dimensions["NumberArcs"] = 2 * dimensions["NumberReservoirs"]
-    dimensions["TotalNumberPieces"] = 2
+    # the arcs of a reservoir: turbine, pump, spillway
+    dimensions["NumberArcs"] = 3 * dimensions["NumberReservoirs"]
+    dimensions["TotalNumberPieces"] = 3
     return dimensions
 
 # -------------------------------- Correction --------------------------------------
@@ -542,6 +707,7 @@ def get_attr_name(
     enable_thermal_units: bool = False,
     intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
     default_intermittent: Sequence[str] = (),
+    nuclear_carriers: Optional[Union[str, Sequence[str]]] = None,
 ) -> str:
     """
     Maps a PyPSA component type and its carrier to the corresponding
@@ -553,6 +719,7 @@ def get_attr_name(
       - else:
           intermittent set = intermittent_carriers if provided else default_intermittent
           carrier in intermittent set -> IntermittentUnitBlock_parameters
+          carrier in nuclear_carriers -> NuclearUnitBlock_parameters
           otherwise -> ThermalUnitBlock_parameters
     """
     c = carrier.lower() if carrier else None
@@ -574,6 +741,13 @@ def get_attr_name(
 
         if c is not None and c in intermittent_set:
             return "IntermittentUnitBlock_parameters"
+
+        if (
+            c is not None
+            and nuclear_carriers is not None
+            and c in _normalize_carrier_list(nuclear_carriers)
+        ):
+            return "NuclearUnitBlock_parameters"
 
         return "ThermalUnitBlock_parameters"
 
@@ -1433,10 +1607,14 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
-        # Replace +inf with a large sentinel (1e7), then pick scalar based on extendable flag
+        # An uncapped p_nom_max stays infinite: a finite sentinel is a bound the
+        # solver has to carry on a column that appears in every time step, which
+        # keeps that column in the model and costs the barrier a denser
+        # factorization, while the design is already kept finite by its cost
+        # (the zero-cost extendable assets are made non-extendable upstream, see
+        # preprocess_zero_capital_cost_extendable_generators)
         def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            p_nom_max_safe = p_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(p_nom_max_safe)
+            return (first_scalar(p_nom_max)
                     if bool(first_scalar(p_nom_extendable))
                     else first_scalar(p_nom))
         d["MaxCapacityDesign"] = _max_cap_design
@@ -1463,9 +1641,9 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _battery_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
-            return (first_scalar(e_nom_max_safe)
+            return (first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["BatteryMaxCapacityDesign"] = _battery_max_cap_design
@@ -1481,10 +1659,10 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "ConverterMaxCapacityDesign"
     if "ConverterMaxCapacityDesign" not in b:
+        # an uncapped e_nom_max stays infinite, see _max_cap_design above
         def _conv_max_cap_design(e_nom, e_nom_extendable, e_nom_max):
-            e_nom_max_safe = e_nom_max.replace(np.inf, 1e9)
             # Your rule of thumb: 10x battery energy cap when extendable, else e_nom
-            return (10.0 * first_scalar(e_nom_max_safe)
+            return (10.0 * first_scalar(e_nom_max)
                     if bool(first_scalar(e_nom_extendable))
                     else first_scalar(e_nom))
         b["ConverterMaxCapacityDesign"] = _conv_max_cap_design
@@ -1513,13 +1691,16 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     
     
     # --- InvestmentBlockParameters ---
+    # left alone when no template is given, which is what states that the
+    # InvestmentBlock keeps naming assets rather than design lines
     i = InvestmentBlock
-    
-    # DesignLines
-    i['InvestmentCost'] = i.pop('Cost')
-    i['MinCapacityDesign'] = i.pop('LowerBound')
-    i['MaxCapacityDesign'] = i.pop('UpperBound')
-    i.pop('InstalledQuantity')    
+
+    if i is not None:
+        # DesignLines
+        i['InvestmentCost'] = i.pop('Cost')
+        i['MinCapacityDesign'] = i.pop('LowerBound')
+        i['MaxCapacityDesign'] = i.pop('UpperBound')
+        i.pop('InstalledQuantity')    
 
 
 def build_dc_index(n, links_merged_df_before_split, links_df_after_split):
@@ -1644,7 +1825,8 @@ def parse_unitblock_parameters(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
 
     """
@@ -1668,6 +1850,9 @@ def parse_unitblock_parameters(
         The component type name (e.g. "Generator").
     component : str or None
         Single component name, or None.
+    dense_cache : dict or None, default None
+        Dense time series already built during this conversion, keyed by
+        component type, attribute and weighting [see resolve_param_value()].
 
     Returns
     -------
@@ -1690,7 +1875,8 @@ def parse_unitblock_parameters(
                     components_t,
                     n,
                     components_type,
-                    component
+                    component,
+                    dense_cache=dense_cache
                 )
                 for param in param_names
             ]
@@ -1746,7 +1932,8 @@ def resolve_param_value(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
     """
     Resolves the correct parameter value to be passed to the lambda function.
@@ -1768,13 +1955,26 @@ def resolve_param_value(
     size = smspp_parameters[block_class]['Size'][key]
 
     if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]', '[L] | [NB]']:
+        # PyPSA charges a start-up and a shut-down once, whatever the
+        # weighting of the snapshot, and the costs of the energy by the
+        # weighting
         weight = param in [
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
-            'start_up_cost', 'stand_by_cost'
+            'stand_by_cost'
         ]
-        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
+        # the dense series covers every component of the type, so one built for
+        # a unit serves all the others of the same conversion
+        cache_key = (components_type, param, weight)
+        if dense_cache is None:
+            dense = get_param_as_dense(n, components_type, param, weight)
+        elif cache_key in dense_cache:
+            dense = dense_cache[cache_key]
+        else:
+            dense = get_param_as_dense(n, components_type, param, weight)
+            dense_cache[cache_key] = dense
+        arg = dense[[component]]
     elif param in components_df.index or param in components_df.columns:
-        if param in ['marginal_cost', 'marginal_cost_quadratic','start_up_cost', 'stand_by_cost']:
+        if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
             arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
         else:
             arg = components_df.get(param)
@@ -1800,6 +2000,223 @@ def get_block_name(attr_name, index, components_df):
         return f"{attr_name.split('_')[0]}_{index}"
     
     
+def forbid_unreachable_switches(thermal_variables, time_horizon):
+    """
+    Translates the start-up and shut-down limits below the minimum power.
+
+    PyPSA bounds the output of a starting unit by its start-up limit and that
+    of the last instant before a shut-down by its shut-down limit, while the
+    output of a unit on is at least its minimum power: with a limit below the
+    minimum power the unit can never start up (or shut down). A
+    ThermalUnitBlock rejects such limits, so they are raised to the minimum
+    power and the switch is forbidden by a minimum down (or up) time that
+    covers the horizon together with the instants the unit has already been
+    down (or up) before it, which gives the same set of schedules.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    if "MinPower" not in thermal_variables:
+        return
+
+    min_power = np.asarray(thermal_variables["MinPower"]["value"], dtype=float)
+    init = int(np.asarray(thermal_variables["InitUpDownTime"]["value"]).ravel()[0])
+
+    for limit, time, before in (("StartUpLimit", "MinDownTime", max(-init, 0)),
+                                ("ShutDownLimit", "MinUpTime", max(init, 0))):
+        if limit not in thermal_variables:
+            continue
+        value = np.asarray(thermal_variables[limit]["value"], dtype=float)
+        if not np.any(value < min_power - 1e-9 * np.maximum(1.0, np.abs(min_power))):
+            continue
+        raised = np.maximum(value, min_power)
+        original = thermal_variables[limit]["value"]
+        thermal_variables[limit]["value"] = (
+            float(raised.ravel()[0]) if np.isscalar(original) else
+            raised.reshape(np.shape(original)))
+        thermal_variables[time]["value"] = int(time_horizon) + before
+
+
+def fix_commitment_on(thermal_variables, time_horizon):
+    """
+    Keeps the unit on over the whole horizon, as a non-committable generator.
+
+    PyPSA gives a unit commitment only to a `committable` generator: any other
+    one produces between its minimum and its maximum power at every snapshot,
+    with no choice of being off, while a ThermalUnitBlock always has the
+    commitment variables. They are fixed to 1 by declaring the unit on before
+    the horizon and a minimum up time longer than the horizon itself, which is
+    how a ThermalUnitBlock states that the commitment is not free.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    for name, value in (("InitUpDownTime", 1),
+                        ("MinUpTime", int(time_horizon) + 1),
+                        ("MinDownTime", 1)):
+        entry = thermal_variables.setdefault(name, {"type": "int", "size": ()})
+        entry["value"] = value
+
+    # a unit that is never off pays neither to start up nor to shut down
+    for name in ("StartUpCost", "ShutDownCost"):
+        thermal_variables.pop(name, None)
+
+
+def free_initial_ramp(thermal_variables, time_horizon):
+    """
+    Frees the first instant of the horizon, which PyPSA leaves free.
+
+    A ThermalUnitBlock always starts from its initial power: the output of the
+    first instant is within a ramp of it, and the unit can only shut down there
+    if that power is below the shut-down limit. PyPSA instead bounds the first
+    snapshot only when the network gives `p_init`, and with no `p_init` it
+    drops that row altogether. The two models then agree if nothing of the
+    first instant can bind, which is what this does: the initial power becomes
+    the maximum power of the first instant, and the ramps and the shut-down
+    limit there are raised to the largest maximum power, an upper bound of any
+    change of the output.
+
+    Parameters
+    ----------
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit, modified in place.
+    time_horizon : int
+        The number of instants of the horizon.
+    """
+    if "MaxPower" not in thermal_variables:
+        return
+
+    max_power = np.atleast_1d(np.asarray(thermal_variables["MaxPower"]["value"],
+                                         dtype=float)).ravel()
+    free = float(np.max(max_power))
+
+    for name in ("DeltaRampUp", "DeltaRampDown", "ShutDownLimit"):
+        if name not in thermal_variables:
+            continue
+        value = np.atleast_1d(np.array(thermal_variables[name]["value"],
+                                       dtype=float)).ravel()
+        if value[0] >= free:
+            continue
+        if value.size == 1:   # one value for the whole horizon: unfold it
+            value = np.full(int(time_horizon), value[0])
+            thermal_variables[name]["size"] = ("TimeHorizon",)
+        value[0] = free
+        thermal_variables[name]["value"] = value
+
+    if "InitialPower" in thermal_variables:
+        thermal_variables["InitialPower"]["value"] = float(max_power[0])
+
+
+def nuclear_rule_variables(rules, thermal_variables, snapshot_hours):
+    """
+    Computes the variables that turn a ThermalUnitBlock into a NuclearUnitBlock.
+
+    Parameters
+    ----------
+    rules : dict
+        Operating rules, with the keys and the meaning of
+        `constants.nuclear_rules_default`; a rule set to None is not emitted.
+    thermal_variables : dict
+        The converted ThermalUnitBlock variables of the unit ("MinPower",
+        "MaxPower", "DeltaRampUp", "DeltaRampDown"), as returned by
+        `parse_unitblock_parameters`.
+    snapshot_hours : float
+        The duration of a snapshot in hours, used to turn the durations of the
+        rules into numbers of snapshots.
+
+    Returns
+    -------
+    variables : dict
+        Variable name -> {"value", "type", "size"}.
+    dimensions : dict
+        The dimensions the variables need ("NumberPowerBands").
+    """
+    def periods(hours, minimum):
+        return max(minimum, int(round(float(hours) / snapshot_hours)))
+
+    def as_array(name):
+        return np.asarray(thermal_variables[name]["value"], dtype=float).ravel()
+
+    def scalar(value, var_type):
+        return {"value": value, "type": var_type, "size": ()}
+
+    variables = {}
+    dimensions = {}
+
+    p_min = float(as_array("MinPower").min())
+    p_max = float(as_array("MaxPower").max())
+    width = p_max - p_min
+
+    modulation_time = periods(rules["modulation_time"], 2)
+    variables["ModulationTime"] = scalar(modulation_time, "uint")
+    variables["InitModulation"] = scalar(modulation_time, "uint")
+
+    fraction = rules.get("modulation_ramp_fraction")
+    if fraction:
+        for key, ramp in (("ModulationDeltaRampUp", "DeltaRampUp"),
+                          ("ModulationDeltaRampDown", "DeltaRampDown")):
+            value = fraction * as_array(ramp)
+            if value.size == 1:
+                variables[key] = scalar(float(value[0]), "float")
+            else:
+                variables[key] = {"value": value, "type": "float",
+                                  "size": ("TimeHorizon",)}
+
+    if rules.get("max_modulation_length") is not None:
+        length = periods(rules["max_modulation_length"], 1)
+        if length > 1:
+            variables["MaxModulationLength"] = scalar(length, "uint")
+
+    if rules.get("stability_after_start_up"):
+        variables["StabilityAfterStartUp"] = scalar(
+            periods(rules["stability_after_start_up"], 1), "uint")
+
+    if rules.get("day_length"):
+        variables["DayLength"] = scalar(periods(rules["day_length"], 1), "uint")
+
+    for key, rule in (("ModulationsPerDay", "modulations_per_day"),
+                      ("StartUpsPerDay", "start_ups_per_day")):
+        if rules.get(rule) is not None:
+            variables[key] = scalar(int(rules[rule]), "uint")
+
+    bands = rules.get("power_bands")
+    if bands and width > 0:
+        dimensions["NumberPowerBands"] = 2
+        variables["PowerBands"] = {
+            "value": np.array([p_min + bands * width, p_max - bands * width]),
+            "type": "float",
+            "size": ("NumberPowerBands",),
+        }
+
+    if (rules.get("deep_decrease_threshold") is not None
+            and rules.get("deep_decrease_gradient") is not None):
+        variables["DeepDecreaseThreshold"] = scalar(
+            p_min + rules["deep_decrease_threshold"] * width, "float")
+        variables["DeepDecreaseGradient"] = scalar(
+            rules["deep_decrease_gradient"] * float(as_array("DeltaRampDown").min()),
+            "float")
+        if rules.get("deep_decreases_per_day") is not None:
+            variables["DeepDecreasesPerDay"] = scalar(
+                int(rules["deep_decreases_per_day"]), "uint")
+        if rules.get("deep_decrease_cost"):
+            variables["DeepDecreaseCost"] = scalar(
+                float(rules["deep_decrease_cost"]), "float")
+
+    if rules.get("down_modulation_cost"):
+        variables["DownModulationCost"] = scalar(
+            float(rules["down_modulation_cost"]), "float")
+
+    return variables, dimensions
+
+
 def determine_size_type(
     smspp_parameters,
     dimensions,
@@ -2194,5 +2611,3 @@ def _flatten_saved_efficiencies(efficiencies_dict, drop_zero=True):
         v if v.ndim > 0 else np.full(time_horizon, float(v), dtype=float)
         for v in values
     ])
-
-

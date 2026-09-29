@@ -1,8 +1,11 @@
 import os, sys, traceback
+import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
 import time
 import pandas as pd
+import netCDF4
 import pypsa
 import pysmspp
 import pytest
@@ -76,11 +79,67 @@ def get_tssb_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
 tssb_test_cases = get_tssb_test_cases()
 
 
+# the test networks that need what no released SMS++ has: pollutant budgets
+# (co2_, UCBlock b5e68de9), the operating rules of a nuclear unit (nuc_,
+# UCBlock 1cf3cba5) and thermal ramps that change over time (uc_, UCBlock
+# c4f67f56); the solver
+# that reads a pollutant budget is taken to have all of them
+UNRELEASED_CASES = ("co2_", "nuc_", "uc_")
+
+
+def solver_reads_pollutant_budget():
+    """
+    True if the smspp_ucblock_solver on PATH loads a UCBlock with a pollutant
+    budget (under the name it had before the prefix, ucblock_solver, if it is
+    not found).
+
+    The pollutant budget constraints are in SMS++ since UCBlock b5e68de9: an
+    older smspp_ucblock_solver does not accept the file, and then the test is
+    skipped rather than failed. The check loads, without solving it, a one-unit UCBlock
+    with a CO2 budget.
+    """
+    solver = shutil.which("smspp_ucblock_solver") or shutil.which("ucblock_solver")
+    if solver is None:
+        return False
+
+    probe = OUT_TEST / "pollutant_budget_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 1), ("NumberUnits", 1),
+                          ("NumberElectricalGenerators", 1), ("NumberNodes", 1),
+                          ("NumberPollutants", 1), ("TotalNumberPollutantZones", 1)):
+            uc.createDimension(dim, size)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        uc.createVariable("PollutantBudget", "f8", ("TotalNumberPollutantZones",))[:] = 1.0
+        uc.createVariable("PollutantRho", "f8", ("TimeHorizon", "NumberPollutants",
+                                                 "NumberElectricalGenerators"))[:] = 1.0
+        unit = uc.createGroup("UnitBlock_0")
+        unit.setncattr("type", "SlackUnitBlock")
+        unit.createVariable("MaxPower", "f8")[...] = 10.0
+        unit.createVariable("ActivePowerCost", "f8")[...] = 1.0
+
+    config = Path(pysmspp.__file__).parent / "data" / "configs" / "UCBlock" / "uc_solverconfig.txt"
+    try:
+        run = subprocess.run([solver, "-D", "-S", str(config), str(probe)],
+                             capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return run.returncode == 0 and "valid Block" not in run.stdout + run.stderr
+
+
 def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     """
     Get all test case Excel files and their names for parametrization.
+
+    A network that needs what no released SMS++ has is left out where the
+    solver at hand does not read a pollutant budget [see UNRELEASED_CASES].
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
+    if not solver_reads_pollutant_budget():
+        files = [f for f in files if not f.name.startswith(UNRELEASED_CASES)]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 
