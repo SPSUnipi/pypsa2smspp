@@ -1169,6 +1169,11 @@ class Transformation:
                 ScenarioSolution_0
                 ScenarioSolution_1
                 ...
+        or, with the investment outside, one level deeper:
+            Solution_0                  (the InvestmentBlock, DesignVariables)
+                InnerSolution
+                    ScenarioSolution_0
+                    ...
     
         Variables are stored in:
             self.unitblocks[matching_key]["scenarios"][scenario_name][var_name]
@@ -1183,7 +1188,8 @@ class Transformation:
                 f"and problem_structure['number_scenarios'] ({expected_n_scenarios})."
             )
     
-        solution_0 = solution.blocks["Solution_0"]
+        solution_0, design_vars = self._split_investment_outside(
+            solution.blocks["Solution_0"])
         solution_data["TSSB"] = solution_0
     
         # Keep a scenario-wise container for parsed network data
@@ -1212,10 +1218,55 @@ class Transformation:
                 solution_data=solution_data,
             )
     
+        self._assign_investment_outside_design(design_vars)
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
     
     
+    def _split_investment_outside(self, solution_0):
+        """
+        The solution of the stochastic Block, and the design of the
+        InvestmentBlock above it if the investment is outside.
+
+        With "investment_outside" Solution_0 is the solution of the
+        InvestmentBlock, whose DesignVariables are the investment, and the one
+        of the stochastic Block is its InnerSolution; otherwise Solution_0 is
+        that of the stochastic Block, and the design (None) is read in the
+        scenarios.
+        """
+        if not self.problem_structure.get("investment_outside", False):
+            return solution_0, None
+
+        if "InnerSolution" not in solution_0.blocks:
+            raise KeyError(
+                "InnerSolution not found in Solution_0: with "
+                "'investment_outside' Solution_0 is the solution of the "
+                "InvestmentBlock and that of the stochastic Block is inside it."
+            )
+        return (solution_0.blocks["InnerSolution"],
+                solution_0.variables["DesignVariables"].data)
+
+    def _assign_investment_outside_design(self, design_vars):
+        """
+        Give every scenario of an asset the design of the InvestmentBlock.
+
+        The investment outside is one for all the scenarios, and a scenario
+        is read back as the asset with its own values on top [see
+        block_to_dataarrays_stochastic()]: the design goes both on the asset
+        and in each of its scenarios, where it replaces whatever the
+        scenario carries (e.g., the nominal capacity of a line).
+        """
+        if design_vars is None:
+            return
+
+        block_names = self.investmentblock.get("Blocks", [])
+        assign_design_variables_to_unitblocks(self.unitblocks, block_names,
+                                              design_vars)
+        for name, value in zip(block_names, design_vars):
+            for scenario in self.unitblocks[name].get("scenarios", {}).values():
+                scenario["DesignVariable"] = value
+
+
     def _parse_multistage_solution_to_unitblocks(self, solution, n, solution_data):
         """
         Parse the solution of a MultiStageStochasticBlock.
@@ -1236,7 +1287,8 @@ class Transformation:
         num_units = self.dimensions["UCBlock"]["NumberUnits"]
         groups = self.problem_structure["scenario_tree"]["groups"]
 
-        solution_0 = solution.blocks["Solution_0"]
+        solution_0, design_vars = self._split_investment_outside(
+            solution.blocks["Solution_0"])
         solution_data["MSSB"] = solution_0
 
         self.networkblock.setdefault("Scenarios", {})
@@ -1277,6 +1329,7 @@ class Transformation:
                     solution_data=solution_data,
                 )
 
+        self._assign_investment_outside_design(design_vars)
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
 
