@@ -880,6 +880,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
     update_bounds: bool = True,
     logger=print,
     return_fixed_count: bool = False,
+    exclude=(),
 ):
     """
     Preprocess extendable lines and links with zero capital cost.
@@ -908,6 +909,10 @@ def preprocess_zero_capital_cost_extendable_lines_links(
         Logging function.
     return_fixed_count : bool, default False
         If True, also return the number of branches converted to fixed.
+    exclude : iterable of str, default ()
+        Names of lines/links left untouched, e.g., the charge/discharge links
+        that ``build_store_and_merged_links`` merges into one link, which
+        carries the capital cost of both.
 
     Returns
     -------
@@ -917,6 +922,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
         Returned only when return_fixed_count is True.
     """
     fixed_count = 0
+    exclude = set(exclude)
 
     for comp, nom in (("lines", "s_nom"), ("links", "p_nom")):
         df = getattr(n, comp)
@@ -936,6 +942,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
         mask = (
             df[ext].fillna(False).astype(bool)
             & df[cap].fillna(np.nan).eq(0)
+            & ~df.index.isin(exclude)
         )
 
         matched = df.index[mask]

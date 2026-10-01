@@ -153,7 +153,7 @@ class Transformation:
         """
         Parameters
         ----------
-        merge_links : bool | str | Sequence[str], default True
+        merge_links : bool | str | Sequence[str], default False
             Controls whether store-related charge/discharge link pairs are merged into a single
             merged link representation (useful to match PyPSA-Eur modelling conventions).
 
@@ -478,12 +478,24 @@ class Transformation:
             return_fixed_count=True,
         )
 
+        # the links that the merge absorbs keep their extendability (in
+        # PyPSA-Eur the battery discharger has no capital cost, and fixing it
+        # would make the pair no longer mergeable)
+        _, links_merge_probe, _ = build_store_and_merged_links(
+            n,
+            merge_links=self.merge_links,
+            logger=lambda msg: None,
+            merge_selector=getattr(self, "merge_selector", None),
+        )
+        links_absorbed = n.links.index.difference(links_merge_probe.index)
+
         n, fixed_investment_lines_links = preprocess_zero_capital_cost_extendable_lines_links(
             n,
             fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
             return_fixed_count=True,
+            exclude=links_absorbed,
         )
 
     
@@ -2645,8 +2657,11 @@ class Transformation:
         """
     
         # ---- Basic type checks ----
-        if not isinstance(self.merge_links, bool):
-            raise TypeError("merge_links must be a boolean.")
+        if not (isinstance(self.merge_links, (bool, str))
+                or (isinstance(self.merge_links, Sequence)
+                    and all(isinstance(m, str) for m in self.merge_links))):
+            raise TypeError("merge_links must be a boolean, a string or a "
+                            "sequence of strings.")
         if not isinstance(self.capacity_expansion_ucblock, bool):
             raise TypeError("capacity_expansion_ucblock must be a boolean.")
     
