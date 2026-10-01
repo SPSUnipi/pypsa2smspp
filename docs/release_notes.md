@@ -25,6 +25,7 @@
 * Read the solution back with a recent xarray [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Forbid the switches that a start-up or shut-down limit below the minimum power makes unreachable [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Keep the index name of the generators split into modules by `split_traditional_generators_into_modules` [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
+* Write the susceptance of the lines, `1/x_pu_eff`, which was 0 and turned the AC network into a transport model without Kirchhoff's voltage law [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 
 
 ## v0.0.5

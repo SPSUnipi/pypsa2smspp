@@ -466,6 +466,10 @@ class Transformation:
             dataframes needed during iteration.
         """
     
+        # the per-unit reactances of the lines, which their susceptances
+        # in Kirchhoff's voltage law come from, as PyPSA computes them
+        n.calculate_dependent_values()
+
         n, fixed_investment_generators = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,

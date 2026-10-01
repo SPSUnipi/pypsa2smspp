@@ -112,7 +112,14 @@ class TransformationConfig:
             "EndLine": lambda end_line_idx: end_line_idx.values,
             "MinPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: - (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
-            "LineSusceptance": lambda s_nom: np.zeros_like(s_nom),
+            # the AC lines obey Kirchhoff's voltage law as in PyPSA, whose
+            # flows are f = ( theta_0 - theta_1 ) / x_pu_eff; a line with no
+            # reactance is a transport one
+            "LineSusceptance": lambda x_pu_eff: np.where(
+                np.asarray(x_pu_eff, dtype=float) > 0,
+                1.0 / np.where(np.asarray(x_pu_eff, dtype=float) > 0,
+                               np.asarray(x_pu_eff, dtype=float), 1.0),
+                0.0),
             "Efficiency": lambda s_nom: np.ones_like(s_nom),
             "NetworkCost": lambda s_nom: np.zeros_like(s_nom),
             }
