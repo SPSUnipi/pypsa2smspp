@@ -83,8 +83,9 @@ tssb_test_cases = get_tssb_test_cases()
 # (co2_, UCBlock b5e68de9), the operating rules of a nuclear unit (nuc_,
 # UCBlock 1cf3cba5), thermal ramps that change over time (uc_, UCBlock
 # c4f67f56) and an integer design of more than one module (mod_, UCBlock
-# 87edf11f); the solver that reads a pollutant budget is taken to have all of
-# them
+# 87edf11f, and in an InvestmentBlock InvestmentBlock e43b146, BundleSolver
+# e1c624f, SMS++ 8f41958); the solver that reads a pollutant budget is taken
+# to have all of them
 UNRELEASED_CASES = ("co2_", "nuc_", "uc_", "mod_")
 
 

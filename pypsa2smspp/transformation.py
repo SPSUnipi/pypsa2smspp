@@ -51,6 +51,7 @@ from pypsa2smspp.utils import (
     explode_multilinks_into_branches,
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
+    apply_investment_module_overrides,
     zero_investment_cost,
     build_dc_index,
     get_param_as_dense,
@@ -561,6 +562,7 @@ class Transformation:
         self._dc_names = list(self._dc_index["physical"]["names"])
         self._dc_types = list(self._dc_index["physical"]["types"])
     
+        self._investment_modules = False
         if self.capacity_expansion_ucblock:
             design_cost_outside = self.problem_structure.get(
                                               "design_cost_outside", False)
@@ -580,6 +582,15 @@ class Transformation:
                     self.config.IntermittentUnitBlock_parameters,
                     self.config.BatteryUnitBlock_store_parameters,
                 )
+        elif self._has_investment_modules(n):
+            # the InvestmentBlock writes the modular extendable assets as
+            # modules too, with an integer design
+            apply_investment_module_overrides(
+                self.config.IntermittentUnitBlock_parameters,
+                self.config.IntermittentUnitBlock_inverse,
+                self.config.InvestmentBlock_parameters,
+            )
+            self._investment_modules = True
     
         return {
             "n": n,
@@ -805,6 +816,12 @@ class Transformation:
         # rename for compatibility with InvestmentBlock expected names
         aliases = get_nominal_aliases(components_type, nominal_attrs)
         df_alias = components_df.rename(columns=aliases)
+
+        # the size of a module where the asset is a modular IntermittentUnitBlock,
+        # 0 elsewhere [see apply_investment_module_overrides()]
+        if getattr(self, "_investment_modules", False):
+            df_alias["p_nom_mod"] = self._intermittent_module_size(
+                components_df, components_type)
     
         # store temporary dimension info
         if "Fake_dimension" not in self.dimensions:
@@ -845,6 +862,37 @@ class Transformation:
     
         return df_alias
     
+    def _intermittent_module_size(self, components_df, components_type):
+        """The size of the module of each modular IntermittentUnitBlock.
+
+        For each row of components_df, the p_nom_mod of an extendable
+        generator that becomes an IntermittentUnitBlock, 0 for any other
+        asset, whose design stays a capacity.
+        """
+        size = np.zeros(len(components_df))
+        if (components_type != "Generator"
+                or "p_nom_mod" not in components_df.columns):
+            return size
+
+        for k, (_, row) in enumerate(components_df.iterrows()):
+            attr_name = get_attr_name(
+                components_type,
+                row.get("carrier"),
+                enable_thermal_units=self.enable_thermal_units,
+                intermittent_carriers=self.intermittent_carriers,
+                default_intermittent=renewable_carriers,
+                nuclear_carriers=list(self.nuclear_units),
+            )
+            if (attr_name == "IntermittentUnitBlock_parameters"
+                    and bool(row.get("p_nom_extendable", False))):
+                size[k] = max(float(row["p_nom_mod"]), 0.0)
+        return size
+
+    def _has_investment_modules(self, n):
+        """True if n has a modular extendable IntermittentUnitBlock."""
+        return bool(np.any(
+            self._intermittent_module_size(n.generators, "Generator") > 0))
+
     ### 5 ###
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
         """
@@ -2512,6 +2560,11 @@ class Transformation:
                     f"Please provide self.configfile explicitly."
                 )
             template = default_template_map[block_type]
+            # modules make the design integer, which the BundleSolver of the
+            # InvestmentBlock has to be told to keep integer
+            if (block_type == "InvestmentBlock"
+                    and getattr(self, "_investment_modules", False)):
+                template = "InvestmentBlock/BSPar-int.txt"
             configfile = pysmspp.SMSConfig(template=str(template))
         else:
             if isinstance(cfg, pysmspp.SMSConfig):

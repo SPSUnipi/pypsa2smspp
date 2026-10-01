@@ -1636,28 +1636,20 @@ def zero_investment_cost(IntermittentUnitBlock_parameters=None,
             d[ "InvestmentCost" ] = lambda *args , **kwargs : 0.0
 
 
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
+def _signature(f):
+    """The names of the arguments of f."""
+    return f.__code__.co_varnames[:f.__code__.co_argcount]
+
+
+def _modular_unit_power(d):
+    """Make the powers of an IntermittentUnitBlock those of a module.
+
+    Where the asset is extendable and modular its design counts modules, so
+    the maximum and minimum power of the unit, which the design multiplies,
+    are those of one module; elsewhere they are left as they are. The
+    functions in d are wrapped only if they have the signature of the default
+    ones, so that it is idempotent.
     """
-    Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
-    Keys are only added if missing, so it remains idempotent.
-    """
-
-    # --- IntermittentUnitBlock ---
-    d = IntermittentUnitBlock_parameters
-
-    # "InvestmentCost"
-    if "InvestmentCost" not in d:
-        # Pass-through of capital_cost (assumed already scalar or 1-length)
-        # the cost of a module when the asset is modular, the design then
-        # counting modules
-        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable, p_nom_mod: capital_cost * module_size(p_nom_mod) if bool(first_scalar(p_nom_extendable)) else 0.0
-
-    # a modular asset has a design that counts modules, hence the powers of
-    # the unit are those of a module; this only holds here, the design of an
-    # InvestmentBlock being a capacity in any case
-    def _signature(f):
-        return f.__code__.co_varnames[:f.__code__.co_argcount]
-
     max_power = d.get("MaxPower")
     if callable(max_power) and _signature(max_power) == (
             "p_nom", "p_max_pu", "p_nom_extendable", "capital_cost",
@@ -1676,6 +1668,87 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
             lambda p_nom, p_min_pu, p_nom_extendable, p_nom_mod:
                 min_power(p_nom, p_min_pu, p_nom_extendable)
                 * module_factor(p_nom_extendable, p_nom_mod))
+
+
+def apply_investment_module_overrides(IntermittentUnitBlock_parameters,
+                                      IntermittentUnitBlock_inverse,
+                                      InvestmentBlock_parameters):
+    """Write the modular extendable assets in an InvestmentBlock as modules.
+
+    The InvestmentBlock form of what apply_expansion_overrides() does in the
+    UCBlock one: the design of a modular extendable IntermittentUnitBlock is
+    the number of its modules, an integer Variable of the InvestmentBlock
+    ("Integer"), the unit has the powers of one module, the cost is that of a
+    module, the bounds count modules (p_nom_max has to be finite) and the
+    capacity is read back as the design times the size of a module. The
+    InvestmentBlock finds the size of the module of each asset in p_nom_mod,
+    which is 0 where the asset is not a modular IntermittentUnitBlock [see
+    Transformation.add_InvestmentBlock()]. The functions are wrapped only if
+    they have the signature of the default ones, so that it is idempotent.
+    """
+    _modular_unit_power(IntermittentUnitBlock_parameters)
+
+    def _sizes(p_nom_mod):
+        size = np.asarray(p_nom_mod, dtype=float)
+        return np.where(size > 0, size, 1.0)
+
+    i = InvestmentBlock_parameters
+
+    cost = i.get("Cost")
+    if callable(cost) and _signature(cost) == ("capital_cost",):
+        i["Cost"] = lambda capital_cost, p_nom_mod: (
+            np.asarray(cost(capital_cost), dtype=float) * _sizes(p_nom_mod))
+
+    lower = i.get("LowerBound")
+    if callable(lower) and _signature(lower) == ("p_nom_min",):
+        i["LowerBound"] = lambda p_nom_min, p_nom_mod: np.where(
+            np.asarray(p_nom_mod, dtype=float) > 0,
+            np.ceil(np.asarray(lower(p_nom_min), dtype=float)
+                    / _sizes(p_nom_mod) - 1e-9),
+            np.asarray(lower(p_nom_min), dtype=float))
+
+    upper = i.get("UpperBound")
+    if callable(upper) and _signature(upper) == ("p_nom_max",):
+        def _upper(p_nom_max, p_nom_mod):
+            most = np.asarray(upper(p_nom_max), dtype=float)
+            modular = np.asarray(p_nom_mod, dtype=float) > 0
+            if np.any(modular & ~np.isfinite(most)):
+                raise ValueError("a modular extendable asset needs a finite "
+                                 "p_nom_max, the number of its modules being "
+                                 "bounded by it")
+            return np.where(modular,
+                            np.floor(most / _sizes(p_nom_mod) + 1e-9), most)
+        i["UpperBound"] = _upper
+
+    if "Integer" not in i:
+        i["Integer"] = lambda p_nom_mod: (
+            np.asarray(p_nom_mod, dtype=float) > 0).astype(int)
+
+    inverse = IntermittentUnitBlock_inverse.get("p_nom")
+    if callable(inverse) and _signature(inverse) == ("designvariable",):
+        IntermittentUnitBlock_inverse["p_nom"] = (
+            lambda designvariable, p_nom_mod:
+                inverse(designvariable) * module_size(p_nom_mod))
+
+
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
+    """
+    Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
+    Keys are only added if missing, so it remains idempotent.
+    """
+
+    # --- IntermittentUnitBlock ---
+    d = IntermittentUnitBlock_parameters
+
+    # "InvestmentCost"
+    if "InvestmentCost" not in d:
+        # Pass-through of capital_cost (assumed already scalar or 1-length)
+        # the cost of a module when the asset is modular, the design then
+        # counting modules
+        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable, p_nom_mod: capital_cost * module_size(p_nom_mod) if bool(first_scalar(p_nom_extendable)) else 0.0
+
+    # a modular asset has a design that counts modules
+    _modular_unit_power(d)
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
