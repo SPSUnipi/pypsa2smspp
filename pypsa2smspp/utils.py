@@ -62,7 +62,9 @@ def get_param_as_dense(n, component, field, weights=True):
         weighting = weighting.loc[sns]
 
     if field in n.components[component].static.columns:
-        field_val = n.get_switchable_as_dense(component, field, sns)
+        # all the snapshots of the network are the default, and passing them
+        # explicitly makes PyPSA check each of them again at every call
+        field_val = n.get_switchable_as_dense(component, field)
     else:
         field_val = n.dynamic(component)[field]
 
@@ -1625,24 +1627,6 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
-def zero_investment_cost(IntermittentUnitBlock_parameters=None,
-                         BatteryUnitBlock_store_parameters=None):
-    """
-    Make the units state a design Variable they do not pay for.
-
-    The capacity of an extendable unit keeps being a Variable of the unit, with
-    its own bounds, but its InvestmentCost is zeroed: whoever states that cost
-    outside the scenarios, in an InvestmentBlock above them, would otherwise
-    count it twice. What this buys is that the value of a scenario becomes
-    monotone in the design, which is the property a generic Benders solver
-    reads the sign of its cuts from.
-    """
-    for d in ( IntermittentUnitBlock_parameters ,
-               BatteryUnitBlock_store_parameters ):
-        if d is not None and "InvestmentCost" in d:
-            d[ "InvestmentCost" ] = lambda *args , **kwargs : 0.0
-
-
 def _signature(f):
     """The names of the arguments of f."""
     return f.__code__.co_varnames[:f.__code__.co_argcount]
@@ -1990,7 +1974,8 @@ def parse_unitblock_parameters(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
 
     """
@@ -2014,6 +1999,9 @@ def parse_unitblock_parameters(
         The component type name (e.g. "Generator").
     component : str or None
         Single component name, or None.
+    dense_cache : dict or None, default None
+        Dense time series already built during this conversion, keyed by
+        component type, attribute and weighting [see resolve_param_value()].
 
     Returns
     -------
@@ -2036,7 +2024,8 @@ def parse_unitblock_parameters(
                     components_t,
                     n,
                     components_type,
-                    component
+                    component,
+                    dense_cache=dense_cache
                 )
                 for param in param_names
             ]
@@ -2092,7 +2081,8 @@ def resolve_param_value(
     components_t,
     n,
     components_type,
-    component
+    component,
+    dense_cache=None
 ):
     """
     Resolves the correct parameter value to be passed to the lambda function.
@@ -2114,13 +2104,26 @@ def resolve_param_value(
     size = smspp_parameters[block_class]['Size'][key]
 
     if size not in [1, '[L]', '[Li]', '[NA]', '[NP]', '[NR]', '[NB]', '[Li] | [NB]', '[L] | [NB]']:
+        # PyPSA charges a start-up and a shut-down once, whatever the
+        # weighting of the snapshot, and the costs of the energy by the
+        # weighting
         weight = param in [
             'capital_cost', 'marginal_cost', 'marginal_cost_quadratic',
-            'start_up_cost', 'stand_by_cost'
+            'stand_by_cost'
         ]
-        arg = get_param_as_dense(n, components_type, param, weight)[[component]]
+        # the dense series covers every component of the type, so one built for
+        # a unit serves all the others of the same conversion
+        cache_key = (components_type, param, weight)
+        if dense_cache is None:
+            dense = get_param_as_dense(n, components_type, param, weight)
+        elif cache_key in dense_cache:
+            dense = dense_cache[cache_key]
+        else:
+            dense = get_param_as_dense(n, components_type, param, weight)
+            dense_cache[cache_key] = dense
+        arg = dense[[component]]
     elif param in components_df.index or param in components_df.columns:
-        if param in ['marginal_cost', 'marginal_cost_quadratic','start_up_cost', 'stand_by_cost']:
+        if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
             arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
         else:
             arg = components_df.get(param)

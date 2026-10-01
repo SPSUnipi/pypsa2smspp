@@ -298,9 +298,90 @@ def block_to_dataarrays_stochastic(
     merged = {}
     for var_name, da_list in per_variable.items():
         if da_list:
-            merged[var_name] = xr.concat(da_list, dim="scenario")
+            stacked = stack_over_scenarios(da_list)
+            merged[var_name] = (stacked if stacked is not None
+                                else xr.concat(da_list, dim="scenario"))
 
     return merged
+
+
+def stack_over_scenarios(da_list):
+    """
+    Stack the scenario-wise DataArrays of a variable along 'scenario' with
+    numpy, which is what xr.concat() does when each of them has the scenario as
+    a coordinate of length 1 and all of them have the same other dimensions and
+    coordinates, but without aligning them one by one; None otherwise, so that
+    the caller falls back to xr.concat().
+    """
+    first = da_list[0]
+    if first.dims[:1] != ("scenario",) or first.sizes["scenario"] != 1:
+        return None
+    other = first.dims[1:]
+    for da in da_list[1:]:
+        if da.dims != first.dims or da.shape != first.shape:
+            return None
+        if any(not da.indexes[d].equals(first.indexes[d]) for d in other):
+            return None
+    if set(first.coords) != set(first.dims) or any(
+            set(da.coords) != set(first.coords) for da in da_list):
+        return None
+    scenarios = [da.indexes["scenario"][0] for da in da_list]
+    coords = {"scenario": scenarios}
+    coords.update({d: first.indexes[d] for d in other})
+    return xr.DataArray(np.concatenate([da.values for da in da_list], axis=0),
+                        dims=first.dims, coords=coords, name=first.name)
+
+
+def merge_by_variable(dataarray_dicts):
+    """
+    Merge the DataArrays of many unit blocks as xr.merge(join="outer",
+    compat="no_conflicts") does on one Dataset per block, but concatenating
+    first, variable by variable, the blocks along 'name': a variable is
+    merged with the others once rather than once per block. Where the blocks
+    of a variable share a name, or differ in any other dimension, the variable
+    is left to xr.merge() block by block.
+    """
+    per_variable = {}
+    for dataarrays in dataarray_dicts:
+        for var_name, da in dataarrays.items():
+            per_variable.setdefault(var_name, []).append(da)
+
+    datasets = []
+    for var_name, das in per_variable.items():
+        joined = concat_over_names(das)
+        if joined is None:
+            datasets.extend(xr.Dataset({var_name: da}) for da in das)
+        else:
+            datasets.append(xr.Dataset({var_name: joined}))
+
+    return xr.merge(datasets, join="outer", compat="no_conflicts")
+
+
+def concat_over_names(das):
+    """
+    Concatenate along 'name' DataArrays with disjoint names and otherwise
+    identical dimensions and coordinates; None if they are not such.
+    """
+    first = das[0]
+    if len(das) == 1:
+        return first
+    if "name" not in first.dims:
+        return None
+    axis = first.dims.index("name")
+    other = [d for d in first.dims if d != "name"]
+    names = []
+    for da in das:
+        if da.dims != first.dims or set(da.coords) != set(first.dims):
+            return None
+        if any(not da.indexes[d].equals(first.indexes[d]) for d in other):
+            return None
+        names.extend(da.indexes["name"])
+    if len(set(names)) != len(names):
+        return None
+    coords = {d: first.indexes[d] for d in other}
+    coords["name"] = names
+    return xr.DataArray(np.concatenate([da.values for da in das], axis=axis),
+                        dims=first.dims, coords=coords, name=first.name)
 
 
 def broadcast_static_variables_over_scenarios(ds: xr.Dataset, scenario_names) -> xr.Dataset:

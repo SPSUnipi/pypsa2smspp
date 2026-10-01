@@ -52,7 +52,6 @@ from pypsa2smspp.utils import (
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
     apply_investment_module_overrides,
-    zero_investment_cost,
     build_dc_index,
     get_param_as_dense,
     pollutant_budget_data,
@@ -77,6 +76,7 @@ from pypsa2smspp.inverse import (
     dataarray_components,
     block_to_dataarrays_stochastic,
     broadcast_static_variables_over_scenarios,
+    merge_by_variable,
 )
 from pypsa2smspp.io_parser import (
     parse_txt_to_unitblocks,
@@ -378,7 +378,13 @@ class Transformation:
         # --- your existing logic ---
         self.read_excel_components() # 1
         self.add_dimensions(n) # 2
-        self.iterate_components(n) # 3
+        # the dense series of an attribute are built once per conversion and
+        # shared by all the components of its type [see resolve_param_value()]
+        self._dense_cache = {}
+        try:
+            self.iterate_components(n) # 3
+        finally:
+            self._dense_cache = None
         self.add_pollutant_budget(n) # 3b
         self.add_demand(n) # 4
         self.lines_links(n) # 5
@@ -409,13 +415,8 @@ class Transformation:
 
         self.dimensions['UCBlock'] = ucblock_dimensions(n)
         self.dimensions['NetworkBlock'] = networkblock_dimensions(n, self.capacity_expansion_ucblock)
-        # with the cost of the design stated outside, the InvestmentBlock
-        # names assets, as it does when the units carry no design at all
         self.dimensions['InvestmentBlock'] = investmentblock_dimensions(
-            n ,
-            self.capacity_expansion_ucblock and
-            not self.problem_structure.get("design_cost_outside", False) ,
-            nominal_attrs )
+            n , self.capacity_expansion_ucblock , nominal_attrs )
         self.dimensions['HydroUnitBlock'] = hydroblock_dimensions()
         
         
@@ -566,8 +567,7 @@ class Transformation:
             stores_df,
             links_merged_df,
             n,
-            self.capacity_expansion_ucblock and
-            not self.problem_structure.get("design_cost_outside", False),
+            self.capacity_expansion_ucblock,
             fixed_investment_generators=fixed_investment_generators,
             fixed_investment_lines_links=fixed_investment_lines_links,
         )
@@ -580,24 +580,13 @@ class Transformation:
     
         self._investment_modules = False
         if self.capacity_expansion_ucblock:
-            design_cost_outside = self.problem_structure.get(
-                                              "design_cost_outside", False)
             apply_expansion_overrides(
                 self.config.IntermittentUnitBlock_parameters,
                 self.config.BatteryUnitBlock_store_parameters,
                 self.config.IntermittentUnitBlock_inverse,
                 self.config.BatteryUnitBlock_inverse,
-                None if design_cost_outside
-                     else self.config.InvestmentBlock_parameters,
+                self.config.InvestmentBlock_parameters,
             )
-
-            if design_cost_outside:
-                # the design Variable stay where they are, their cost does not:
-                # it is stated once in the InvestmentBlock above the scenarios
-                zero_investment_cost(
-                    self.config.IntermittentUnitBlock_parameters,
-                    self.config.BatteryUnitBlock_store_parameters,
-                )
         elif self._has_investment_modules(n):
             # the InvestmentBlock writes the modular extendable assets as
             # modules too, with an integer design
@@ -656,7 +645,6 @@ class Transformation:
     
             use_investmentblock = (
                 not self.capacity_expansion_ucblock
-                or self.problem_structure.get("design_cost_outside", False)
                 or components_type in ["lines", "links"]
             )
     
@@ -948,7 +936,8 @@ class Transformation:
             components_t,
             n,
             components_type,
-            component
+            component,
+            dense_cache=getattr(self, "_dense_cache", None)
         )
         
         dimensions = None
@@ -1749,12 +1738,14 @@ class Transformation:
                 )
     
             if dataarrays:
-                datasets.append(xr.Dataset(dataarrays))
+                datasets.append(dataarrays)
     
         if not datasets:
             return {}
     
-        ds = xr.merge(datasets, join="outer", compat="no_conflicts")
+        # the same merge as one xr.merge() of a Dataset per block, done
+        # variable by variable [see merge_by_variable()]
+        ds = merge_by_variable(datasets)
         ds = broadcast_static_variables_over_scenarios(
             ds,
             self.problem_structure.get("scenario_names", []),
@@ -1876,10 +1867,6 @@ class Transformation:
         Block, the scenarios hold no here-and-now variable at all: there is
         then nothing for the StaticAbstractPath to address and nothing for
         the non-anticipativity Constraint to tie, so the path is left out.
-        With the cost alone stated above ("design_cost_outside") the design
-        Variable are instead where they always were, one copy per scenario,
-        so the path is emitted as usual: it is what ties the copies, and what
-        anybody wanting to reach them reads.
         """
         dims = self.dimensions["tssb"]["dss"]
         number_scenarios = dims["NumberScenarios"]
@@ -1894,8 +1881,7 @@ class Transformation:
         tssb_block = master.blocks[name_id]
     
         self.convert_to_discrete_scenario_set(tssb_block, "DiscreteScenarioSet")
-        if ( ( not self.problem_structure.get("investment_outside", False) )
-             or self.problem_structure.get("design_cost_outside", False) ):
+        if not self.problem_structure.get("investment_outside", False):
             self.convert_to_static_abstract_path(tssb_block,
                                                  "StaticAbstractPath")
         self.convert_to_stochastic_block(tssb_block, "StochasticBlock")
@@ -2693,17 +2679,7 @@ class Transformation:
                     "'investment_outside' states the investment in an "
                     "InvestmentBlock wrapping the stochastic Block, hence it "
                     "needs the investment to go through an InvestmentBlock: "
-                    "set capacity_expansion_ucblock=False, or ask for "
-                    "'design_cost_outside' to keep the design Variable in the "
-                    "units and take out their cost alone."
-                )
-
-            if ( self.problem_structure.get("design_cost_outside", False)
-                 and not self.capacity_expansion_ucblock ):
-                raise ValueError(
-                    "'design_cost_outside' takes the cost of design Variable "
-                    "that live in the units out of them, so the units have to "
-                    "have them: set capacity_expansion_ucblock=True."
+                    "set capacity_expansion_ucblock=False."
                 )
 
             if self.problem_structure["stochastic_type"] == "mssb":

@@ -13,6 +13,9 @@
 
 ### Minor Changes and Bug Fixes
 
+* Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
+
+* Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
 * Correct snapshot_weightings for InvestmentBlock [PR #49] (https://github.com/SPSUnipi/pypsa2smspp/pull/49)
@@ -27,6 +30,7 @@
 * Keep the index name of the generators split into modules by `split_traditional_generators_into_modules` [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Write the susceptance of the lines, `1/x_pu_eff`, which was 0 and turned the AC network into a transport model without Kirchhoff's voltage law [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Merge the battery charger and discharger of PyPSA-Eur with `merge_links`, which the fixed capacity given to the discharger (it has no capital cost) prevented, accept a preset or a list of presets as `merge_links`, and read the merged links back in the stochastic case [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
+* Charge a start-up once, whatever the weighting of the snapshot, as PyPSA does: it used to be multiplied by it, while PyPSA weights the cost of the energy and not the unit commitment terms
 
 
 ## v0.0.5

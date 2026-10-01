@@ -1,6 +1,6 @@
-"""Multi-stage (tree) counterpart of the resilient TSSB instances.
+"""Multi-stage (tree) counterpart of the two-stage PyPSA instances.
 
-The instances under UCBlock/data/nc4/resilient-data are two-stage: one flat
+The instances under UCBlock/data/nc4/pypsa-data are two-stage: one flat
 list of scenarios, drawn from a PyPSA-Eur network by test/stoch_generator.py,
 in which demand, renewable availability and hydro inflow are all perturbed at
 once. This builds their multi-stage counterpart out of the same network, by
@@ -23,7 +23,7 @@ Like the two-stage generator, the multipliers are drawn by bounded Latin
 Hypercube sampling, and the stress is coupled: a dry, low-availability year is
 also the one whose demand leans high.
 
-    python gen_resilient_tree.py --network <pypsa-eur.nc> \
+    python gen_pypsa_tree.py --network <pypsa-eur.nc> \
         --climates 4 --demands 3 --snapshots 100
 
 It writes <name>_flat.nc, the equivalent flat network to be used as the
@@ -137,7 +137,7 @@ def main():
     if not source.exists():
         raise SystemExit(
             f"network not found: {source}\n"
-            "This is the PyPSA-Eur network the resilient instances are drawn "
+            "This is the PyPSA-Eur network the instances are drawn "
             "from; it is not part of the repository."
             )
 
