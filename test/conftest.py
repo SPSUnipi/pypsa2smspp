@@ -88,6 +88,12 @@ tssb_test_cases = get_tssb_test_cases()
 # to have all of them
 UNRELEASED_CASES = ("co2_", "nuc_", "uc_", "mod_")
 
+# the test networks with an extendable AC line, which has a susceptance and
+# hence Kirchhoff's voltage law: the DCNetworkBlock of SMS++ 0.6.3 does not
+# solve it (the network comes out infeasible), the one of the develop of
+# UCBlock does; they are left out where UNRELEASED_CASES are
+UNRELEASED_NETWORKS = ("3n_3c_1gext_1h_1bext_2l",)
+
 
 def solver_reads_pollutant_budget():
     """
@@ -137,11 +143,13 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     Get all test case Excel files and their names for parametrization.
 
     A network that needs what no released SMS++ has is left out where the
-    solver at hand does not read a pollutant budget [see UNRELEASED_CASES].
+    solver at hand does not read a pollutant budget [see UNRELEASED_CASES and
+    UNRELEASED_NETWORKS].
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     if not solver_reads_pollutant_budget():
-        files = [f for f in files if not f.name.startswith(UNRELEASED_CASES)]
+        files = [f for f in files if not f.name.startswith(UNRELEASED_CASES)
+                 and f.stem not in UNRELEASED_NETWORKS]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 
