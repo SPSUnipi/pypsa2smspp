@@ -3151,7 +3151,18 @@ class Transformation:
         Questa funzione popola self.sddp_data con le informazioni necessarie
         per costruire un SDDPBlock (attualmente minimale, poi da arricchire)
 
-        TODO: ampliare. Per ora supportiamo solo uno stadio, nessun scenario e nessuna variabile di stato
+        Passi:
+        1. Normalizza i parametri stocastici SDDP (validando snapshots_per_stage).
+        2. Deriva i nomi degli stadi (da make_sddp_periods, via get_sddp_stage_names).
+        3. Partiziona gli snapshot della rete in stadi (uno stadio = una fetta di
+            n.snapshots) tramite get_sddp_stage_snapshots.
+        4. Calcola il TimeHorizon (numero di snapshot) di ogni stadio.
+        5. Per ogni stadio estrae i dati stocastici di tutti i parametri richiesti
+            e li concatena in un unico vettore di scenario.
+        6. Costruisce la matrice scenari globale e le dimensioni dell'SDDPBlock.
+
+        Salva il risultato in self.sddp_data, insieme agli offset dei parametri
+        dentro il vettore di scenario di ogni stadio (serviranno ai data mapping).
         """
         if not self.problem_structure.get("is_stochastic", False):
             return None
@@ -3165,9 +3176,28 @@ class Transformation:
         # Otteniamo i nomi degli stadi
         stage_names = mu.get_sddp_stage_names(n, sddp_parameters)
 
-        # Otteniamo gli snapshot per ogni stadio
-        # ATTENZIONE: per ora un solo stadio con tutti gli snapshot
-        all_snapshots = pd.Index(n.snapshots)
+        # Partizioniamo degli snapshot in stadi.
+        stage_snapshots_map = mu.get_sddp_stage_snapshots(
+            n,
+            stage_names=stage_names,
+            stochastic_parameters=sddp_parameters,
+        )
+
+        # TimeHorizon di ogni stadio = numero di snapshot di quello stadio.
+        # Attenzione: non va confuso con il TimeHorizon dell'SDDPBlock, che
+        # invece è len(stage_names) = numero di stadi.
+        stage_time_horizons = mu.get_sddp_stage_time_horizons(stage_snapshots_map)
+
+        # Azzeriamo gli accumulatori degli offset.
+        #    - self.sddp_dss_offsets[stage_name][parameter] -> {start, end, size}
+        #      Posizione del parametro dentro il vettore di scenario dello stadio.
+        #    - self.sddp_parameter_asset_order[parameter] -> lista di nomi asset
+        #      Ordine usato durante l'appiattimento, serve per costruire i data
+        #      mapping in Fase 3 (SDDP).
+        #    Vanno azzerati a ogni chiamata per evitare che chiamate successive
+        #    accumulino dati stantii.
+        self.sddp_dss_offsets = {}
+        self.sddp_parameter_asset_order = {}
 
         # Lista dei parametri stocastici da processare
         stochastic_parameters = sddp_parameters["parameters"]
@@ -3175,8 +3205,8 @@ class Transformation:
         stage_data_list = []
 
         for stage_name in stage_names:
-            # Per ora ogni stadio usa tutti gli snapshot
-            stage_snapshots = all_snapshots
+            # Solo gli snapshot di questo stadio
+            stage_snapshots = stage_snapshots_map[stage_names]
 
             # Estraiamo i dati di tutti i parametri stocastici per questo stadio
             stage_data = mu.build_sddp_stage_data(
@@ -3198,6 +3228,23 @@ class Transformation:
 
             stage_data_list.append(stage_merged)
 
+        # Raccogliamo gli offset di ciascun parametro dentro il vettore di
+        # scenario di questo stadio. Serviranno per costruire
+        # i data mapping dello StochasticBlock dello stadio.
+        stage_offsets = {}
+        for part in stage_merged["parts"]:
+            parameter = part["parameter"]
+            stage_offsets[parameter] = {
+                "start": int(part["offset_start"]),
+                "end": int(part["offset_end"]),
+                "size": int(part["offset_end"] - part["offset_start"]),
+            }
+            # Ordine degli asset: uguale su tutti gli stadi per costruzione
+            if "asset_order" in part and part["asset_order"] is not None:
+                self.sddp_parameter_asset_order[parameter] = list(part["asset_order"])
+
+            self.sddp_dss_offsets[stage_name] = stage_offsets
+
         # Costruiamo la matrice globale degli scenari
         scenarios_info = mu.build_sddp_scenarios(stage_data_list)
         # Calcoliamo le dimensioni per il costruttore di SDDPBlock
@@ -3205,6 +3252,9 @@ class Transformation:
 
         self.sddp_data = {
             "stage_names": stage_names,
+            "stage_snapshots": stage_snapshots_map,
+            "stage_time_horizons": stage_time_horizons,
+            "parameters": stochastic_parameters,
             "stage_data_list": stage_data_list,
             "scenarios_info": scenarios_info,
             "dimensions": dimensions,

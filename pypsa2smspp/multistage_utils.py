@@ -117,19 +117,16 @@ def get_sddp_stage_names(n, stochastic_parameters=None) -> List[Any]:
     """
     Restituisce la lista ordinata dei nomi degli stadi SDDP.
 
-    La fonte degli stadi è, nell'ordine:
-      1. Il campo "periods" di `stochastic_parameters` (se fornito).
-      2. Altrimenti, errore.
-
-    Questa funzione è importante per `transformation.py` perché determina
-    quanti `StochasticBlock` creare nell'`SDDPBlock`.
+    I nomi vengono derivati da `make_sddp_periods`, che partiziona
+    n.snapshots in base a `snapshots_per_stage` (fornito dall'utente in
+    `stochastic_parameters`).
 
     Parameters
     ----------
     n : pypsa.Network
         Rete PyPSA (possibilmente stocastica).
     stochastic_parameters : dict, optional
-        Parametri stocastici già forniti dall'utente.
+        Parametri stocastici già forniti dall'utente. Deve contenere snapshots_per_stage
 
     Returns
     -------
@@ -138,19 +135,16 @@ def get_sddp_stage_names(n, stochastic_parameters=None) -> List[Any]:
     """
     # Normalizza e valida i parametri SDDP, ottenendo anche i periodi
     sp = normalize_sddp_parameters(stochastic_parameters)
-    periods = sp.get("periods", None)
+
+    # Deriviamo i periods a partire da n.snapshots
+    periods =make_sddp_periods(n, sp["snapshots_per_stage"])
 
     # Caso 1: periodi forniti esplicitamente dall'utente
     if periods:
         return [p["name"] for p in periods]
 
-    # Attualmente non supportiamo investment_periods
-
-    # Caso 2: nessuna informazione disponibile -> errore
-    raise ValueError(
-        "Per SDDP è necessario specificare 'periods' in stochastic_parameters "
-        "oppure usare un PyPSA network con investment_periods."
-    )
+    # Estraiamo solo i nomi
+    return [p["name"] for p in periods]
 
 # ================================================
 # Estrazione dei dati per ogni singolo stadio
@@ -674,3 +668,245 @@ def make_sddp_periods(
         periods.append({"name": str(names[i]), "snapshots": list(all_snapshots[start:end])})
 
     return periods
+
+def _coerce_snapshot_labels(
+        labels,
+        all_snapshots,
+        stage_name) -> pd.Index:
+    """
+    Obiettivo: prendere una lista di etichette di snapshot e restituirle come
+    pd.Index con lo stesso tipo di n.snapshots. Serve a evitare che confronti
+    tra stringhe e DatatimeIndex falliscano silenziosamente.
+    """
+    # Normalizziamo l'input in un pd.Index per poter usare .isin()
+    candidate = pd.Index(list(labels))
+
+    # Caso in cui le etichette sono già del tipo giusto
+    if candidate.isin(all_snapshots).all():
+        return candidate
+
+    # Caso in cui tentiamo la conversione a datatime
+    # pd.to_datetime può sollevare un'eccezione su input non convertibili
+    # Usiamo, quindi, try/except
+    if not isinstance(all_snapshots, pd.MultiIndex):
+        try:
+            converted = pd.Index(pd.to_datetime(candidate))
+        except (TypeError, ValueError):
+            converted = None
+
+        # Se la conversione è riuscita e tutti gli elementi sono presenti
+        # in all_snapshots, possiamo usare la versione convertita.
+        if converted is not None and converted.isin(all_snapshots).all():
+            return converted
+
+    # Nessuna conversione funziona -> errore con dettagli utili.
+    missing = [s for s in candidate if s not in all_snapshots]
+    raise ValueError(
+        f"Lo stadio {stage_name!r} contiene {len(missing)} snapshot non "
+        f"presenti in n.snapshots. Primi esempi: {missing[:5]}"
+    )
+
+def validate_sddp_stage_partition(
+        all_snapshots: pd.Index,
+        stage_snapshots: Mapping[Any, pd.Index],
+        strict_coverage: bool = True,
+) -> Dict[str, Any]:
+    """
+    Verifica che `stage_snapshots` sia una partizione sensata di
+    `all_snapshots`.
+
+    La partizione è "sensata" se:
+      1. non è vuota;
+      2. ogni stadio contiene almeno uno snapshot;
+      3. nessuno snapshot compare in più di uno stadio;
+      4. (opzionale) l'unione degli snapshot copre interamente `all_snapshots`.
+
+    NON impone che tutti gli stadi abbiano la stessa lunghezza: SMS++ accetta
+    stadi di dimensione diversa, quindi non è compito di questa funzione
+    rifiutarli.
+
+    Parameters
+    ----------
+    all_snapshots : pd.Index
+        Tutti gli snapshot della rete (`pd.Index(n.snapshots)`).
+    stage_snapshots : Mapping[Any, pd.Index]
+        Dizionario {nome_stadio: pd.Index(snapshot dello stadio)}.
+    strict_coverage : bool, default True
+        Se True, verifica che ogni snapshot di `all_snapshots` appartenga
+        ad almeno uno stadio. Se False, permette partizioni parziali.
+
+    Returns
+    -------
+    dict
+        Riepilogo con:
+        - "lengths": {nome_stadio: numero di snapshot}
+        - "covered": numero totale di snapshot coperti (contando i duplicati)
+        - "total":   numero totale di snapshot in `all_snapshots`
+
+    Raises
+    ------
+    ValueError
+        Se una delle condizioni 1–4 è violata.
+    """
+
+    # 'stage_snapshots' non deve essere vuoto
+    # Un dizionario vuoto significa che non c'è nessuno stadio da costruire.
+    # Questo è quasi sempre un errore a monte (periods malformati o
+    # snapshots_per_stage troppo grande), quindi meglio fallire subito.
+    if not stage_snapshots:
+        raise ValueError(
+            "validate_sddp_stage_partition: 'stage_snapshots' è vuoto, "
+            "non ci sono stadi da validare."
+        )
+
+    # `seen` conterrà tutti gli snapshot di tutti gli stadi, nell'ordine in
+    # cui li incontriamo. Serve per il controllo di sovrapposizione.
+    seen: List[Any] = []
+
+    # `lengths` conterrà il numero di snapshot per ogni stadio, per il
+    # riepilogo di ritorno.
+    lengths: Dict[Any, int] = {}
+
+    # Ogni stadio deve avere almeno uno snapshot
+    for name, snaps in stage_snapshots.items():
+
+        snaps = pd.Index(snaps)
+
+        if len(snaps) == 0:
+            raise ValueError(
+                f"validate_sddp_stage_partition: lo stadio {name!r} "
+                f"non contiene nessuno snapshot."
+            )
+
+        lengths[name] = int(len(snaps))
+
+        # Accumuliamo gli snapshot per i controlli successivi. Nota: usiamo
+        # `list(snaps)` perché `snaps` è un pd.Index e vogliamo una lista
+        # di valori "nudi" per poter usare set() e Series.
+        seen.extend(list(snaps))
+
+    # Nessuna sovrapposizione
+    # Se `len(seen) != len(set(seen))`, ci sono valori duplicati, cioè
+    # almeno uno snapshot compare in più di uno stadio.
+    if len(seen) != len(set(seen)):
+        # Per dare un messaggio utile, identifichiamo i duplicati.
+        # `pd.Series(seen).duplicated()` restituisce un array booleano:
+        # True in posizione i se seen[i] è già comparso prima.
+        seen_series = pd.Series(seen)
+        # `pd.unique` sui valori duplicati ci dà l'elenco dei valori che
+        # compaiono più di una volta (una volta ciascuno).
+        duplicated = list(pd.unique(seen_series[seen_series.duplicated()]))
+
+        raise ValueError(
+            f"validate_sddp_stage_partition: {len(duplicated)} snapshot "
+            f"sono assegnati a più di uno stadio. "
+            f"Primi esempi: {duplicated[:5]}"
+        )
+
+    # Copertura completa di all_snapshots
+    # Solo se l'utente ha chiesto strict_coverage=True.
+    if strict_coverage:
+        # Trasformiamo `seen` in un set per lookup O(1).
+        seen_set = set(seen)
+
+        # Cerchiamo gli snapshot di all_snapshots che non compaiono in seen_set.
+        missing = [s for s in all_snapshots if s not in seen_set]
+
+        if missing:
+            raise ValueError(
+                f"validate_sddp_stage_partition: {len(missing)} snapshot "
+                f"di n.snapshots non appartengono a nessuno stadio. "
+                f"Primi esempi: {missing[:5]}"
+            )
+
+    return {
+        "lengths": lengths,
+        "covered": int(len(seen)),
+        "total": int(len(all_snapshots)),
+    }
+
+def get_sddp_stage_snapshots(
+        n,
+        stage_names = None,
+        stochastic_parameters = None,
+):
+    """
+    Restituisce un {stage_name: pd.Index(snapshots)} a partire da stochastic_parameters.
+    Internamente chiama make_sddp_periods e valida il risultato
+
+    Parameters
+    ----------
+    n: rete pypsa.
+    stage_names: opzionale. Se None, vengono derivati dai periods generati. Se fornito,
+    filtra solo quei nomi.
+    stochastic_parameters: dict con snapshots_per_stage.
+
+    Returns
+    -------
+    Dict {stage_name: pd.Index(snapshots)}.
+    """
+
+    # Normalizzazione parametri SDDP
+    # Otteniamo e validiamo snapshosts_per_stage
+    sp = normalize_sddp_parameters(stochastic_parameters)
+
+    # Generiamo i periods: lista di {name, snapshots}
+    periods = make_sddp_periods(n, sp["snapshots_per_stage"])
+
+    # Indice globale degli snapshot
+    all_snapshots = pd.Index(n.snapshots)
+
+    # Indicizziamo i periods per nome, per efficientare la ricerca
+    by_name = {p["name"]: p for p in periods}
+
+    # Prendiamo tutti gli stadi generati, casomai l'utente non li avesse specificati
+    if stage_names is None:
+        stage_names = [p["name"] for p in periods]
+
+    # Inizializziamo il dizionario di output
+    stage_snapshots: Dict[Any, pd.Index] = {}
+
+    # Per ogni stadio richiesto, recuperiamo gli snapshots dal periodo corrispondente
+    # Inoltre, li convertiamo nel tipo giusto
+    for name in stage_names:
+        if name not in by_name:
+            raise ValueError(
+                f"Lo stadio {name!r} non compare tra i periods generati. "
+                f"Nomi disponibili: {sorted(by_name)}."
+            )
+        stage_snapshots[name] = _coerce_snapshot_labels(by_name[name]["snapshots"], all_snapshots, name)
+
+    # Controlliamo che la mappa sia una partizione sensata
+    validate_sddp_stage_partition(all_snapshots, stage_snapshots)
+
+    return stage_snapshots
+
+def get_sddp_stage_time_horizons(
+        stage_snapshots: Mapping[Any, pd.Index],
+) -> Dict[Any, int]:
+    """
+    Restituisce il numero di snapshot per ogni stadio.
+
+    Questo valore è il "TimeHorizon" del singolo stadio, cioè l'orizzonte
+    operativo del suo UCBlock. Si distingue dal TimeHorizon dell'SDDPBlock,
+    che invece è il numero di stadi.
+
+    Parameters
+    ----------
+    stage_snapshots : Mapping[Any, pd.Index]
+        Dizionario {nome_stadio: pd.Index(snapshot dello stadio)},
+        tipicamente il risultato di `get_sddp_stage_snapshots`.
+
+    Returns
+    -------
+    dict
+        {nome_stadio: numero di snapshot}.
+    """
+    # Per ogni coppia (nome, snapshot), convertiamo gli snapshot in pd.Index
+    # (difensivo: potrebbero arrivare come lista) e prendiamo la lunghezza.
+    # int() garantisce che il valore sia un intero Python e non un numpy
+    # int, che è più comodo per la serializzazione successiva.
+    return {
+        name: int(len(pd.Index(snaps)))
+        for name, snaps in stage_snapshots.items()
+    }
