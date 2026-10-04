@@ -3262,6 +3262,14 @@ class Transformation:
 
         return self.sddp_data
 
+    def add_sddp_top_abstract_path(self, ap_data):
+        raise NotImplementedError("da fare")
+
+    def add_benders_abstract_path(self, benders_func_block, ap_data):
+        raise NotImplementedError("da fare")
+
+    # TODO: modificare add_sb_abstract_path per supportare anche SDDP
+
     def convert_to_sddp_block(self, master, index_id, name_id):
         """
         Aggiunge un SDDPBlock alla rete SMS++ (versione minimale).

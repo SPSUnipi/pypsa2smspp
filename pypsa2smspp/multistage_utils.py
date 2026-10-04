@@ -910,3 +910,16 @@ def get_sddp_stage_time_horizons(
         name: int(len(pd.Index(snaps)))
         for name, snaps in stage_snapshots.items()
     }
+
+# -------------------------------------------------------
+# ------------------ ABSTRACT PATHS ---------------------
+# -------------------------------------------------------
+
+def build_sddp_top_abstract_path():
+    raise NotImplementedError("da fare")
+
+def build_sddp_benders_abstract_path(n_reservoirs):
+    raise NotImplementedError("da fare")
+
+def build_sddp_stochastic_block_abstract_path(data_mappings):
+    raise NotImplementedError("da fare")
