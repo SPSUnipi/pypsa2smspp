@@ -362,7 +362,7 @@ def test_mssb_matches_the_flat_optimum():
     # a finite p_set on a dispatchable component is enforced as a fixed
     # dispatch, which would freeze it and inflate the reference
     clean_dispatch_setpoints(reference)
-    reference.optimize(solver_name="highs")
+    reference.optimize(solver_name="highs", include_objective_constant=True)
     expected = float(reference.objective + reference.objective_constant)
 
     transformation = _transformation(tree, "mssb_optimum")

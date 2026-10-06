@@ -1413,7 +1413,7 @@ if __name__ == '__main__':
     network = clean_e_sum(network)
     
     network = one_bus_network(network)
-    network.optimize(solver_name='gurobi')
+    network.optimize(solver_name='gurobi', include_objective_constant=True)
 
 
 
