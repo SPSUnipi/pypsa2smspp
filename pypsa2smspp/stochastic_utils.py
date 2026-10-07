@@ -309,7 +309,10 @@ def _normalize_stochastic_parameters(
             "unit."
         )
 
-    stochastic_type = sp.get("stochastic_type", None)
+    stochastic_type = sp.get("stochastic_type", "tssb")
+
+    # ATTENZIONE: Inseriamo il default come tssb per rendere il codice retrocompatibile
+
     parameters = sp.get("parameters", [])
 
     if parameters is None:
