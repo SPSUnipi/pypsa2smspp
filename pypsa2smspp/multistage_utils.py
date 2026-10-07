@@ -915,11 +915,220 @@ def get_sddp_stage_time_horizons(
 # ------------------ ABSTRACT PATHS ---------------------
 # -------------------------------------------------------
 
-def build_sddp_top_abstract_path():
-    raise NotImplementedError("da fare")
+def build_sddp_top_abstract_path(
+    n_stages: int,
+    n_polyhedral_per_sub_block: int = 1,
+) -> Dict[str, Any]:
+    """
+    AbstractPath top-level dell'SDDPBlock.
 
-def build_sddp_benders_abstract_path(n_reservoirs):
-    raise NotImplementedError("da fare")
+    Secondo SDDPBlock::serialize():
+        PathDim = TimeHorizon × NumPolyhedralFunctionsPerSubBlock
+    Ogni path va da un BendersBlock (reference) a una PolyhedralFunction
+    (target). La struttura di ogni path è "OBBB" con
+    PathGroupIndices = [MASK, 0, 0, 3], derivata dal notebook di riferimento.
 
-def build_sddp_stochastic_block_abstract_path(data_mappings):
-    raise NotImplementedError("da fare")
+    Parameters
+    ----------
+    n_stages : int
+        Numero di stadi (TimeHorizon dell'SDDPBlock).
+    n_polyhedral_per_sub_block : int, default 1
+        Numero di PolyhedralFunction per sotto-blocco.
+
+    Returns
+    -------
+    dict
+        PathDim, TotalLength, PathStart, PathNodeTypes, PathGroupIndices.
+
+    TODO
+    ----
+    Il numero di path (n_stages * n_polyhedral_per_sub_block) è dedotto dal
+    codice C++ SDDPBlock::serialize. La struttura del singolo path ("OBBB"
+    con [MASK, 0, 0, 3]) è dedotta dal notebook scritto a mano: va
+    verificata con un .nc4 prodotto da serialize() o con il professore.
+    """
+    _UINT32_MASK = np.uint32(4294967295)
+
+    if n_stages < 0 or n_polyhedral_per_sub_block < 0:
+        raise ValueError("n_stages e n_polyhedral_per_sub_block devono essere >= 0.")
+
+    num_paths = n_stages * n_polyhedral_per_sub_block
+    if num_paths == 0:
+        return {
+            "PathDim": 0,
+            "TotalLength": 0,
+            "PathStart": np.array([], dtype=np.uint32),
+            "PathNodeTypes": np.array([], dtype="S1"),
+            "PathGroupIndices": np.array([], dtype=np.uint32),
+        }
+
+    # Ogni path ha 4 nodi: O, B, B, B
+    nodes_per_path = 4
+
+    # PathStart: [0, 4, 8, 12, ...]
+    path_start = np.arange(
+        0, nodes_per_path * num_paths, nodes_per_path, dtype=np.uint32
+    )
+
+    # PathNodeTypes: "OBBB" ripetuto num_paths volte
+    path_node_types = np.tile(
+        np.array(["O", "B", "B", "B"], dtype="S1"),
+        num_paths,
+    )
+
+    # PathGroupIndices: [MASK, 0, 0, 3] ripetuto num_paths volte
+    path_group_indices = np.tile(
+        np.array([_UINT32_MASK, 0, 0, 3], dtype=np.uint32),
+        num_paths,
+    )
+
+    return {
+        "PathDim": int(num_paths),
+        "TotalLength": int(nodes_per_path * num_paths),
+        "PathStart": path_start,
+        "PathNodeTypes": path_node_types,
+        "PathGroupIndices": path_group_indices,
+    }
+
+def build_sddp_benders_abstract_path(n_bacini: int) -> Dict[str, Any]:
+    """
+    AbstractPath della BendersBFunction: un percorso per ogni bacino.
+
+    Ogni percorso ha 3 nodi 'B', 'B', 'C':
+    - Primo 'B': scende nel BendersBlock (group=0)
+    - Secondo 'B': scende nel k-esimo blocco figlio (group=k)
+    - 'C': punta al vincolo 0 di quel blocco (element=0)
+
+    Parameters
+    ----------
+    n_bacini : int
+        Numero di bacini. Se 0, restituisce un AbstractPath vuoto.
+
+    Returns
+    -------
+    dict
+        PathDim, TotalLength, PathStart, PathNodeTypes, PathGroupIndices,
+        PathElementIndices.
+    """
+    _UINT32_MASK = np.uint32(4294967295)
+
+    if n_bacini < 0:
+        raise ValueError(f"n_bacini deve essere >= 0, ricevuto {n_bacini}.")
+
+    # Caso degenere: nessun bacino -> nessun percorso.
+    if n_bacini == 0:
+        return {
+            "PathDim": 0,
+            "TotalLength": 0,
+            "PathStart": np.array([], dtype=np.uint32),
+            "PathNodeTypes": np.array([], dtype="S1"),
+            "PathGroupIndices": np.array([], dtype=np.uint32),
+            "PathElementIndices": np.array([], dtype=np.uint32),
+        }
+
+    # PathStart: [0, 3, 6, 9, ...]
+    path_start = np.arange(0, 3 * n_bacini, 3, dtype=np.uint32)
+
+    # PathNodeTypes: "BBC" ripetuto n_bacini volte
+    path_node_types = np.tile(
+        np.array(["B", "B", "C"], dtype="S1"),
+        n_bacini,
+    )
+
+    # PathGroupIndices: [0, k, 0] per ogni k = 0..n-1
+    groups = []
+    for k in range(n_bacini):
+        groups.extend([0, k, 0])
+    path_group_indices = np.array(groups, dtype=np.uint32)
+
+    # PathElementIndices: [MASK, MASK, 0] ripetuto n volte
+    path_element_indices = np.tile(
+        np.array([_UINT32_MASK, _UINT32_MASK, 0], dtype=np.uint32),
+        n_bacini,
+    )
+
+    return {
+        "PathDim": int(n_bacini),
+        "TotalLength": int(3 * n_bacini),
+        "PathStart": path_start,
+        "PathNodeTypes": path_node_types,
+        "PathGroupIndices": path_group_indices,
+        "PathElementIndices": path_element_indices,
+    }
+
+def build_sddp_stochastic_block_abstract_path(
+    data_mappings: list,
+) -> Dict[str, Any]:
+    """
+    AbstractPath dello StochasticBlock: un percorso per ogni data mapping.
+
+    Struttura per tipo di mapping (dal file di riferimento):
+    - UCBlock::set_active_power_demand          -> "OB",    groups [MASK, 0]
+    - HydroUnitBlock::set_inflow                -> "OBBB",  groups [MASK, 0, 0, k]
+    - IntermittentUnitBlock::set_maximum_power  -> "OBB",   groups [MASK, 0, k]
+    - BendersBFunction::modify_constants        -> "O",     groups [MASK]
+
+    Parameters
+    ----------
+    data_mappings : list
+        Lista di data mapping, ognuno un dict con almeno "function_name".
+        Per i mapping unitblock, "abstract_paths"[0]["group_indices"][0]
+        contiene l'indice dell'UnitBlock come stringa.
+
+    Returns
+    -------
+    dict
+        PathDim, TotalLength, PathStart, PathNodeTypes, PathGroupIndices.
+    """
+    _UINT32_MASK = np.uint32(4294967295)
+
+    if not data_mappings:
+        raise ValueError("data_mappings non può essere vuoto.")
+
+    path_start = []
+    node_types = []
+    group_indices = []
+
+    cursor = 0
+    hydro_counter = 0   # contatore progressivo per i bacini
+
+    for mapping in data_mappings:
+        fn = mapping["function_name"]
+
+        if fn == "UCBlock::set_active_power_demand":
+            nodes = ["O", "B"]
+            groups = [_UINT32_MASK, 0]
+
+        elif fn == "HydroUnitBlock::set_inflow":
+            nodes = ["O", "B", "B", "B"]
+            groups = [_UINT32_MASK, 0, 0, hydro_counter]
+            hydro_counter += 1
+
+        elif fn == "IntermittentUnitBlock::set_maximum_power":
+            # L'indice dell'UnitBlock è in mapping["abstract_paths"][0]["group_indices"][0]
+            k = int(mapping["abstract_paths"][0]["group_indices"][0])
+            nodes = ["O", "B", "B"]
+            groups = [_UINT32_MASK, 0, k]
+
+        elif fn == "BendersBFunction::modify_constants":
+            nodes = ["O"]
+            groups = [_UINT32_MASK]
+
+        else:
+            raise ValueError(
+                f"build_sddp_stochastic_block_abstract_path: "
+                f"function_name non supportata: {fn!r}."
+            )
+
+        path_start.append(cursor)
+        node_types.extend(nodes)
+        group_indices.extend(groups)
+        cursor += len(nodes)
+
+    return {
+        "PathDim": len(data_mappings),
+        "TotalLength": cursor,
+        "PathStart": np.array(path_start, dtype=np.uint32),
+        "PathNodeTypes": np.array(node_types, dtype="S1"),
+        "PathGroupIndices": np.array(group_indices, dtype=np.uint32),
+    }

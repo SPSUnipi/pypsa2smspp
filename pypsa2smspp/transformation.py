@@ -2196,19 +2196,24 @@ class Transformation:
                 ("TotalLength",),
                 ap_data["PathGroupIndices"],
             ),
-            PathElementIndices=Variable(
+        )
+
+        # Rendiamo queste variabili opzionali per includere anche il caso SDDP
+        if "PathElementIndices" in ap_data:
+            ap_block.add_variable(
                 "PathElementIndices",
                 "u4",
                 ("TotalLength",),
                 ap_data["PathElementIndices"],
-            ),
-            PathRangeIndices=Variable(
+            )
+
+        if "PathRangeIndices" in ap_data:
+            ap_block.add_variable(
                 "PathRangeIndices",
                 "u4",
                 ("TotalLength",),
                 ap_data["PathRangeIndices"],
-            ),
-        )
+            )
 
         sb_block.add_block(name_id, block=ap_block)
         return sb_block
@@ -3262,11 +3267,89 @@ class Transformation:
 
         return self.sddp_data
 
-    def add_sddp_top_abstract_path(self, ap_data):
-        raise NotImplementedError("da fare")
+    def add_sddp_top_abstract_path(self, sddp_block, ap_data, name_id="AbstractPath"):
+        """
+        Crea una blocco AbstractPath con 3 variabili e lo attacca al
+        blocco padre SDDPBlock
+        """
+        ap_block = Block(
+            block_type="AbstractPath",
+            PathDim = Dimension(
+                "PathDim",
+                ap_data["PathDim"],
+            ),
+            TotalLength = Dimension(
+                "TotalLength",
+                ap_data["TotalLength"],
+            ),
+            PathStart = Variable(
+                "PathStart",
+                "u4",
+                ("PathDim",),
+                ap_data["PathStart"],
+            ),
+            PathNodeTypes = Variable(
+                "PathNodeTypes",
+                "c",
+                ("TotalLength",),
+                ap_data["PathNodeTypes"],
+            ),
+            PathGroupIndices = Variable(
+                "PathGroupIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathGroupIndices"],
+            ),
+        )
 
-    def add_benders_abstract_path(self, benders_func_block, ap_data):
-        raise NotImplementedError("da fare")
+        sddp_block.add_block(name_id, block = ap_block)
+
+        return sddp_block
+
+    def add_benders_abstract_path(self, benders_func_block, ap_data, name_id="AbstractPath"):
+        """
+        Crea un blocco AbstractPath con 4 variabili (include PathElementIndices)
+        e lo attacca alla BendersBFunction.
+        """
+        ap_block = Block(
+            block_type = "AbstractPath",
+            PathDim = Dimension(
+                "PathDim",
+                ap_data["PathDim"],
+            ),
+            TotalLength = Dimension(
+                "TotalLength",
+                ap_data["TotalLength"],
+            ),
+            PathStart = Variable(
+                "PathStart",
+                "u4",
+                ("PathDim",),
+                ap_data["PathStart"],
+            ),
+            PathNodeTypes = Variable(
+                "PathNodeTypes",
+                "c",
+                ("TotalLength",),
+                ap_data["PathNodeTypes"],
+            ),
+            PathGroupIndices = Variable(
+                "PathGroupIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathGroupIndices"],
+            ),
+            PathElementIndices = Variable(
+                "PathElementIndices",
+                "u4",
+                ("TotalLength",),
+                ap_data["PathElementIndices"],
+            )
+        )
+
+        benders_func_block.add_block(name_id, block = ap_block)
+
+        return benders_func_block
 
     # TODO: modificare add_sb_abstract_path per supportare anche SDDP
 
