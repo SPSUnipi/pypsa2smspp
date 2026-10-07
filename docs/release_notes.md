@@ -12,6 +12,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Support pandas 3 while retaining pandas 2 compatibility [PR #68](https://github.com/SPSUnipi/pypsa2smspp/pull/68)
 * Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
