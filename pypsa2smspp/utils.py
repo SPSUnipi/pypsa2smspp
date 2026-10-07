@@ -2485,12 +2485,12 @@ def _has_dynamic_link_attr(n, attr: str) -> bool:
 
 def _dense_from_static(value, time_horizon: int):
     """
-    Repeat a static SMS++ vector over NumberInstants.
+    Return writable data, repeating a static vector over NumberInstants.
     """
     arr = np.asarray(value, dtype=float)
 
     if arr.ndim == 2:
-        return arr
+        return arr.copy()
 
     return np.tile(arr[:, None], (1, time_horizon))
 

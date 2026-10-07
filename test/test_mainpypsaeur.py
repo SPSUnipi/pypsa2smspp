@@ -127,7 +127,7 @@ def run_single_nc(
         network = n_clean.copy()
 
         t0 = time.perf_counter()
-        network.optimize(solver_name=solver_name)
+        network.optimize(solver_name=solver_name, include_objective_constant=True)
         summary["PyPSA_opt_s"] = round(time.perf_counter() - t0, 6)
 
         # Export LP for debugging (best effort)

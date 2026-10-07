@@ -205,6 +205,10 @@ class FakeVariable:
     def __init__(self, solution):
         self.solution = solution
 
+    @property
+    def dims(self):
+        return self.solution.dims
+
 
 class FakeObjective:
     """
@@ -294,3 +298,8 @@ def prepare_solution(
     model.objective = FakeObjective(objective_smspp)
 
     n._model = model
+
+    if hasattr(n, "_optimize_window"):
+        from pypsa.optimization.window import SnapshotWindow
+
+        n._optimize_window = SnapshotWindow(n, n.snapshots, n.snapshots)

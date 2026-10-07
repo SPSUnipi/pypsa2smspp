@@ -26,7 +26,7 @@ requires-python = ">=3.10"
 
 dependencies = [
     "numpy",
-    "pandas>=0.24, <3",
+    "pandas>=2,<4",
     "pypsa>=1",
     "xarray<2026.4",
     "openpyxl",
@@ -71,7 +71,7 @@ version_scheme = "no-guess-dev"
 [tool.pytest.ini_options]   
 filterwarnings = [
     "error::DeprecationWarning", # Raise all DeprecationWarnings as errors
-    # "error::FutureWarning",      # Raise all FutureWarnings as errors
+    "error::FutureWarning",      # Raise all FutureWarnings as errors
 ]
 
 # Coverage settings
