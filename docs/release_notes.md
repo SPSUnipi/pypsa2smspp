@@ -31,6 +31,7 @@
 * Write the susceptance of the lines, `1/x_pu_eff`, which was 0 and turned the AC network into a transport model without Kirchhoff's voltage law [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Merge the battery charger and discharger of PyPSA-Eur with `merge_links`, which the fixed capacity given to the discharger (it has no capital cost) prevented, accept a preset or a list of presets as `merge_links`, and read the merged links back in the stochastic case [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Read back the solution of the investment stated outside the scenarios (`investment_outside`), an InvestmentBlock over a TSSB or an MSSB [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
+* Write the marginal cost of a Store or a StorageUnit as `Cost = -marginal_cost`, `Cost` being a price on the net injection: `abs(marginal_cost)` reversed it for a positive marginal cost [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Charge a start-up once, whatever the weighting of the snapshot, as PyPSA does: it used to be multiplied by it, while PyPSA weights the cost of the energy and not the unit commitment terms
 
 

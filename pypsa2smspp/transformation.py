@@ -680,6 +680,17 @@ class Transformation:
     
             elif components_type == "storage_units":
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+                # a battery pays its marginal cost on the dispatch only, which
+                # a price on the net injection gives only if it never draws
+                battery = ~components_df.carrier.isin(["hydro", "PHS"])
+                drawing = (n.get_switchable_as_dense("StorageUnit", "p_min_pu") < 0).any().reindex(components_df.index, fill_value=False)
+                priced = (n.get_switchable_as_dense("StorageUnit", "marginal_cost") != 0).any().reindex(components_df.index, fill_value=False)
+                for name in components_df.index[battery & drawing & priced]:
+                    logger.warning(
+                        f"StorageUnit {name} can draw and has a marginal cost: "
+                        f"it is written as a price on the net injection, "
+                        f"which the unit also earns when it draws."
+                    )
                 for name, bus, carrier in zip(components_df.index,
                                               components_df["bus_idx"].values,
                                               components_df["carrier"]):
