@@ -40,6 +40,8 @@ from pypsa2smspp.utils import (
     get_block_name,
     parse_unitblock_parameters,
     nuclear_rule_variables,
+    conversion_links,
+    conversion_unit_variables,
     forbid_unreachable_switches,
     free_initial_ramp,
     fix_commitment_on,
@@ -133,6 +135,7 @@ class Transformation:
         enable_thermal_units: bool = False,
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
         nuclear_units: Optional[Mapping[str, Union[bool, Mapping[str, Any], str, Path]]] = None,
+        enable_conversion_units: bool = False,
 
         # --- I/O ---
         workdir: Union[str, Path] = "output",
@@ -217,6 +220,24 @@ class Transformation:
             Notes:
               - Ignored when `enable_thermal_units=False`.
 
+        enable_conversion_units : bool, default False
+            Controls whether the committable links become ConversionUnitBlocks.
+
+            Behaviour:
+              - False: every link is a (hyper)arc of the network, whose
+                commitment is not represented.
+              - True : a committable link is a ConversionUnitBlock, a unit
+                with one commitment and one generator per port: the input
+                on bus0, whose power is - p0, and an output on each bus1,
+                bus2, ... with a nonzero efficiency, whose power is the
+                efficiency times p0, as equality rows of its operating
+                region. The other links are (hyper)arcs as before.
+
+            Notes:
+              - An extendable or modular committable link, one with a
+                delay, or one whose efficiency changes over time is refused,
+                since a ConversionUnitBlock cannot express it.
+
         workdir : str | Path, default "output"
             Output directory for SMS++ artifacts. The directory is created if it does not exist.
 
@@ -266,6 +287,7 @@ class Transformation:
 
         self.capacity_expansion_ucblock = bool(capacity_expansion_ucblock)
         self.enable_thermal_units = bool(enable_thermal_units)
+        self.enable_conversion_units = bool(enable_conversion_units)
         
         self.intermittent_carriers = intermittent_carriers
         self.nuclear_units = {}
@@ -310,6 +332,8 @@ class Transformation:
         self.design_variables = []
         self.stochastic_parameters = dict(stochastic_parameters or {})
         self.unitblock_design_data = []
+        self._conversion_links = pd.Index([])
+        self._conversion_data = {}
 
  
         
@@ -514,13 +538,22 @@ class Transformation:
             merge_selector=getattr(self, "merge_selector", None),
         )
     
+        # the committable links are ConversionUnitBlocks, not lines of the
+        # network [see _add_conversion_units()]
+        self._conversion_links = (
+            conversion_links(links_merged_df) if self.enable_conversion_units
+            else links_merged_df.index[:0]
+        )
+        links_merged_df = links_merged_df.drop(self._conversion_links)
+        network_links = n.links.drop(self._conversion_links)
+
         links_before = links_merged_df.copy()
         
         self.ucblock_variables = ucblock_variables(n, links_before)
     
         has_multilinks = (
-            "bus2" in n.links.columns
-            and bool((n.links.bus2.notna() & (n.links.bus2.astype(str).str.strip() != "")).any())
+            "bus2" in network_links.columns
+            and bool((network_links.bus2.notna() & (network_links.bus2.astype(str).str.strip() != "")).any())
         )
     
         if has_multilinks:
@@ -570,6 +603,18 @@ class Transformation:
             self.capacity_expansion_ucblock,
             fixed_investment_generators=fixed_investment_generators,
             fixed_investment_lines_links=fixed_investment_lines_links,
+        )
+
+        # each committable link is one unit with a generator per port, and
+        # correct_dimensions() has taken it out of the lines as it does with
+        # a merged link
+        self._conversion_data = {
+            name: conversion_unit_variables(n, name)
+            for name in self._conversion_links
+        }
+        self.dimensions["UCBlock"]["NumberUnits"] += len(self._conversion_data)
+        self.dimensions["UCBlock"]["NumberElectricalGenerators"] += sum(
+            len(buses) for _, _, buses in self._conversion_data.values()
         )
     
         self._dc_index = build_dc_index(n, links_before, links_after)
@@ -627,6 +672,11 @@ class Transformation:
         lines_index = state["lines_index"]
     
         for components in n.components[["Generator", "Store", "StorageUnit", "Line", "Link"]]:
+
+            # the ConversionUnitBlocks are the last units, before the lines
+            if components.list_name == "lines":
+                unitblock_index = self._add_conversion_units(
+                    n, generator_node, generator_owner, unitblock_index)
     
             if components.empty:
                 continue
@@ -642,6 +692,12 @@ class Transformation:
                 components_t = components.dynamic
     
             components_type = components.list_name
+
+            # all the links may be ConversionUnitBlocks, and then the network
+            # has none
+            if components_type == "links" and components_df.empty \
+                    and len(self._conversion_links):
+                continue
     
             use_investmentblock = (
                 not self.capacity_expansion_ucblock
@@ -795,6 +851,36 @@ class Transformation:
             "type": "int",
             "size": "NumAssets",
         }
+
+    def _add_conversion_units(self, n, generator_node, generator_owner,
+                              unitblock_index):
+        """
+        Adds a ConversionUnitBlock for each committable link, with the
+        variables of conversion_unit_variables(), and its generators to the
+        nodes and owners of the generators of the UCBlock.
+
+        Returns
+        -------
+        int
+            The index of the next UnitBlock.
+        """
+        for name, (variables, dimensions, buses) in self._conversion_data.items():
+            generator_node.extend(
+                int(n.buses.index.get_loc(bus)) for bus in buses)
+            generator_owner.extend(("links", name) for _ in buses)
+
+            self.unitblocks[f"ConversionUnitBlock_{unitblock_index}"] = {
+                "name": name,
+                "enumerate": f"UnitBlock_{unitblock_index}",
+                "block": "ConversionUnitBlock",
+                "DesignVariable": n.links.loc[[name], "p_nom"].values,
+                "Extendable": False,
+                "variables": variables,
+                "dimensions": dimensions,
+            }
+            unitblock_index += 1
+
+        return unitblock_index
 
     ### 3b ###
     def add_pollutant_budget(self, n):
@@ -1076,6 +1162,7 @@ class Transformation:
         apply_time_dependent_link_data_to_lines(
             n=n,
             networkblock=self.networkblock,
+            links=n.links.index.drop(self._conversion_links),
         )
 
 
@@ -2454,7 +2541,8 @@ class Transformation:
                     # without a table pySMSpp would take an int for an Attribute
                     ub_kwargs[dim_name] = (
                         Dimension(dim_name, dim_value)
-                        if unit_block["block"] == "NuclearUnitBlock"
+                        if unit_block["block"] in ("NuclearUnitBlock",
+                                                   "ConversionUnitBlock")
                         else dim_value
                     )
     
@@ -2464,10 +2552,12 @@ class Transformation:
             shut_down_cost = ub_kwargs.pop("ShutDownCost", None)
 
             # Create Block (pySMSpp has no table for NuclearUnitBlock and
-            # infers the kinds from the values, which is what we want)
+            # ConversionUnitBlock and infers the kinds from the values, which
+            # is what we want)
             with warnings.catch_warnings():
                 warnings.filterwarnings(
-                    "ignore", message="Block type NuclearUnitBlock not found"
+                    "ignore",
+                    message="Block type (NuclearUnitBlock|ConversionUnitBlock) not found"
                 )
                 unit_block_obj = Block().from_kwargs(
                     block_type=unit_block["block"],

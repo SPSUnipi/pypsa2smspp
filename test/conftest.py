@@ -94,6 +94,12 @@ UNRELEASED_CASES = ("co2_", "nuc_", "uc_", "mod_")
 # UCBlock does; they are left out where UNRELEASED_CASES are
 UNRELEASED_NETWORKS = ("3n_3c_1gext_1h_1bext_2l",)
 
+# the test networks with a committable link, which is a ConversionUnitBlock
+# (chp_, UCBlock bab404c7), whose DCNetworkBlock also takes a hyperarc
+# together with lines of nonzero susceptance; they are left out where the
+# solver does not know the ConversionUnitBlock
+CONVERSION_UNIT_CASES = ("chp_",)
+
 
 def solver_reads_pollutant_budget():
     """
@@ -106,10 +112,6 @@ def solver_reads_pollutant_budget():
     skipped rather than failed. The check loads, without solving it, a one-unit UCBlock
     with a CO2 budget.
     """
-    solver = shutil.which("smspp_ucblock_solver") or shutil.which("ucblock_solver")
-    if solver is None:
-        return False
-
     probe = OUT_TEST / "pollutant_budget_probe.nc4"
     with netCDF4.Dataset(probe, "w") as nc:
         nc.setncattr("SMS++_file_type", 1)
@@ -128,6 +130,42 @@ def solver_reads_pollutant_budget():
         unit.createVariable("MaxPower", "f8")[...] = 10.0
         unit.createVariable("ActivePowerCost", "f8")[...] = 1.0
 
+    return solver_loads(probe)
+
+
+def solver_reads_conversion_unit():
+    """
+    True if the smspp_ucblock_solver on PATH loads a UCBlock with a
+    ConversionUnitBlock, which is in SMS++ since UCBlock bab404c7; the check
+    loads, without solving it, a one-unit UCBlock with a ConversionUnitBlock
+    of one generator.
+    """
+    probe = OUT_TEST / "conversion_unit_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 1), ("NumberUnits", 1),
+                          ("NumberElectricalGenerators", 1), ("NumberNodes", 1)):
+            uc.createDimension(dim, size)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        unit = uc.createGroup("UnitBlock_0")
+        unit.setncattr("type", "ConversionUnitBlock")
+        unit.createVariable("MaxPower", "f8")[...] = 10.0
+
+    return solver_loads(probe)
+
+
+def solver_loads(probe):
+    """
+    True if the smspp_ucblock_solver on PATH (under the name it had before
+    the prefix, ucblock_solver, if it is not found) loads the UCBlock in the
+    file probe without an error.
+    """
+    solver = shutil.which("smspp_ucblock_solver") or shutil.which("ucblock_solver")
+    if solver is None:
+        return False
+
     config = Path(pysmspp.__file__).parent / "data" / "configs" / "UCBlock" / "uc_solverconfig.txt"
     try:
         run = subprocess.run([solver, "-D", "-S", str(config), str(probe)],
@@ -144,12 +182,16 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
 
     A network that needs what no released SMS++ has is left out where the
     solver at hand does not read a pollutant budget [see UNRELEASED_CASES and
-    UNRELEASED_NETWORKS].
+    UNRELEASED_NETWORKS], and so is a network with a committable link where
+    it does not know the ConversionUnitBlock [see CONVERSION_UNIT_CASES].
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     if not solver_reads_pollutant_budget():
         files = [f for f in files if not f.name.startswith(UNRELEASED_CASES)
                  and f.stem not in UNRELEASED_NETWORKS]
+    if not solver_reads_conversion_unit():
+        files = [f for f in files
+                 if not f.name.startswith(CONVERSION_UNIT_CASES)]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 

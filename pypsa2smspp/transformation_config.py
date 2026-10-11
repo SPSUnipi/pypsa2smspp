@@ -204,6 +204,12 @@ class TransformationConfig:
         
         self.NuclearUnitBlock_inverse = self.ThermalUnitBlock_inverse
 
+        # the first generator of a ConversionUnitBlock is the input of the
+        # link, whose power is - p0
+        self.ConversionUnitBlock_inverse = {
+            "p": lambda activepower: -np.atleast_2d(activepower)[0],
+            }
+
         self.HydroUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: activepower[0],

@@ -42,7 +42,7 @@ def component_definition(n, unit_block: dict) -> str:
             return "StorageUnit" if unit_block['name'] in n.storage_units.index else "Store"
         case "DCNetworkBlock_lines":
             return "Line"
-        case "DCNetworkBlock_links":
+        case "DCNetworkBlock_links" | "ConversionUnitBlock":
             return "Link"
         case "SlackUnitBlock":
             return "Generator"

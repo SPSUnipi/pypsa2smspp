@@ -81,6 +81,8 @@ def run_ucblock(xlsx_path: Path) -> None:
         # so that the optimum is the one of PyPSA
         nuclear_units=({"nuclear": NON_BINDING_NUCLEAR_RULES}
                        if "nuclear" in set(network.generators.carrier) else None),
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(network.links.committable.any()),
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,

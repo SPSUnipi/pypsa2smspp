@@ -2366,6 +2366,286 @@ def nuclear_rule_variables(rules, thermal_variables, snapshot_hours):
     return variables, dimensions
 
 
+def conversion_links(links):
+    """
+    The committable links among `links`, each of which becomes a
+    ConversionUnitBlock instead of a (hyper)arc of the network.
+
+    Parameters
+    ----------
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines of the
+        DCNetworkBlock (the merged links, if any merge is done).
+
+    Returns
+    -------
+    pd.Index
+        The names of the committable links.
+    """
+    if links.empty or "committable" not in links.columns:
+        return links.index[:0]
+    return links.index[links["committable"].fillna(False).astype(bool)]
+
+
+def conversion_unit_ports(n, name):
+    """
+    The ports of the link `name`, as pairs (bus, efficiency): first bus0 with
+    efficiency -1 (the input, whose power is - p0), then each bus1, bus2, ...
+    that is given and has a nonzero efficiency, whose power is efficiency * p0.
+    """
+    link = n.links.loc[name]
+    ports = [(link["bus0"], -1.0)]
+    k = 1
+    while f"bus{k}" in n.links.columns:
+        bus = link[f"bus{k}"]
+        efficiency = link["efficiency" if k == 1 else f"efficiency{k}"]
+        if isinstance(bus, str) and bus.strip() and float(efficiency) != 0.0:
+            ports.append((bus, float(efficiency)))
+        k += 1
+    return ports
+
+
+def conversion_unit_variables(n, name):
+    """
+    Computes the ConversionUnitBlock of a committable link of PyPSA.
+
+    The link has one commitment and a power p0 drawn from bus0, and it injects
+    efficiency_k * p0 into each bus k >= 1. The unit has one generator per
+    port, the first on bus0 with power - p0 (an input, of nonpositive power if
+    p_min_pu >= 0) and then one per output bus k, coupled by the equality rows
+
+        efficiency_k * p_0 + p_k = 0 ,
+
+    so that the region of the unit when it is on is the segment of PyPSA. The
+    bounds of the input are those of - p0, those of each output follow from
+    the rows. The costs of PyPSA are on p0, hence on the input generator with
+    the opposite sign, weighted by the snapshot weighting as the energy is;
+    the costs of a start-up and of a shut-down are paid once.
+
+    The ramps of PyPSA limit the change of p0, i.e., of the combination - p_0
+    (the row of "RampMatrix"). PyPSA writes, for a committable link,
+
+        p0_t - p0_t-1 <= ru_t u_t-1 + rsu ( u_t - u_t-1 )
+        p0_t - p0_t-1 >= - rd_t u_t - rsd ( u_t-1 - u_t )
+
+    which, besides the ramps ru_t and rd_t of a unit on at t - 1 and at t,
+    give the start-up range rsd - rd_t <= p0_t <= rsu and the shut-down range
+    rsu - ru_t <= p0_t-1 <= rsd; they are written as the start-up and
+    shut-down limits of the input generator, whose power is - p0. Each row
+    exists at the snapshots where PyPSA writes it: where the ramp or the
+    start-up (shut-down) limit is given, and at the first snapshot only if the
+    unit is off before the horizon or `p_init` is given, with no row there
+    otherwise, which is what a ramp and limits as wide as the bounds give.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network.
+    name : str
+        The name of the committable link.
+
+    Returns
+    -------
+    variables : dict
+        Variable name -> {"value", "type", "size"}.
+    dimensions : dict
+        The dimensions of the unit ("NumberGenerators", "NumberOperatingRows",
+        "NumberRampRows").
+    buses : list of str
+        The bus of each generator, in the order of the generators.
+
+    Raises
+    ------
+    ValueError
+        If the link is extendable or modular, has a delay, or has an
+        efficiency that changes over time, which a ConversionUnitBlock
+        cannot express.
+    """
+    link = n.links.loc[name]
+    sns = n.snapshots
+    T = len(sns)
+
+    if bool(link["p_nom_extendable"]):
+        raise ValueError(
+            f"{name} is an extendable committable link, which a "
+            "ConversionUnitBlock cannot expand: its commitment is binary and "
+            "a continuous design would multiply it."
+        )
+    if float(link.get("p_nom_mod", 0.0) or 0.0) != 0.0:
+        raise ValueError(
+            f"{name} is a modular committable link (p_nom_mod), whose "
+            "commitment PyPSA counts in modules, which a ConversionUnitBlock "
+            "cannot express."
+        )
+    for column in n.links.columns:
+        if column.startswith("delay") and float(link[column] or 0) != 0:
+            raise ValueError(
+                f"{name} delivers with a delay ({column}), which a "
+                "ConversionUnitBlock cannot express."
+            )
+
+    ports = conversion_unit_ports(n, name)
+    for k in range(1, len(ports)):
+        column = "efficiency" if k == 1 else f"efficiency{k}"
+        series = n.links_t.get(column)
+        if series is not None and name in series.columns and \
+                series[name].notna().any():
+            raise ValueError(
+                f"{name} has an efficiency that changes over time "
+                f"({column}), while the operating rows of a "
+                "ConversionUnitBlock are the same at every instant."
+            )
+
+    G = len(ports)
+    efficiency = np.array([e for _, e in ports])
+
+    def dense(attr, weights=False):
+        return get_param_as_dense(n, "Link", attr, weights)[name].to_numpy(
+            dtype=float)
+
+    def static(attr):
+        value = link.get(attr, np.nan)
+        return np.nan if value is None else float(value)
+
+    def per_instant(values):
+        return {"value": np.asarray(values, dtype=float), "type": "float",
+                "size": ("TimeHorizon",)}
+
+    def per_generator(values):
+        return {"value": np.asarray(values, dtype=float), "type": "float",
+                "size": ("TimeHorizon", "NumberGenerators")}
+
+    def scalar(value, var_type):
+        return {"value": value, "type": var_type, "size": ()}
+
+    p_nom = float(link["p_nom"])
+    p0_min = dense("p_min_pu") * p_nom
+    p0_max = dense("p_max_pu") * p_nom
+
+    # the power of the generator g is efficiency[ g ] * p0, efficiency[ 0 ]
+    # being -1: its bounds are those of p0, swapped where the factor is < 0
+    low = np.outer(p0_min, efficiency)
+    high = np.outer(p0_max, efficiency)
+    min_power = np.minimum(low, high)
+    max_power = np.maximum(low, high)
+
+    variables = {
+        "MinPower": per_generator(min_power),
+        "MaxPower": per_generator(max_power),
+    }
+    dimensions = {"NumberGenerators": G}
+
+    # the operating rows efficiency_k p_0 + p_k = 0
+    if G > 1:
+        matrix = np.zeros((G - 1, G))
+        matrix[:, 0] = efficiency[1:]
+        matrix[np.arange(G - 1), np.arange(1, G)] = 1.0
+        dimensions["NumberOperatingRows"] = G - 1
+        variables["OperatingMatrix"] = {
+            "value": matrix, "type": "float",
+            "size": ("NumberOperatingRows", "NumberGenerators")}
+        for key in ("OperatingLHS", "OperatingRHS"):
+            variables[key] = {
+                "value": np.zeros((T, G - 1)), "type": "float",
+                "size": ("TimeHorizon", "NumberOperatingRows")}
+
+    # the costs, on p0 and so on - p_0
+    linear = np.zeros((T, G))
+    linear[:, 0] = - dense("marginal_cost", weights=True)
+    if np.any(linear):
+        variables["LinearTerm"] = per_generator(linear)
+    quadratic = np.zeros((T, G))
+    quadratic[:, 0] = dense("marginal_cost_quadratic", weights=True)
+    if np.any(quadratic):
+        variables["QuadTerm"] = per_generator(quadratic)
+    stand_by = dense("stand_by_cost", weights=True)
+    if np.any(stand_by):
+        variables["ConstTerm"] = per_instant(stand_by)
+    for key, attr in (("StartUpCost", "start_up_cost"),
+                      ("ShutDownCost", "shut_down_cost")):
+        if static(attr):
+            variables[key] = scalar(static(attr), "float")
+
+    # the commitment before the horizon and the minimum up and down times
+    up_before = int(static("up_time_before"))
+    down_before = int(static("down_time_before"))
+    init_up_down = up_before if up_before > 0 else - down_before
+    variables["InitUpDownTime"] = scalar(init_up_down, "int")
+    variables["MinUpTime"] = scalar(int(static("min_up_time")), "uint")
+    variables["MinDownTime"] = scalar(int(static("min_down_time")), "uint")
+
+    p_init = static("p_init")
+    if init_up_down > 0:
+        p0_before = p0_max[0] if np.isnan(p_init) else p_init
+        variables["InitialPower"] = {
+            "value": efficiency * p0_before, "type": "float",
+            "size": ("NumberGenerators",)}
+
+    # the ramps and the start-up and shut-down ranges of p0
+    ru = dense("ramp_limit_up")
+    rd = dense("ramp_limit_down")
+    rsu = static("ramp_limit_start_up")
+    rsd = static("ramp_limit_shut_down")
+    up_rows = ~(np.isnan(ru) & np.isnan(rsu))
+    down_rows = ~(np.isnan(rd) & np.isnan(rsd))
+    if init_up_down > 0 and np.isnan(p_init):
+        up_rows[0] = down_rows[0] = False
+
+    if not (up_rows.any() or down_rows.any()):
+        return variables, dimensions, [bus for bus, _ in ports]
+
+    ru = np.nan_to_num(ru, nan=1.0) * p_nom
+    rd = np.nan_to_num(rd, nan=1.0) * p_nom
+    rsu = (1.0 if np.isnan(rsu) else rsu) * p_nom
+    rsd = (1.0 if np.isnan(rsd) else rsd) * p_nom
+
+    # a change of p0 never exceeds this, so a ramp this large binds nothing
+    free = 2.0 * float(np.max(np.abs(np.concatenate([p0_min, p0_max]))))
+
+    dimensions["NumberRampRows"] = 1
+    ramp_matrix = np.zeros((1, G))
+    ramp_matrix[0, 0] = -1.0
+    variables["RampMatrix"] = {"value": ramp_matrix, "type": "float",
+                               "size": ("NumberRampRows", "NumberGenerators")}
+    for key, ramp, rows in (("DeltaRampUp", ru, up_rows),
+                            ("DeltaRampDown", rd, down_rows)):
+        variables[key] = {"value": np.where(rows, ramp, free)[:, None],
+                          "type": "float",
+                          "size": ("TimeHorizon", "NumberRampRows")}
+
+    # the ranges of p0 at a start-up at t and before a shut-down at t, as
+    # wide as the bounds (of t, and of t - 1 for the shut-down) where PyPSA
+    # writes no row
+    p0_min_before = np.concatenate([[p0_min[0]], p0_min[:-1]])
+    p0_max_before = np.concatenate([[p0_max[0]], p0_max[:-1]])
+    su_low = np.where(down_rows, rsd - rd, p0_min)
+    su_high = np.where(up_rows, rsu, p0_max)
+    sd_low = np.where(up_rows, rsu - ru, p0_min_before)
+    sd_high = np.where(down_rows, rsd, p0_max_before)
+
+    # a range that is empty forbids the switch at t: it is moved above the
+    # bounds of p0, which leaves no power for the unit to switch with
+    for low, high, bound in ((su_low, su_high, p0_max),
+                             (sd_low, sd_high, p0_max_before)):
+        empty = low > high
+        low[empty] = high[empty] = bound[empty] + free
+
+    # the input generator has power - p0, hence the opposite limits; the
+    # outputs follow it through the operating rows, and get limits beyond
+    # their bounds, which bind nothing
+    for key, values, unbound in (("StartUpLimit", - su_low, max_power + free),
+                                 ("StartUpLowerLimit", - su_high,
+                                  min_power - free),
+                                 ("ShutDownLimit", - sd_low, max_power + free),
+                                 ("ShutDownLowerLimit", - sd_high,
+                                  min_power - free)):
+        limit = unbound.copy()
+        limit[:, 0] = values
+        variables[key] = per_generator(limit)
+
+    return variables, dimensions, [bus for bus, _ in ports]
+
+
 def determine_size_type(
     smspp_parameters,
     dimensions,
@@ -2624,11 +2904,14 @@ def rename_links_to_lines(networkblock: dict) -> None:
 
 
 
-def _has_dynamic_link_attr(n, attr: str) -> bool:
+def _has_dynamic_link_attr(n, attr: str, links=None) -> bool:
     """
-    Return True if n.links_t.<attr> exists and contains at least one non-NaN value.
+    Return True if n.links_t.<attr> exists and contains at least one non-NaN
+    value, for one of `links` if they are given.
     """
     df = getattr(n.links_t, attr, None)
+    if df is not None and links is not None:
+        df = df[df.columns.intersection(links)]
     return df is not None and not df.empty and df.notna().to_numpy().any()
 
 
@@ -2645,7 +2928,7 @@ def _dense_from_static(value, time_horizon: int):
 
 
 
-def apply_time_dependent_link_data_to_lines(n, networkblock):
+def apply_time_dependent_link_data_to_lines(n, networkblock, links=None):
     """
     Overwrite time-dependent Link data in the already merged/renamed Lines block.
 
@@ -2660,25 +2943,31 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
     Efficiency values are taken from networkblock["efficiencies"], which must
     have been saved during multilink explosion.
+
+    The links of the network are `links`, all those of n if not given (a
+    committable link that is a ConversionUnitBlock is not a line).
     """
     if "Lines" not in networkblock:
         return
+
+    if links is None:
+        links = n.links.index
 
     variables = networkblock["Lines"]["variables"]
     time_horizon = len(n.snapshots)
     link_offset = len(n.lines)
 
-    p_nom = n.links["p_nom"].astype(float)
-    p_nom_extendable = n.links["p_nom_extendable"].fillna(False).astype(bool)
+    p_nom = n.links.loc[links, "p_nom"].astype(float)
+    p_nom_extendable = n.links.loc[links, "p_nom_extendable"].fillna(False).astype(bool)
     
-    if _has_dynamic_link_attr(n, "efficiency"):
+    if _has_dynamic_link_attr(n, "efficiency", links):
         variables['Efficiency']['size'] = ("NumberBranches", "NumberInstants")
 
     for attr, smspp_name in (
         ("p_max_pu", "MaxPowerFlow"),
         ("p_min_pu", "MinPowerFlow"),
     ):
-        if not _has_dynamic_link_attr(n, attr):
+        if not _has_dynamic_link_attr(n, attr, links):
             continue
 
         pu = get_param_as_dense(
@@ -2686,7 +2975,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
             "Link",
             attr,
             weights=False,
-        )
+        )[links]
 
         values = pu.copy()
         fixed = ~p_nom_extendable
@@ -2703,7 +2992,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
             time_horizon=time_horizon,
         )
 
-        old[link_offset:link_offset + len(n.links), :] = link_values
+        old[link_offset:link_offset + len(links), :] = link_values
 
         variables[smspp_name]["value"] = old
         variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")
