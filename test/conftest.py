@@ -26,6 +26,7 @@ OUT_TEST.mkdir(parents=True, exist_ok=True)
 from configs.test_config import TestConfig
 from network_definition import NetworkDefinition
 from pypsa2smspp.transformation import Transformation
+from pypsa2smspp.stochastic_utils import has_extendable_assets
 
 from pypsa2smspp.network_correction import (
     clean_global_constraints,
@@ -61,12 +62,17 @@ def create_test_config(xlsx_path: Path, fp: str | Path = "application_test.ini")
 
 def get_tssb_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
     """
-    Get all Excel test cases whose full path contains 'tssb'.
+    Get all Excel test cases whose full path contains 'tssb', but those with
+    a committable link where the solver does not know the
+    ConversionUnitBlock [see CONVERSION_UNIT_CASES].
     """
     files = sorted(
         p for p in inputs_dir.rglob("*.xlsx")
         if "tssb" in str(p).lower()
     )
+    if not solver_reads_conversion_unit():
+        files = [p for p in files
+                 if not p.name.startswith(CONVERSION_UNIT_CASES)]
 
     names = [
         f"{i}: {p.relative_to(HERE)}"
@@ -74,9 +80,6 @@ def get_tssb_test_cases(inputs_dir: Path = HERE / "configs" / "data" / "test"):
     ]
 
     return {"xlsx_paths": files, "ids": names}
-
-
-tssb_test_cases = get_tssb_test_cases()
 
 
 # the test networks that need what no released SMS++ has: pollutant budgets
@@ -196,6 +199,34 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     return {"xlsx_paths": files, "ids": names}
 
 test_cases = get_test_cases()
+tssb_test_cases = get_tssb_test_cases()
+
+def scenario_reference_objective(n: pypsa.Network) -> float | None:
+    """
+    The optimum of PyPSA for a stochastic network with a committable
+    component, or None if it has none or if it has here-and-now variables.
+
+    PyPSA does not build the model of a stochastic network with a committable
+    component; with no extendable asset nothing is here-and-now, the
+    scenarios are independent, and the optimum is the sum of the optima of
+    the scenarios, each solved by PyPSA, weighted by their probabilities.
+    """
+    committable = any(
+        "committable" in df.columns and bool(df["committable"].any())
+        for df in (n.generators, n.links)
+    )
+    if not committable or has_extendable_assets(n):
+        return None
+
+    objective = 0.0
+    for scenario, probability in n.scenario_weightings["weight"].items():
+        deterministic = n.get_scenario(scenario)
+        deterministic.optimize(solver_name="highs")
+        objective += float(probability) * float(
+            deterministic.objective
+            + getattr(deterministic, "objective_constant", 0.0))
+    return objective
+
 
 def get_network(fp: Path | str) -> str:
     """Helper to load a network from a .nc file."""

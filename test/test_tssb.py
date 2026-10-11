@@ -13,6 +13,9 @@ from conftest import (
     safe_remove,
     tssb_test_cases,
     OUT_TEST,
+    REL_TOL,
+    ABS_TOL,
+    scenario_reference_objective,
 )
 
 import math
@@ -234,10 +237,14 @@ def run_tssb_block(
         stochastic_parameters=parser.stochastic_parameters,
     )
 
+    obj_reference = scenario_reference_objective(n.copy())
+
     transformation = Transformation(
         name=case_name,
         configfile=TSSB_CONFIGFILE,
         enable_thermal_units=False,
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(n.links.committable.any()),
         workdir=workdir,
         stochastic_parameters={
             "stochastic_type": "tssb",
@@ -263,6 +270,9 @@ def run_tssb_block(
 
     assert transformation.result is not None
     assert math.isfinite(obj_smspp)
+    if obj_reference is not None:
+        assert obj_smspp == pytest.approx(obj_reference, rel=REL_TOL,
+                                          abs=ABS_TOL)
 
     try:
         n.export_to_netcdf(str(network_nc))

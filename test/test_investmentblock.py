@@ -119,8 +119,14 @@ def run_investment_block(xlsx_path: Path) -> None:
     network = n.copy()
 
     # ---- (1) PyPSA optimization (reference) ----
+    # the InvestmentFunction solves the continuous relaxation of the
+    # UCBlock (intRelaxIntVars in InvestmentBlock/BSCfg.txt of pySMSpp),
+    # hence the commitment of a committable component is relaxed in PyPSA too
+    committable = bool(network.generators.committable.any()
+                       or network.links.committable.any())
     solver_name = getattr(parser, "solver_name", "highs")
-    network.optimize(solver_name=solver_name)
+    network.optimize(solver_name=solver_name,
+                     linearized_unit_commitment=committable)
 
     # Export LP for debugging (best effort)
     try:
@@ -136,6 +142,8 @@ def run_investment_block(xlsx_path: Path) -> None:
     # ---- (2) SMS++ pipeline (ONE CALL) ----
     transformation = Transformation(
         capacity_expansion_ucblock=False,  # InvestmentBlock
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(n.links.committable.any()),
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,

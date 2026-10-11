@@ -2405,7 +2405,7 @@ def conversion_unit_ports(n, name):
     return ports
 
 
-def conversion_unit_variables(n, name):
+def conversion_unit_variables(n, name, scaled=False):
     """
     Computes the ConversionUnitBlock of a committable link of PyPSA.
 
@@ -2437,12 +2437,21 @@ def conversion_unit_variables(n, name):
     unit is off before the horizon or `p_init` is given, with no row there
     otherwise, which is what a ramp and limits as wide as the bounds give.
 
+    An extendable link is written, where `scaled` is True, as the unit of one
+    MW of p_nom, which the design of the InvestmentBlock scales (see
+    UnitBlock::scale()): its powers and ramps are those of p_nom = 1, and
+    the costs of being on, of a start-up and of a shut-down are per MW of
+    p_nom (divided by p_nom, if it is not 0), as for a ThermalUnitBlock.
+
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network.
     name : str
         The name of the committable link.
+    scaled : bool, default False
+        True if an extendable link is to be written as a unit scaled by its
+        design, i.e., in the InvestmentBlock form.
 
     Returns
     -------
@@ -2457,19 +2466,23 @@ def conversion_unit_variables(n, name):
     Raises
     ------
     ValueError
-        If the link is extendable or modular, has a delay, or has an
-        efficiency that changes over time, which a ConversionUnitBlock
-        cannot express.
+        If the link is extendable and not `scaled`, modular, has a delay,
+        or has an efficiency that changes over time, which a
+        ConversionUnitBlock cannot express.
     """
     link = n.links.loc[name]
     sns = n.snapshots
     T = len(sns)
 
-    if bool(link["p_nom_extendable"]):
+    extendable = bool(link["p_nom_extendable"])
+    if extendable and not scaled:
         raise ValueError(
             f"{name} is an extendable committable link, which a "
-            "ConversionUnitBlock cannot expand: its commitment is binary and "
-            "a continuous design would multiply it."
+            "ConversionUnitBlock of the UCBlock cannot expand: its "
+            "commitment is binary and a continuous design would multiply "
+            "it. Set p_nom_extendable=False on it or use the InvestmentBlock "
+            "path (capacity_expansion_ucblock=False), where the design "
+            "scales the unit."
         )
     if float(link.get("p_nom_mod", 0.0) or 0.0) != 0.0:
         raise ValueError(
@@ -2518,7 +2531,10 @@ def conversion_unit_variables(n, name):
     def scalar(value, var_type):
         return {"value": value, "type": var_type, "size": ()}
 
-    p_nom = float(link["p_nom"])
+    # an extendable unit is that of one MW, its costs of the commitment per
+    # MW of the p_nom it has
+    p_nom = 1.0 if extendable else float(link["p_nom"])
+    per_mw = (float(link["p_nom"]) or 1.0) if extendable else 1.0
     p0_min = dense("p_min_pu") * p_nom
     p0_max = dense("p_max_pu") * p_nom
 
@@ -2558,13 +2574,13 @@ def conversion_unit_variables(n, name):
     quadratic[:, 0] = dense("marginal_cost_quadratic", weights=True)
     if np.any(quadratic):
         variables["QuadTerm"] = per_generator(quadratic)
-    stand_by = dense("stand_by_cost", weights=True)
+    stand_by = dense("stand_by_cost", weights=True) / per_mw
     if np.any(stand_by):
         variables["ConstTerm"] = per_instant(stand_by)
     for key, attr in (("StartUpCost", "start_up_cost"),
                       ("ShutDownCost", "shut_down_cost")):
         if static(attr):
-            variables[key] = scalar(static(attr), "float")
+            variables[key] = scalar(static(attr) / per_mw, "float")
 
     # the commitment before the horizon and the minimum up and down times
     up_before = int(static("up_time_before"))

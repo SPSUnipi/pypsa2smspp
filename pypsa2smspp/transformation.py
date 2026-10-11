@@ -609,7 +609,8 @@ class Transformation:
         # correct_dimensions() has taken it out of the lines as it does with
         # a merged link
         self._conversion_data = {
-            name: conversion_unit_variables(n, name)
+            name: conversion_unit_variables(
+                n, name, scaled=not self.capacity_expansion_ucblock)
             for name in self._conversion_links
         }
         self.dimensions["UCBlock"]["NumberUnits"] += len(self._conversion_data)
@@ -676,7 +677,8 @@ class Transformation:
             # the ConversionUnitBlocks are the last units, before the lines
             if components.list_name == "lines":
                 unitblock_index = self._add_conversion_units(
-                    n, generator_node, generator_owner, unitblock_index)
+                    n, generator_node, generator_owner, investment_meta,
+                    unitblock_index)
     
             if components.empty:
                 continue
@@ -853,11 +855,13 @@ class Transformation:
         }
 
     def _add_conversion_units(self, n, generator_node, generator_owner,
-                              unitblock_index):
+                              investment_meta, unitblock_index):
         """
         Adds a ConversionUnitBlock for each committable link, with the
         variables of conversion_unit_variables(), and its generators to the
-        nodes and owners of the generators of the UCBlock.
+        nodes and owners of the generators of the UCBlock; an extendable
+        one (in the InvestmentBlock form) is an asset of the InvestmentBlock,
+        whose design scales the unit.
 
         Returns
         -------
@@ -869,15 +873,22 @@ class Transformation:
                 int(n.buses.index.get_loc(bus)) for bus in buses)
             generator_owner.extend(("links", name) for _ in buses)
 
-            self.unitblocks[f"ConversionUnitBlock_{unitblock_index}"] = {
+            block_name = f"ConversionUnitBlock_{unitblock_index}"
+            extendable = bool(n.links.at[name, "p_nom_extendable"])
+            self.unitblocks[block_name] = {
                 "name": name,
                 "enumerate": f"UnitBlock_{unitblock_index}",
                 "block": "ConversionUnitBlock",
                 "DesignVariable": n.links.loc[[name], "p_nom"].values,
-                "Extendable": False,
+                "Extendable": extendable,
                 "variables": variables,
                 "dimensions": dimensions,
             }
+            if extendable:
+                self.add_InvestmentBlock(n, n.links.loc[[name]], "Link")
+                investment_meta["index_extendable"].append(unitblock_index)
+                investment_meta["Blocks"].append(block_name)
+                investment_meta["asset_type"].append(0)
             unitblock_index += 1
 
         return unitblock_index

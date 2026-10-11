@@ -22,7 +22,7 @@ import pytest
 
 import pysmspp
 
-from conftest import OUT_TEST
+from conftest import OUT_TEST, scenario_reference_objective
 
 from pypsa2smspp.network_correction import add_slack_unit, clean_dispatch_setpoints
 from pypsa2smspp.stochastic_utils import normalize_scenario_tree
@@ -113,11 +113,46 @@ def _solar_profile(snapshots) -> pd.Series:
     )
 
 
-def build_two_level_network() -> tuple[pypsa.Network, dict]:
+def _add_conversion_unit(n: pypsa.Network) -> None:
     """
-    Build the flat network of the leaves, and the tree they are the leaves of.
+    Add a gas node with its supply, a heat node with its demand and a boiler,
+    and a committable back-pressure CHP between them, a ConversionUnitBlock,
+    and a resistive heater from the electric to the heat node, which keeps a
+    line in the network; nothing is extendable, so that nothing is
+    here-and-now.
+    """
+    # the fixed capacities cover the demand, so that the slack is idle
+    n.generators["p_nom_extendable"] = False
+    n.generators.loc[n.generators.carrier == "diesel", "p_nom"] = 30000.0
+    n.generators.loc["solar", "p_nom"] = 2000.0
+
+    bus = n.buses.index[0]
+    n.add("Bus", "gas")
+    n.add("Bus", "heat")
+    n.add("Generator", "gas supply", bus="gas", p_nom=1e5, marginal_cost=20.0)
+    n.add("Generator", "boiler", bus="heat", p_nom=1e4, marginal_cost=60.0)
+    # a heat demand below the minimum heat of the CHP for six hours out of
+    # twelve, so that the CHP shuts down and starts up again
+    n.add("Load", "heat demand", bus="heat",
+          p_set=np.where(np.arange(len(n.snapshots)) % 12 < 6, 1500.0, 300.0))
+    n.add("Link", "CHP", bus0="gas", bus1=bus, bus2="heat", efficiency=0.4,
+          efficiency2=0.5, p_nom=5000.0, p_min_pu=0.3, committable=True,
+          marginal_cost=2.0, start_up_cost=5000.0, stand_by_cost=1000.0,
+          min_up_time=3, min_down_time=2)
+    n.add("Link", "resistive heater", bus0=bus, bus1="heat", efficiency=0.95,
+          p_nom=500.0, marginal_cost=0.5)
+
+
+def build_two_level_network(conversion_unit: bool = False
+                            ) -> tuple[pypsa.Network, dict]:
+    """
+    Build the flat network of the leaves, and the tree they are the leaves of;
+    with conversion_unit, the network has a committable CHP and nothing
+    extendable [see _add_conversion_unit()].
     """
     n, base_load = _deterministic_base()
+    if conversion_unit:
+        _add_conversion_unit(n)
     base_pmaxpu = _solar_profile(n.snapshots)
     load_name = n.loads.index[0]
 
@@ -155,7 +190,8 @@ def build_two_level_network() -> tuple[pypsa.Network, dict]:
     return n, {"groups": groups}
 
 
-def _transformation(tree: dict, name: str) -> Transformation:
+def _transformation(tree: dict, name: str,
+                    enable_conversion_units: bool = False) -> Transformation:
     workdir = OUT_TEST / "mssb" / name
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -163,6 +199,7 @@ def _transformation(tree: dict, name: str) -> Transformation:
         name=name,
         configfile=MSSB_CONFIGFILE,
         enable_thermal_units=False,
+        enable_conversion_units=enable_conversion_units,
         workdir=str(workdir),
         stochastic_parameters={
             "stochastic_type": "mssb",
@@ -377,6 +414,34 @@ def test_mssb_matches_the_flat_optimum():
 
     # the objective is read back from the log of the solver, which prints it
     # with six digits
+    assert obtained == pytest.approx(expected, rel=1e-5)
+
+
+@pytest.mark.skipif(
+    shutil.which("mssb_solver") is None,
+    reason="the SMS++ mssb_solver tool is not on PATH",
+)
+def test_mssb_with_a_conversion_unit_matches_the_leaves():
+    """
+    With a committable CHP, a ConversionUnitBlock, and nothing extendable,
+    the leaves are independent, and the optimum of the multi-stage block is
+    that of the leaves solved by PyPSA one by one, weighted by their
+    probabilities (PyPSA does not build the model of a stochastic network
+    with a committable component).
+    """
+    n, tree = build_two_level_network(conversion_unit=True)
+    # nothing is extendable: a slack covers what the fixed capacities do not
+    n = add_slack_unit(n)
+
+    reference = n.copy()
+    clean_dispatch_setpoints(reference)
+    expected = scenario_reference_objective(reference)
+
+    transformation = _transformation(tree, "mssb_conversion_unit",
+                                     enable_conversion_units=True)
+    transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
     assert obtained == pytest.approx(expected, rel=1e-5)
 
 

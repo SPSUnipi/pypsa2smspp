@@ -108,6 +108,11 @@ def run_ucblock(xlsx_path: Path) -> None:
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
 def test_ucblock(test_case_xlsx):
+    # an extendable committable link is expanded in the InvestmentBlock form
+    # only [see test_investmentblock]
+    if test_case_xlsx.stem.endswith("clext"):
+        pytest.skip("Skipping case for UCBlock")
+
     run_ucblock(test_case_xlsx)
 
 
