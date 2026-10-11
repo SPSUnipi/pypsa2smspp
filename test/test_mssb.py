@@ -22,7 +22,11 @@ import pytest
 
 import pysmspp
 
-from conftest import OUT_TEST, scenario_reference_objective
+from conftest import (
+    OUT_TEST,
+    scenario_reference_objective,
+    solver_solves_no_line_network,
+)
 
 from pypsa2smspp.network_correction import add_slack_unit, clean_dispatch_setpoints
 from pypsa2smspp.stochastic_utils import normalize_scenario_tree
@@ -113,14 +117,15 @@ def _solar_profile(snapshots) -> pd.Series:
     )
 
 
-def _add_conversion_unit(n: pypsa.Network, solar_extendable: bool = False
-                         ) -> None:
+def _add_conversion_unit(n: pypsa.Network, solar_extendable: bool = False,
+                         heater: bool = True) -> None:
     """
     Add a gas node with its supply, a heat node with its demand and a boiler,
     and a committable back-pressure CHP between them, a ConversionUnitBlock,
-    and a resistive heater from the electric to the heat node, which keeps a
-    line in the network; nothing is extendable, so that nothing is
-    here-and-now, but the solar generator if solar_extendable.
+    and, if heater, a resistive heater from the electric to the heat node,
+    which is a line of the network (without it the nodes are joined by the
+    CHP only); nothing is extendable, so that nothing is here-and-now, but
+    the solar generator if solar_extendable.
     """
     # the fixed capacities cover the demand, so that the slack is idle
     n.generators["p_nom_extendable"] = False
@@ -142,22 +147,24 @@ def _add_conversion_unit(n: pypsa.Network, solar_extendable: bool = False
           efficiency2=0.5, p_nom=5000.0, p_min_pu=0.3, committable=True,
           marginal_cost=2.0, start_up_cost=5000.0, stand_by_cost=1000.0,
           min_up_time=3, min_down_time=2)
-    n.add("Link", "resistive heater", bus0=bus, bus1="heat", efficiency=0.95,
-          p_nom=500.0, marginal_cost=0.5)
+    if heater:
+        n.add("Link", "resistive heater", bus0=bus, bus1="heat",
+              efficiency=0.95, p_nom=500.0, marginal_cost=0.5)
 
 
 def build_two_level_network(conversion_unit: bool = False,
-                            solar_extendable: bool = False
+                            solar_extendable: bool = False,
+                            heater: bool = True
                             ) -> tuple[pypsa.Network, dict]:
     """
     Build the flat network of the leaves, and the tree they are the leaves of;
     with conversion_unit, the network has a committable CHP and nothing
-    extendable but, if solar_extendable, the solar generator [see
-    _add_conversion_unit()].
+    extendable but, if solar_extendable, the solar generator, and a heater
+    if heater [see _add_conversion_unit()].
     """
     n, base_load = _deterministic_base()
     if conversion_unit:
-        _add_conversion_unit(n, solar_extendable)
+        _add_conversion_unit(n, solar_extendable, heater)
     base_pmaxpu = _solar_profile(n.snapshots)
     load_name = n.loads.index[0]
 
@@ -426,15 +433,21 @@ def test_mssb_matches_the_flat_optimum():
     shutil.which("mssb_solver") is None,
     reason="the SMS++ mssb_solver tool is not on PATH",
 )
-def test_mssb_with_a_conversion_unit_matches_the_leaves():
+@pytest.mark.parametrize("heater", [True, False],
+                         ids=["heater", "no_line"])
+def test_mssb_with_a_conversion_unit_matches_the_leaves(heater):
     """
     With a committable CHP, a ConversionUnitBlock, and nothing extendable,
     the leaves are independent, and the optimum of the multi-stage block is
     that of the leaves solved by PyPSA one by one, weighted by their
     probabilities (PyPSA does not build the model of a stochastic network
-    with a committable component).
+    with a committable component). Without the heater, the network has no
+    line, which the DCNetworkBlock solves since UCBlock 4892479b.
     """
-    n, tree = build_two_level_network(conversion_unit=True)
+    if not heater and not solver_solves_no_line_network():
+        pytest.skip("the SMS++ solver does not solve a network with no line")
+
+    n, tree = build_two_level_network(conversion_unit=True, heater=heater)
     # nothing is extendable: a slack covers what the fixed capacities do not
     n = add_slack_unit(n)
 
@@ -442,8 +455,9 @@ def test_mssb_with_a_conversion_unit_matches_the_leaves():
     clean_dispatch_setpoints(reference)
     expected = scenario_reference_objective(reference)
 
-    transformation = _transformation(tree, "mssb_conversion_unit",
-                                     enable_conversion_units=True)
+    transformation = _transformation(
+        tree, "mssb_conversion_unit" + ("" if heater else "_no_line"),
+        enable_conversion_units=True)
     transformation.run(n, verbose=False)
     obtained = float(transformation.result.objective_value)
 

@@ -103,6 +103,11 @@ UNRELEASED_NETWORKS = ("3n_3c_1gext_1h_1bext_2l",)
 # solver does not know the ConversionUnitBlock
 CONVERSION_UNIT_CASES = ("chp_",)
 
+# the test networks of several nodes with no line, joined by the units only:
+# the DCNetworkBlock solves them since UCBlock 4892479b; they are left out
+# where the solver does not
+NO_LINE_NETWORKS = ("chp_3n_3g_1cl_0l",)
+
 
 def solver_reads_pollutant_budget():
     """
@@ -159,11 +164,38 @@ def solver_reads_conversion_unit():
     return solver_loads(probe)
 
 
-def solver_loads(probe):
+def solver_solves_no_line_network():
+    """
+    True if the smspp_ucblock_solver on PATH solves a UCBlock of two nodes
+    with no line, each with its own slack unit, which it does since UCBlock
+    4892479b; the check solves it, the error being raised where the network
+    constraints are generated.
+    """
+    probe = OUT_TEST / "no_line_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 1), ("NumberUnits", 2),
+                          ("NumberElectricalGenerators", 2), ("NumberNodes", 2)):
+            uc.createDimension(dim, size)
+        uc.createDimension("NumberLines", 0)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        uc.createVariable("GeneratorNode", "u4", ("NumberElectricalGenerators",))[:] = [0, 1]
+        for i in range(2):
+            unit = uc.createGroup(f"UnitBlock_{i}")
+            unit.setncattr("type", "SlackUnitBlock")
+            unit.createVariable("MaxPower", "f8")[...] = 10.0
+            unit.createVariable("ActivePowerCost", "f8")[...] = 1.0
+
+    return solver_loads(probe, dry_run=False)
+
+
+def solver_loads(probe, dry_run=True):
     """
     True if the smspp_ucblock_solver on PATH (under the name it had before
     the prefix, ucblock_solver, if it is not found) loads the UCBlock in the
-    file probe without an error.
+    file probe without an error, and also solves it if not dry_run.
     """
     solver = shutil.which("smspp_ucblock_solver") or shutil.which("ucblock_solver")
     if solver is None:
@@ -171,7 +203,8 @@ def solver_loads(probe):
 
     config = Path(pysmspp.__file__).parent / "data" / "configs" / "UCBlock" / "uc_solverconfig.txt"
     try:
-        run = subprocess.run([solver, "-D", "-S", str(config), str(probe)],
+        run = subprocess.run([solver] + (["-D"] if dry_run else [])
+                             + ["-S", str(config), str(probe)],
                              capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -185,8 +218,10 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
 
     A network that needs what no released SMS++ has is left out where the
     solver at hand does not read a pollutant budget [see UNRELEASED_CASES and
-    UNRELEASED_NETWORKS], and so is a network with a committable link where
-    it does not know the ConversionUnitBlock [see CONVERSION_UNIT_CASES].
+    UNRELEASED_NETWORKS], so is a network with a committable link where it
+    does not know the ConversionUnitBlock [see CONVERSION_UNIT_CASES], and
+    so is a network of several nodes with no line where it does not solve it
+    [see NO_LINE_NETWORKS].
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     if not solver_reads_pollutant_budget():
@@ -195,6 +230,8 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     if not solver_reads_conversion_unit():
         files = [f for f in files
                  if not f.name.startswith(CONVERSION_UNIT_CASES)]
+    if not solver_solves_no_line_network():
+        files = [f for f in files if f.stem not in NO_LINE_NETWORKS]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 
