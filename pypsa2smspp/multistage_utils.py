@@ -9,8 +9,6 @@ import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from openpyxl.styles.builtins import total
-
 import pypsa2smspp.stochastic_utils as su
 from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
 
@@ -29,7 +27,15 @@ def normalize_sddp_parameters(
         {
             "stochastic_type": "sddp",
             "parameters": ["demand", "renewable_maxpower"],
-            "snapshots_per_stage": 31
+            "snapshots_per_stage": 31,
+            "top_path": {
+                "K": 1,
+                "second_group_index": 0,
+                "third_group_index": 3,
+            },
+            "benders_path": {
+                "n_bacini": 3,
+            },
         }
 
     L'utente fornisce solo il numero di snapshot per stadio
@@ -101,10 +107,75 @@ def normalize_sddp_parameters(
             f"{snapshots_per_stage}."
         )
 
+
+    # Validazione top_path (obbligatorio per SDDP)
+    top_path = sp.get("top_path", None)
+
+    if top_path is None:
+        raise ValueError(
+            "SDDP richiede 'top_path' in stochastic_parameters: "
+            "un dizionario con le chiavi 'K', 'second_group_index', "
+            "'third_group_index'."
+        )
+
+    if not isinstance(top_path, dict):
+        raise ValueError(
+            f"'top_path' deve essere un dizionario, ricevuto "
+            f"{type(top_path).__name__}."
+        )
+
+    for key in ("K", "second_group_index", "third_group_index"):
+        if key not in top_path:
+            raise ValueError(
+                f"'top_path' manca della chiave obbligatoria {key!r}."
+            )
+        value = top_path[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"'top_path[{key!r}]' deve essere un intero, ricevuto "
+                f"{type(value).__name__} ({value!r})."
+            )
+        if value < 0:
+            raise ValueError(
+                f"'top_path[{key!r}]' deve essere >= 0, ricevuto {value}."
+            )
+
+    # Validazione benders_path (obbligatorio per SDDP)
+    benders_path = sp.get("benders_path", None)
+
+    if benders_path is None:
+        raise ValueError(
+            "SDDP richiede 'benders_path' in stochastic_parameters: "
+            "un dizionario con la chiave 'n_bacini'."
+        )
+
+    if not isinstance(benders_path, dict):
+        raise ValueError(
+            f"'benders_path' deve essere un dizionario, ricevuto "
+            f"{type(benders_path).__name__}."
+        )
+
+    if "n_bacini" not in benders_path:
+        raise ValueError(
+            "'benders_path' manca della chiave obbligatoria 'n_bacini'."
+        )
+    n_bacini = benders_path["n_bacini"]
+    if isinstance(n_bacini, bool) or not isinstance(n_bacini, int):
+        raise ValueError(
+            f"'benders_path['n_bacini']' deve essere un intero, ricevuto "
+            f"{type(n_bacini).__name__} ({n_bacini!r})."
+        )
+    if n_bacini < 0:
+        raise ValueError(
+            f"'benders_path['n_bacini']' deve essere >= 0, ricevuto {n_bacini}."
+        )
+
     return {
         "stochastic_type": "sddp",
         "parameters": parameters,
         "snapshots_per_stage": snapshots_per_stage,
+        "top_path": dict(top_path),
+        "benders_path": dict(benders_path),
     }
 
 
@@ -916,14 +987,15 @@ def get_sddp_stage_time_horizons(
 # -------------------------------------------------------
 
 def build_sddp_top_abstract_path(
-    n_stages: int,
-    n_polyhedral_per_sub_block: int = 1,
+    n_polyhedral_per_sub_block: int,
+    second_group_index: int,
+    third_group_index: int
 ) -> Dict[str, Any]:
     """
     AbstractPath top-level dell'SDDPBlock.
 
     Secondo SDDPBlock::serialize():
-        PathDim = TimeHorizon × NumPolyhedralFunctionsPerSubBlock
+        PathDim = NumPolyhedralFunctionsPerSubBlock
     Ogni path va da un BendersBlock (reference) a una PolyhedralFunction
     (target). La struttura di ogni path è "OBBB" con
     PathGroupIndices = [MASK, 0, 0, 3], derivata dal notebook di riferimento.
@@ -939,20 +1011,13 @@ def build_sddp_top_abstract_path(
     -------
     dict
         PathDim, TotalLength, PathStart, PathNodeTypes, PathGroupIndices.
-
-    TODO
-    ----
-    Il numero di path (n_stages * n_polyhedral_per_sub_block) è dedotto dal
-    codice C++ SDDPBlock::serialize. La struttura del singolo path ("OBBB"
-    con [MASK, 0, 0, 3]) è dedotta dal notebook scritto a mano: va
-    verificata con un .nc4 prodotto da serialize() o con il professore.
     """
     _UINT32_MASK = np.uint32(4294967295)
 
-    if n_stages < 0 or n_polyhedral_per_sub_block < 0:
-        raise ValueError("n_stages e n_polyhedral_per_sub_block devono essere >= 0.")
+    if n_polyhedral_per_sub_block < 0:
+        raise ValueError("n_polyhedral_per_sub_block devono essere >= 0.")
 
-    num_paths = n_stages * n_polyhedral_per_sub_block
+    num_paths = n_polyhedral_per_sub_block
     if num_paths == 0:
         return {
             "PathDim": 0,
@@ -978,7 +1043,7 @@ def build_sddp_top_abstract_path(
 
     # PathGroupIndices: [MASK, 0, 0, 3] ripetuto num_paths volte
     path_group_indices = np.tile(
-        np.array([_UINT32_MASK, 0, 0, 3], dtype=np.uint32),
+        np.array([_UINT32_MASK, 0, second_group_index, third_group_index], dtype=np.uint32),
         num_paths,
     )
 
