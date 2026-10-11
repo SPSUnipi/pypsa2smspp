@@ -810,6 +810,9 @@ class Transformation:
             "value": generator_node,
         }
 
+        self._generator_owner = generator_owner
+        self._storage_owner = storage_owner
+
         self.investmentblock["Blocks"] = investment_meta["Blocks"]
         self.investmentblock["Assets"] = {
             "value": np.array(investment_meta["index_extendable"]),
