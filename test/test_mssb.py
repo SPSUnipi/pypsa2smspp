@@ -25,6 +25,7 @@ import pysmspp
 from conftest import (
     OUT_TEST,
     scenario_reference_objective,
+    solver_reads_conversion_unit,
     solver_solves_no_line_network,
 )
 
@@ -435,6 +436,10 @@ def test_mssb_matches_the_flat_optimum():
 )
 @pytest.mark.parametrize("heater", [True, False],
                          ids=["heater", "no_line"])
+@pytest.mark.skipif(
+    not solver_reads_conversion_unit(),
+    reason="the SMS++ solver does not know the ConversionUnitBlock",
+)
 def test_mssb_with_a_conversion_unit_matches_the_leaves(heater):
     """
     With a committable CHP, a ConversionUnitBlock, and nothing extendable,
@@ -543,6 +548,10 @@ def _leaves_objective(n: pypsa.Network, solar=None) -> float:
     return objective
 
 
+@pytest.mark.skipif(
+    not solver_reads_conversion_unit(),
+    reason="the SMS++ solver does not know the ConversionUnitBlock",
+)
 @pytest.mark.parametrize("stochastic_type", ["tssb", "mssb"])
 def test_investment_outside_with_a_conversion_unit(stochastic_type):
     """
