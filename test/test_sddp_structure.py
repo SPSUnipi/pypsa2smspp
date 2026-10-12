@@ -25,4 +25,4 @@ sp = {
 t = Transformation(stochastic_parameters=sp)
 t.create_model(n)
 
-t.sms_network.to_netcdf("test_sddp.nc4")
+t.sms_network.to_netcdf("test_sddp_2.nc4")

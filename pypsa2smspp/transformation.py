@@ -3385,9 +3385,10 @@ class Transformation:
 
         Struttura costruita (per ogni stadio):
             SDDPBlock
-            ├── AbstractPath                    (per ora vuoto)
+            ├── AbstractPath
+            ├── ScenarioGenerator
             ├── StochasticBlock_0
-            │     ├── AbstractPath              (per ora vuoto)
+            │     ├── AbstractPath
             │     ├── DataType, FunctionName, Caller, SetSize, SetElements (vuote)
             │     └── Block
             │           └── BendersBlock
@@ -3438,14 +3439,6 @@ class Transformation:
                 "NumSubBlocksPerStage",
                 int(dimensions["NumSubBlocksPerStage"]),
             ),
-            "NumberScenarios": Dimension(
-                "NumberScenarios",
-                int(dimensions["NumberScenarios"]),
-            ),
-            "ScenarioSize": Dimension(
-                "ScenarioSize",
-                int(dimensions["ScenarioSize"]),
-            ),
             "SubScenarioSize": Dimension(
                 "SubScenarioSize",
                 dimensions["SubScenarioSize"],
@@ -3467,15 +3460,6 @@ class Transformation:
         # -----------------------------------------------------------------
         # 2. Preparazione degli array che diventano Variabili dell'SDDPBlock
         # -----------------------------------------------------------------
-        # Matrice Scenarios: forma (NumberScenarios, ScenarioSize).
-        # Se per qualche motivo non ha 2 dimensioni, la ridefiniamo con la
-        # forma attesa usando i valori delle dimensioni.
-        scenarios_arr = np.asarray(scenarios_info["scenarios"], dtype=float)
-        if scenarios_arr.ndim != 2:
-            scenarios_arr = scenarios_arr.reshape(
-                int(dimensions["NumberScenarios"]),
-                int(dimensions["ScenarioSize"]),
-            )
 
         # Dimensione dei "random data groups": lista di interi per ogni stadio.
         size_random_data_groups_arr = np.asarray(
@@ -3509,13 +3493,6 @@ class Transformation:
                 "u4",
                 ("NumberRandomDataGroups",),
                 size_random_data_groups_arr,
-            ),
-            # Scenarios: la matrice completa (tutti gli stadi concatenati)
-            "Scenarios": Variable(
-                "Scenarios",
-                "double",
-                ("NumberScenarios", "ScenarioSize"),
-                scenarios_arr,
             ),
             # StateSize: scalare (dimensione dello stato per stadio)
             "StateSize": Variable(
@@ -3571,7 +3548,40 @@ class Transformation:
         self.add_sddp_top_abstract_path(sddp_block, top_ap_data)
 
         # -----------------------------------------------------------------
-        # 6. Per ogni stadio, crea StochasticBlock + BendersBlock + BendersBFunction
+        # 6. ScenarioGenerator
+        # Ha come tipo "DiscreteScenarioSet"
+        # -----------------------------------------------------------------
+
+        # Matrice Scenarios: forma (NumberScenarios, ScenarioSize).
+        # Se per qualche motivo non ha 2 dimensioni, la ridefiniamo con la
+        # forma attesa usando i valori delle dimensioni.
+        scenarios_arr = np.asarray(scenarios_info["scenarios"], dtype=float)
+        if scenarios_arr.ndim != 2:
+            scenarios_arr = scenarios_arr.reshape(
+                int(dimensions["NumberScenarios"]),
+                int(dimensions["ScenarioSize"]),
+            )
+
+        scenario_generator = Block(
+            block_type = "DiscreteScenarioSet",
+            NumberScenarios = Dimension(
+                "NumberScenarios", int(dimensions["NumberScenarios"]),
+            ),
+            ScenarioSize = Dimension(
+                "ScenarioSize", int(dimensions["ScenarioSize"]),
+            ),
+            # Scenarios: la matrice completa (tutti gli stadi concatenati)
+            Scenarios = Variable(
+                "Scenarios",
+                "double",
+                ("NumberScenarios", "ScenarioSize"),
+                scenarios_arr
+            )
+        )
+        sddp_block.add_block("ScenarioGenerator", block=scenario_generator)
+
+        # -----------------------------------------------------------------
+        # 7. Per ogni stadio, crea StochasticBlock + BendersBlock + BendersBFunction
         # -----------------------------------------------------------------
         for stage_idx in range(time_horizon):
             # -------------------------------------------------------------
@@ -3588,7 +3598,7 @@ class Transformation:
             )
 
             # -------------------------------------------------------------
-            # 6b. BendersBFunction
+            # 7b. BendersBFunction
             # -------------------------------------------------------------
             # Nel notebook ha dimensioni NumNonzero, NumVar, NumRow (per ora 0)
             # e contiene un AbstractPath interno + il blocco segnaposto.
@@ -3597,8 +3607,8 @@ class Transformation:
             benders_b_func.add_dimension("NumVar", 0)
             benders_b_func.add_dimension("NumRow", 0)
 
-            # AbstractPath interno della BendersBFunction (per ora vuoto)
-            # AbstractPath interno della BendersBFunction (per ora vuoto)
+            # AbstractPath interno della BendersBFunction
+            # AbstractPath interno della BendersBFunction 
             benders_inner_path = Block().from_kwargs(block_type="AbstractPath")
             benders_inner_path.add_dimension("PathDim", 0)
             benders_inner_path.add_dimension("TotalLength", 0)
@@ -3608,14 +3618,14 @@ class Transformation:
             benders_b_func.add_block("Block", block=inner_block)
 
             # -------------------------------------------------------------
-            # 6c. BendersBlock (contiene BendersBFunction)
+            # 7c. BendersBlock (contiene BendersBFunction)
             # -------------------------------------------------------------
             benders_block = Block().from_kwargs(block_type="BendersBlock")
             benders_block.add_dimension("NumVar", 0)
             benders_block.add_block("BendersBFunction", block=benders_b_func)
 
             # -------------------------------------------------------------
-            # 6d. StochasticBlock (AbstractPath + BendersBlock)
+            # 7d. StochasticBlock (AbstractPath + BendersBlock)
             # -------------------------------------------------------------
             # Per ora senza data mappings (NumberDataMappings = 0).
             # In Fase 4 (scenari) riempiremo DataType, FunctionName, Caller,
@@ -3647,7 +3657,7 @@ class Transformation:
                 np.array([], dtype=np.uint32),
             )
 
-            # AbstractPath dello StochasticBlock (per ora vuoto)
+            # AbstractPath dello StochasticBlock
             # TODO: non possiamo popolarlo senza prima entrare in fase 3
             sb_abstract_path = Block().from_kwargs(block_type="AbstractPath")
             sb_abstract_path.add_dimension("PathDim", 0)
