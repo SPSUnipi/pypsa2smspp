@@ -103,6 +103,12 @@ UNRELEASED_NETWORKS = ("3n_3c_1gext_1h_1bext_2l",)
 # solver does not know the ConversionUnitBlock
 CONVERSION_UNIT_CASES = ("chp_",)
 
+# the test networks with a committable link that has an efficiency changing
+# over time, a delay, modules or a design (chpx_, UCBlock 74c8c414); they
+# are left out where the solver does not know these data of the
+# ConversionUnitBlock
+CONVERSION_EXT_CASES = ("chpx_",)
+
 # the test networks of several nodes with no line, joined by the units only:
 # the DCNetworkBlock solves them since UCBlock 4892479b; they are left out
 # where the solver does not
@@ -164,6 +170,37 @@ def solver_reads_conversion_unit():
     return solver_loads(probe)
 
 
+def solver_reads_conversion_extensions():
+    """
+    True if the smspp_ucblock_solver on PATH loads a ConversionUnitBlock
+    whose OperatingMatrix is indexed over the instants, which it does since
+    UCBlock 74c8c414 together with the delays, the modules and the design;
+    the check loads, without solving it, a one-unit UCBlock with such a unit
+    of two generators.
+    """
+    probe = OUT_TEST / "conversion_extensions_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 2), ("NumberUnits", 1),
+                          ("NumberElectricalGenerators", 2), ("NumberNodes", 1)):
+            uc.createDimension(dim, size)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        unit = uc.createGroup("UnitBlock_0")
+        unit.setncattr("type", "ConversionUnitBlock")
+        unit.createDimension("NumberGenerators", 2)
+        unit.createDimension("NumberOperatingRows", 1)
+        unit.createVariable("MinPower", "f8", ("TimeHorizon", "NumberGenerators"))[:] = [[-10.0, 0.0]] * 2
+        unit.createVariable("MaxPower", "f8", ("TimeHorizon", "NumberGenerators"))[:] = [[0.0, 30.0]] * 2
+        unit.createVariable("OperatingMatrix", "f8", ("TimeHorizon", "NumberOperatingRows",
+                                                      "NumberGenerators"))[:] = [[[2.0, 1.0]], [[3.0, 1.0]]]
+        for side in ("OperatingLHS", "OperatingRHS"):
+            unit.createVariable(side, "f8", ("TimeHorizon", "NumberOperatingRows"))[:] = 0.0
+
+    return solver_loads(probe)
+
+
 def solver_solves_no_line_network():
     """
     True if the smspp_ucblock_solver on PATH solves a UCBlock of two nodes
@@ -221,7 +258,8 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     UNRELEASED_NETWORKS], so is a network with a committable link where it
     does not know the ConversionUnitBlock [see CONVERSION_UNIT_CASES], and
     so is a network of several nodes with no line where it does not solve it
-    [see NO_LINE_NETWORKS].
+    [see NO_LINE_NETWORKS], or a committable link with the data of
+    CONVERSION_EXT_CASES where it does not read them.
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     if not solver_reads_pollutant_budget():
@@ -232,6 +270,9 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
                  if not f.name.startswith(CONVERSION_UNIT_CASES)]
     if not solver_solves_no_line_network():
         files = [f for f in files if f.stem not in NO_LINE_NETWORKS]
+    if not solver_reads_conversion_extensions():
+        files = [f for f in files
+                 if not f.name.startswith(CONVERSION_EXT_CASES)]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 

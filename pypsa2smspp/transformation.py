@@ -234,9 +234,10 @@ class Transformation:
                 region. The other links are (hyper)arcs as before.
 
             Notes:
-              - An extendable or modular committable link, one with a
-                delay, or one whose efficiency changes over time is refused,
-                since a ConversionUnitBlock cannot express it.
+              - An efficiency that changes over time, a delay, the modules
+                of a modular link and the design of an extendable one are
+                translated (see conversion_unit_variables() for what is
+                refused).
 
         workdir : str | Path, default "output"
             Output directory for SMS++ artifacts. The directory is created if it does not exist.
@@ -513,6 +514,11 @@ class Transformation:
             merge_selector=getattr(self, "merge_selector", None),
         )
         links_absorbed = n.links.index.difference(links_merge_probe.index)
+        # a committable link that is a ConversionUnitBlock keeps its design,
+        # as it is that of the unit
+        if self.enable_conversion_units:
+            links_absorbed = links_absorbed.union(
+                conversion_links(links_merge_probe))
 
         n, fixed_investment_lines_links = preprocess_zero_capital_cost_extendable_lines_links(
             n,
@@ -545,6 +551,13 @@ class Transformation:
             else links_merged_df.index[:0]
         )
         links_merged_df = links_merged_df.drop(self._conversion_links)
+        # in the UCBlock form an extendable one has the design of its unit,
+        # not that of a line
+        if self.capacity_expansion_ucblock:
+            designs = int(n.links.loc[self._conversion_links,
+                                      "p_nom_extendable"].astype(bool).sum())
+            self.dimensions["InvestmentBlock"]["NumberDesignLines"] -= designs
+            self.dimensions["NetworkBlock"]["NumberDesignLines_links"] -= designs
         network_links = n.links.drop(self._conversion_links)
 
         links_before = links_merged_df.copy()
@@ -881,10 +894,17 @@ class Transformation:
                 "block": "ConversionUnitBlock",
                 "DesignVariable": n.links.loc[[name], "p_nom"].values,
                 "Extendable": extendable,
+                # the MW of a unit of its design, if it has one
+                "ModuleSize": float(n.links.at[name, "p_nom_mod"] or 1.0)
+                if "p_nom_mod" in n.links.columns else 1.0,
                 "variables": variables,
                 "dimensions": dimensions,
             }
-            if extendable:
+            # the design of the InvestmentBlock scales the unit [see
+            # conversion_unit_variables()], that of the UCBlock form is in it
+            self.unitblocks[block_name]["Scaled"] = (
+                extendable and not self.capacity_expansion_ucblock)
+            if self.unitblocks[block_name]["Scaled"]:
                 self.add_InvestmentBlock(n, n.links.loc[[name]], "Link")
                 investment_meta["index_extendable"].append(unitblock_index)
                 investment_meta["Blocks"].append(block_name)
@@ -1264,6 +1284,14 @@ class Transformation:
             design_vars = solution_0.variables["DesignVariables"].data
             block_names = self.investmentblock.get("Blocks", [])
             assign_design_variables_to_unitblocks(self.unitblocks, block_names, design_vars)
+
+        # the design of a ConversionUnitBlock of the UCBlock form, in modules
+        # or in MW
+        for unit_block in self.unitblocks.values():
+            if "ConversionDesign" in unit_block:
+                unit_block["DesignVariable"] = (
+                    float(np.asarray(unit_block["ConversionDesign"]))
+                    * unit_block["ModuleSize"])
     
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data

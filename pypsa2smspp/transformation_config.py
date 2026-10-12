@@ -205,10 +205,11 @@ class TransformationConfig:
         self.NuclearUnitBlock_inverse = self.ThermalUnitBlock_inverse
 
         # the first generator of a ConversionUnitBlock is the input of the
-        # link, whose power is - p0, per MW of the design if it is extendable
+        # link, whose power is - p0, per MW of the design if the
+        # InvestmentBlock scales the unit
         self.ConversionUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
-            "p": lambda activepower, designvariable, extendable: -np.atleast_2d(activepower)[0] * (designvariable if extendable else 1.0),
+            "p": lambda activepower, designvariable, scaled: -np.atleast_2d(activepower)[0] * (designvariable if scaled else 1.0),
             }
 
         self.HydroUnitBlock_inverse = {
