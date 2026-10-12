@@ -93,9 +93,13 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_store_parameters = {
             # "Kappa": 1.0,
-            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable, capital_cost, e_nom_max: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu.where(capital_cost != 0, (e_nom_max * e_max_pu / max_hours).where(~((e_max_pu == 0) & np.isinf(e_nom_max)), 0.0))),
-            "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
-            # "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            # the power of a Store has no limit of its own: it is bounded by its
+            # levels and by the Links around it, hence no row of the power
+            "MaxPower": lambda e_max_pu: np.inf + 0.0 * e_max_pu,
+            "MinPower": lambda e_max_pu: -np.inf + 0.0 * e_max_pu,
+            # no converter limit: the power of a Store is bounded by the Links
+            # around it, and a nonpositive ConverterMaxPower is no limit
+            "ConverterMaxPower": lambda e_max_pu: 0.0 * e_max_pu,
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
             "ExtractingBatteryRho": lambda efficiency_dispatch, snapshots_weighting: snapshots_weighting.iloc[0] / efficiency_dispatch.iloc[0],
@@ -167,6 +171,10 @@ class TransformationConfig:
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*3, 1),
             "ConstantTerm": lambda p_nom: np.full(len(p_nom)*3, 0),
+            # the turbine of a StorageUnit produces exactly efficiency_dispatch
+            # times its flow, the water released without producing being the
+            # spillage, a flow of its own
+            "ExactFlowToPower": lambda p_nom: np.tile([1, 0, 0], len(p_nom)),
             # the spillway carries no power, which is what tells the block
             # that the unit has one [see hydroblock_dimensions()]
             "LinearTerm": lambda efficiency_dispatch, efficiency_store, snapshots_weighting: np.array([efficiency_dispatch.values.max() / snapshots_weighting.values.max(), 1 / efficiency_store.values.max() / snapshots_weighting.values.max() if efficiency_store.values.max() != 0 else 0, 0.]),

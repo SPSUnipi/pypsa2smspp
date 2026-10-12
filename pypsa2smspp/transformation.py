@@ -2968,15 +2968,6 @@ class Transformation:
                     "range_index": 1,
                 }
             )
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_converter",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
 
         elif block_type in ("ThermalUnitBlock", "NuclearUnitBlock"):
             self.unitblock_design_data.append(
