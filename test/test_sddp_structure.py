@@ -18,11 +18,12 @@ sp = {
         "third_group_index": 3,
     },
     "benders_path": {
-        "n_bacini": 0,   # nessuna variabile di stato per il primo test
+        "n_bacini": 3,   # nessuna variabile di stato per il primo test
+        # (13/10/2026) cambiato a 3 per verificare che il Path sia costruito correttamente
     },
 }
 
 t = Transformation(stochastic_parameters=sp)
 t.create_model(n)
 
-t.sms_network.to_netcdf("test_sddp_2.nc4")
+t.sms_network.to_netcdf("test_sddp_3.nc4")

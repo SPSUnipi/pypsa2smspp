@@ -3608,11 +3608,14 @@ class Transformation:
             benders_b_func.add_dimension("NumRow", 0)
 
             # AbstractPath interno della BendersBFunction
-            # AbstractPath interno della BendersBFunction 
-            benders_inner_path = Block().from_kwargs(block_type="AbstractPath")
-            benders_inner_path.add_dimension("PathDim", 0)
-            benders_inner_path.add_dimension("TotalLength", 0)
-            benders_b_func.add_block("AbstractPath", block=benders_inner_path)
+            # Punta ai vincoli di stato (bilancio dei bacini)
+            # Il numero di bacini viene da stochastic_parameters["benders_path"], già
+            # validato da normalize_sddp_parameters
+            benders_path_params = self.stochastic_parameters["benders_path"]
+            benders_ap_data = mu.build_sddp_benders_abstract_path(
+                n_bacini = benders_path_params["n_bacini"]
+            )
+            self.add_benders_abstract_path(benders_b_func, benders_ap_data)
 
             # Aggiunge il blocco interno (segnaposto con filename)
             benders_b_func.add_block("Block", block=inner_block)
