@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime
 import time
 import pandas as pd
+import numpy as np
 import netCDF4
 import pypsa
 import pysmspp
@@ -109,6 +110,12 @@ CONVERSION_UNIT_CASES = ("chp_",)
 # ConversionUnitBlock
 CONVERSION_EXT_CASES = ("chpx_",)
 
+# the test networks with a committable link whose continuous design has ramps
+# or is on before the horizon, or whose modules built are on before it
+# (chpy_, UCBlock f092aa81); they are left out where the solver does not
+# take such a design
+CONVERSION_DESIGN_CASES = ("chpy_",)
+
 # the test networks of several nodes with no line, joined by the units only:
 # the DCNetworkBlock solves them since UCBlock 4892479b; they are left out
 # where the solver does not
@@ -201,6 +208,33 @@ def solver_reads_conversion_extensions():
     return solver_loads(probe)
 
 
+def solver_reads_conversion_design():
+    """
+    True if the smspp_ucblock_solver on PATH loads a ConversionUnitBlock with
+    a continuous design and ramps, which it does since UCBlock f092aa81
+    together with a design on before the horizon; the check loads, without
+    solving it, a one-unit UCBlock with such a unit of one generator.
+    """
+    probe = OUT_TEST / "conversion_design_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 2), ("NumberUnits", 1),
+                          ("NumberElectricalGenerators", 1), ("NumberNodes", 1)):
+            uc.createDimension(dim, size)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        unit = uc.createGroup("UnitBlock_0")
+        unit.setncattr("type", "ConversionUnitBlock")
+        unit.createVariable("MaxPower", "f8")[...] = 1.0
+        unit.createVariable("DeltaRampUp", "f8")[...] = 0.5
+        unit.createVariable("InvestmentCost", "f8")[...] = 1.0
+        unit.createVariable("MaxCapacityDesign", "f8")[...] = 10.0
+        unit.createVariable("InitUpDownTime", "i4")[...] = -1
+
+    return solver_loads(probe)
+
+
 def solver_solves_no_line_network():
     """
     True if the smspp_ucblock_solver on PATH solves a UCBlock of two nodes
@@ -259,7 +293,8 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     does not know the ConversionUnitBlock [see CONVERSION_UNIT_CASES], and
     so is a network of several nodes with no line where it does not solve it
     [see NO_LINE_NETWORKS], or a committable link with the data of
-    CONVERSION_EXT_CASES where it does not read them.
+    CONVERSION_EXT_CASES or CONVERSION_DESIGN_CASES where it does not read
+    them.
     """
     files = list(sorted(inputs_dir.glob("*.xlsx")))
     if not solver_reads_pollutant_budget():
@@ -273,6 +308,9 @@ def get_test_cases(inputs_dir = HERE / "configs" / "data" / "test"):
     if not solver_reads_conversion_extensions():
         files = [f for f in files
                  if not f.name.startswith(CONVERSION_EXT_CASES)]
+    if not solver_reads_conversion_design():
+        files = [f for f in files
+                 if not f.name.startswith(CONVERSION_DESIGN_CASES)]
     names = [f"{i}: {f.name}" for (i,f) in enumerate(files)]
     return {"xlsx_paths": files, "ids": names}
 
@@ -304,6 +342,55 @@ def scenario_reference_objective(n: pypsa.Network) -> float | None:
             deterministic.objective
             + getattr(deterministic, "objective_constant", 0.0))
     return objective
+
+
+def modular_conversion_reference(n: pypsa.Network,
+                                 solver_name: str = "highs") -> float | None:
+    """
+    The reference of the InvestmentBlock form for a network with an
+    extendable modular committable link, or None if it has none.
+
+    The InvestmentFunction solves the continuous relaxation of the UCBlock,
+    in which a unit of k modules committed one by one is the unit of one
+    module scaled by k, i.e., the link with p_nom = k p_nom_mod, no modules
+    and the costs of being on, of a start-up and of a shut-down k times
+    those of a module; PyPSA does not relax the commitment of a modular
+    link, hence the reference is the smallest of the optima of PyPSA with
+    the commitment relaxed over the number k of modules built, plus the
+    capital cost of the k modules, which PyPSA does not count for a fixed
+    capacity.
+    """
+    links = n.links
+    if "p_nom_mod" not in links.columns:
+        return None
+    modular = links.index[links.committable.astype(bool)
+                          & links.p_nom_extendable.astype(bool)
+                          & (links.p_nom_mod > 0)]
+    if modular.empty:
+        return None
+    if len(modular) > 1:
+        raise ValueError("modular_conversion_reference: one modular "
+                         "extendable committable link at most")
+
+    name = modular[0]
+    size = float(links.at[name, "p_nom_mod"])
+    low = int(np.ceil(float(links.at[name, "p_nom_min"]) / size - 1e-9))
+    high = int(np.floor(float(links.at[name, "p_nom_max"]) / size + 1e-9))
+
+    best = None
+    for k in range(low, high + 1):
+        m = n.copy()
+        m.links.loc[name, ["p_nom_mod", "p_nom_extendable", "p_nom"]] = \
+            [0.0, False, k * size]
+        for cost in ("start_up_cost", "shut_down_cost", "stand_by_cost"):
+            m.links.loc[name, cost] = k * float(links.at[name, cost])
+        m.optimize(solver_name=solver_name, linearized_unit_commitment=True)
+        if m.objective is None:
+            continue
+        value = float(m.objective + getattr(m, "objective_constant", 0.0)) \
+            + k * size * float(links.at[name, "capital_cost"])
+        best = value if best is None else min(best, value)
+    return best
 
 
 def get_network(fp: Path | str) -> str:

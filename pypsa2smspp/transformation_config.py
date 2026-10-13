@@ -208,7 +208,7 @@ class TransformationConfig:
         # link, whose power is - p0, per MW of the design if the
         # InvestmentBlock scales the unit
         self.ConversionUnitBlock_inverse = {
-            "p_nom": lambda designvariable: designvariable,
+            "p_nom": lambda designvariable, modulesize, scaled: designvariable * (modulesize if scaled else 1.0),
             "p": lambda activepower, designvariable, scaled: -np.atleast_2d(activepower)[0] * (designvariable if scaled else 1.0),
             }
 

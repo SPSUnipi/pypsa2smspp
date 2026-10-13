@@ -995,15 +995,28 @@ class Transformation:
         return df_alias
     
     def _intermittent_module_size(self, components_df, components_type):
-        """The size of the module of each modular IntermittentUnitBlock.
+        """The size of the module of each modular IntermittentUnitBlock or
+        ConversionUnitBlock.
 
         For each row of components_df, the p_nom_mod of an extendable
-        generator that becomes an IntermittentUnitBlock, 0 for any other
+        generator that becomes an IntermittentUnitBlock, or of an extendable
+        committable link that becomes a ConversionUnitBlock, 0 for any other
         asset, whose design stays a capacity.
         """
         size = np.zeros(len(components_df))
-        if (components_type != "Generator"
-                or "p_nom_mod" not in components_df.columns):
+        if "p_nom_mod" not in components_df.columns:
+            return size
+
+        # a committable link that is a ConversionUnitBlock of modules
+        if components_type == "Link":
+            for k, name in enumerate(components_df.index):
+                if (name in self._conversion_links
+                        and bool(components_df.at[name, "p_nom_extendable"])):
+                    size[k] = max(float(components_df.at[name, "p_nom_mod"]),
+                                  0.0)
+            return size
+
+        if components_type != "Generator":
             return size
 
         for k, (_, row) in enumerate(components_df.iterrows()):
@@ -1021,9 +1034,11 @@ class Transformation:
         return size
 
     def _has_investment_modules(self, n):
-        """True if n has a modular extendable IntermittentUnitBlock."""
+        """True if n has a modular extendable IntermittentUnitBlock or
+        ConversionUnitBlock."""
         return bool(np.any(
-            self._intermittent_module_size(n.generators, "Generator") > 0))
+            self._intermittent_module_size(n.generators, "Generator") > 0)
+            or np.any(self._intermittent_module_size(n.links, "Link") > 0))
 
     ### 5 ###
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):

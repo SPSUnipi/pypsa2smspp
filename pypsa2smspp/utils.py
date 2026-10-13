@@ -2457,13 +2457,18 @@ def conversion_unit_variables(n, name, scaled=False):
     status of PyPSA is 1. An extendable link of the UCBlock form has a
     design: the number of modules built if it is modular (MaxCapacityDesign
     = - p_nom_max / p_nom_mod), its capacity otherwise (MaxCapacityDesign =
-    p_nom_max, every datum per MW of p_nom), with InvestmentCost the capital
-    cost of a module, respectively of a MW. In the InvestmentBlock form
-    (`scaled`), an extendable link is instead the unit of one MW of p_nom,
-    which the design of the InvestmentBlock scales (see UnitBlock::scale()):
-    its powers and ramps are those of p_nom = 1, and the costs of being on,
-    of a start-up and of a shut-down are per MW of p_nom (divided by p_nom,
-    if it is not 0), as for a ThermalUnitBlock.
+    p_nom_max, every datum, ramps and start-up and shut-down limits
+    included, per MW of p_nom, the rows with the commitment in the big-M
+    form of PyPSA), with InvestmentCost the capital cost of a module,
+    respectively of a MW. It may be on before the horizon: then one module
+    is on, or the capacity covers p_init (which PyPSA does not require). In
+    the InvestmentBlock form (`scaled`), an extendable link is instead the
+    unit of one MW of p_nom, or of one module if it is modular, which the
+    design of the InvestmentBlock scales (see UnitBlock::scale()), the
+    number of modules being an integer design there: its powers and ramps
+    are those of p_nom = 1 (of a module), and the costs of being on, of a
+    start-up and of a shut-down are per MW of p_nom (divided by p_nom, if it
+    is not 0; per module), as for a ThermalUnitBlock.
 
     Parameters
     ----------
@@ -2490,9 +2495,9 @@ def conversion_unit_variables(n, name, scaled=False):
     ValueError
         If the link cannot be expressed by a ConversionUnitBlock: a delay
         that is not a whole number of snapshots, modules whose number is not
-        an integer or that ramp, an extendable modular link in the
-        InvestmentBlock form, or a design with ramps or on before the
-        horizon.
+        an integer or that ramp, a continuous design with no p_nom_max, or
+        an extendable link on before the horizon at p_init in the
+        InvestmentBlock form.
     """
     link = n.links.loc[name]
     sns = n.snapshots
@@ -2505,13 +2510,6 @@ def conversion_unit_variables(n, name, scaled=False):
     extendable = bool(link["p_nom_extendable"])
     module = static("p_nom_mod", 0.0)
     design = extendable and not scaled
-
-    if extendable and scaled and module > 0:
-        raise ValueError(
-            f"{name} is an extendable modular committable link, whose "
-            "modules the InvestmentBlock form does not build; use the UCBlock "
-            "form (capacity_expansion_ucblock=True)."
-        )
 
     # the delays of the outputs, in instants
     ports = conversion_unit_ports(n, name)
@@ -2565,8 +2563,14 @@ def conversion_unit_variables(n, name, scaled=False):
     def scalar(value, var_type):
         return {"value": value, "type": var_type, "size": ()}
 
-    # the unit of the data: a module, a MW of an extendable link, or the link
-    if module > 0:
+    # the unit of the data: a module, a MW of an extendable link, or the link;
+    # in the InvestmentBlock form the design of an extendable modular link is
+    # its number of modules, which scales the unit of one module
+    if module > 0 and extendable and scaled:
+        modules = 1
+        p_nom = module
+        per_mw = 1.0
+    elif module > 0:
         modules = float(link["p_nom_max"] if design else link["p_nom"]) / module
         if not np.isfinite(modules) or abs(modules - round(modules)) > 1e-9 \
                 or round(modules) < 1:
@@ -2659,12 +2663,6 @@ def conversion_unit_variables(n, name, scaled=False):
             variables["InitialCommitment"] = scalar(1, "uint")
 
     if design:
-        if init_up_down > 0:
-            raise ValueError(
-                f"{name} is an extendable committable link on before the "
-                "horizon (up_time_before > 0), while the design of a "
-                "ConversionUnitBlock is built off: set up_time_before=0."
-            )
         if module > 0:
             variables["InvestmentCost"] = scalar(
                 static("capital_cost", 0.0) * module, "float")
@@ -2684,9 +2682,20 @@ def conversion_unit_variables(n, name, scaled=False):
             variables["MaxCapacityDesign"] = scalar(
                 static("p_nom_max"), "float")
 
+    # the power before the horizon, of the modules on then; that of a unit
+    # with a continuous design is in MW, and its capacity covers it
     p_init = static("p_init")
+    if init_up_down > 0 and extendable and scaled and not np.isnan(p_init):
+        raise ValueError(
+            f"{name} is an extendable committable link on before the horizon "
+            "at p_init, which the unit of one MW of the InvestmentBlock form "
+            "cannot hold, its design being unknown; use the UCBlock form "
+            "(capacity_expansion_ucblock=True)."
+        )
     if init_up_down > 0:
         p0_before = p0_max[0] if np.isnan(p_init) else p_init
+        if design and module == 0:
+            p0_before = 0.0 if np.isnan(p_init) else p_init
         variables["InitialPower"] = {
             "value": efficiency[0] * p0_before, "type": "float",
             "size": ("NumberGenerators",)}
@@ -2710,12 +2719,6 @@ def conversion_unit_variables(n, name, scaled=False):
             "writes on p_nom times the number of modules on, and a "
             "ConversionUnitBlock on one module times it."
         )
-    if design:
-        raise ValueError(
-            f"{name} is an extendable committable link with ramps, which the "
-            "continuous design of a ConversionUnitBlock does not take."
-        )
-
     ru = np.nan_to_num(ru, nan=1.0) * p_nom
     rd = np.nan_to_num(rd, nan=1.0) * p_nom
     rsu = (1.0 if np.isnan(rsu) else rsu) * p_nom
