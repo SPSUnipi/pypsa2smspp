@@ -5,9 +5,11 @@ Utilities for multistage stochastic PyPSA networks.
 
 from __future__ import annotations
 
+import netCDF4
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, Tuple
+from pathlib import Path
 
 import pypsa2smspp.stochastic_utils as su
 from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
@@ -332,7 +334,7 @@ def build_sddp_unitblock_timeseries_parameter_stage(
     """
 
     # Otteniamo i nomi degli scenari
-    scenario_names = su.get_scenario_names(n);
+    scenario_names = su.get_scenario_names(n)
 
     if not scenario_names:
         raise ValueError(
@@ -982,6 +984,416 @@ def get_sddp_stage_time_horizons(
         for name, snaps in stage_snapshots.items()
     }
 
+# ---------------------------------------------
+# --------- Parser per Block_i.nc4 ------------
+# ---------------------------------------------
+
+def parse_block_structure(block_path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Legge un singolo Block_i.nc4 e restituisce un dizionario completo con
+    tutta la struttura
+
+    ----------
+    Parameters
+    block_path: Union[str, Path]
+        Percorso del file .nc4 che contiene un UCBlock esterno.
+
+    ---------
+    Returns
+    {
+        # Generale
+        "block_id": "0",
+        "time_horizon": 4,
+        "number_units": 40,
+        "number_electrical_generators": 41,
+        "number_nodes": 3,
+        "number_primary_zones": 3,
+        "number_lines": 3,
+
+        # Per il top-level AbstractPath
+        "hydro_system_index": 0,          # = second_group_index
+        "polyhedral_index": 1,            # = third_group_index
+
+        # Per il Benders AbstractPath
+        "hydro_unit_blocks": [            # lista di dict, un elemento per HydroUnitBlock
+            {"index": 0, "name": "SS1_Z1_0", "n_reservoirs": 1, "n_arcs": 2},
+        ],
+        "n_hydro_units": 1,
+        "n_reservoirs_total": 1,
+
+        # Per il data mapping
+        "unit_blocks_by_type": {
+            "ThermalUnitBlock":      [(1, "TU1_Z1_0"), ..., (25, "TU10_Z3_0")],
+            "IntermittentUnitBlock": [(26, "RES1_Z1_0"), ..., (34, "RES3_Z3_0")],
+            "BatteryUnitBlock":      [(35, "STS_Z1_0"), (36, "STS_Z2_0")],
+            "SlackUnitBlock":        [(37, "SlackUnit_Z1"), (38, "SlackUnit_Z2"), (39, "SlackUnit_Z3")],
+        },
+
+        # Per il parsing soluzione
+        "unit_block_names": {             # mappa nome unitblock -> indice
+            "SS1_Z1_0": 0,
+            "TU1_Z1_0": 1,
+            ...,
+        },
+    }
+    """
+
+    # ================================================================
+    # Helper interni
+    # ================================================================
+
+    def _dim_size(group, dim_name: str, default=None):
+        """Legge una dimensione, con default opzionale."""
+        if dim_name not in group.dimensions:
+            if default is not None:
+                return default
+            raise KeyError(
+                f"Dimensione {dim_name!r} non trovata in {group.path!r}."
+            )
+        return int(group.dimensions[dim_name].size)
+
+    def _display_name(group, fallback: str) -> str:
+        """Nome leggibile di un gruppo: :name se c'è, altrimenti fallback."""
+        return group.getncattr("name") if "name" in group.ncattrs() else fallback
+
+    # ================================================================
+    # Apertura file
+    # ================================================================
+    with netCDF4.Dataset(block_path, "r") as ds:
+
+        if not ds.groups:
+            raise ValueError(f"Il file {block_path!r} non contiene gruppi.")
+
+        # Il primo gruppo radice. Il nome cambia ("Block_0"), ma ce n'è
+        # sempre uno solo in questo formato.
+        root_name = next(iter(ds.groups))
+        root = ds.groups[root_name]
+
+        # Controllo tipo
+        root_type = root.getncattr("type")
+        if root_type != "UCBlock":
+            raise ValueError(
+                f"Il blocco radice {root_name!r} ha tipo {root_type!r}, "
+                f"atteso 'UCBlock'."
+            )
+
+        # Dimensioni generali del UCBlock
+        block_id = root.getncattr("id") if "id" in root.ncattrs() else None
+
+        time_horizon = _dim_size(root, "TimeHorizon")
+        number_units = _dim_size(root, "NumberUnits")
+        number_electrical_generators = _dim_size(root, "NumberElectricalGenerators")
+        number_nodes = _dim_size(root, "NumberNodes")
+        number_primary_zones = (
+            _dim_size(root, "NumberPrimaryZones")
+            if "NumberPrimaryZones" in root.dimensions
+            else None
+        )
+        number_lines = _dim_size(root, "NumberLines", default=0)
+
+        # ================================================================
+        # Contenitori
+        # ================================================================
+        unit_blocks_by_type: Dict[str, List[Tuple[int, str]]] = {}
+        unit_block_names: Dict[str, int] = {}
+
+        hydro_system_index: Optional[int] = None
+        hydro_unit_blocks: List[Dict[str, Any]] = []
+        polyhedral_index: Optional[int] = None
+        n_hydro_units = 0
+        n_reservoirs_total = 0
+
+        # ================================================================
+        # Iteriamo i figli del root (UnitBlock_i) usando la posizione come
+        # indice, non il suffisso numerico del nome. Per UnitBlock_i le
+        # due coincidono, ma questa scelta è più robusta.
+        # ================================================================
+        for pos, (child_name, child) in enumerate(root.groups.items()):
+
+            child_type = child.getncattr("type")
+
+            # Il nome leggibile può essere :name oppure il nome del gruppo.
+            child_display_name = _display_name(child, child_name)
+
+            # Registra sempre la mappa nome -> posizione per Fase 7.
+            unit_block_names[child_display_name] = pos
+
+            # --------------------------------------------------------
+            # Caso speciale: HydroSystemUnitBlock (non va in
+            # unit_blocks_by_type, è un contenitore).
+            # --------------------------------------------------------
+            if child_type == "HydroSystemUnitBlock":
+                hydro_system_index = pos
+
+                # Cross-check con la dimensione dichiarata.
+                declared_n_hydro = _dim_size(
+                    child, "NumberHydroUnits", default=None
+                )
+
+                # Itera i figli dell'HydroSystemUnitBlock. Anche qui
+                # uso la posizione, non il suffisso del nome: il
+                # PolyhedralFunctionBlock non ha suffisso.
+                for sub_pos, (sub_name, sub) in enumerate(child.groups.items()):
+                    sub_type = sub.getncattr("type")
+
+                    # --- HydroUnitBlock -------------------------------
+                    if sub_type == "HydroUnitBlock":
+                        hydro_name = _display_name(sub, sub_name)
+                        n_reservoirs = _dim_size(
+                            sub, "NumberReservoirs", default=1
+                        )
+                        n_arcs = _dim_size(sub, "NumberArcs", default=0)
+
+                        hydro_unit_blocks.append({
+                            # `index` = posizione nell'HydroSystemUnitBlock:
+                            # è quello che serve al Benders AbstractPath.
+                            "index": sub_pos,
+                            "name": hydro_name,
+                            "n_reservoirs": n_reservoirs,
+                            "n_arcs": n_arcs,
+                        })
+                        n_hydro_units += 1
+                        n_reservoirs_total += n_reservoirs
+
+                        # Mappa nome -> posizione (utile se in Fase 7
+                        # cercherai un HydroUnitBlock per nome).
+                        unit_block_names[hydro_name] = sub_pos
+
+                    # --- PolyhedralFunctionBlock -----------------------
+                    elif sub_type == "PolyhedralFunctionBlock":
+                        # L'indice è la POSIZIONE, non un suffisso (che
+                        # non esiste). Sarà il third_group_index.
+                        polyhedral_index = sub_pos
+
+                # Cross-check: se il file dichiara NumberHydroUnits,
+                # deve corrispondere al numero di HydroUnitBlock trovati.
+                if declared_n_hydro is not None and \
+                        declared_n_hydro != n_hydro_units:
+                    raise ValueError(
+                        f"In {child_name!r} la dimensione NumberHydroUnits "
+                        f"dichiara {declared_n_hydro} unità idro, ma ne ho "
+                        f"trovate {n_hydro_units}."
+                    )
+
+                # L'HydroSystemUnitBlock è stato processato: non va in
+                # unit_blocks_by_type. Passa al prossimo figlio del root.
+                continue
+
+            # --------------------------------------------------------
+            # Altri UnitBlock. Interessano solo indice (posizione) e
+            # nome per la Fase 3.
+            # --------------------------------------------------------
+            if child_type in (
+                "ThermalUnitBlock",
+                "IntermittentUnitBlock",
+                "BatteryUnitBlock",
+                "SlackUnitBlock",
+            ):
+                unit_blocks_by_type.setdefault(child_type, []).append(
+                    (pos, child_display_name)
+                )
+
+        # ================================================================
+        # Controlli finali
+        # ================================================================
+        if hydro_system_index is None:
+            raise ValueError("HydroSystemUnitBlock non trovato nel UCBlock.")
+        if polyhedral_index is None:
+            raise ValueError(
+                "PolyhedralFunctionBlock non trovato nell'HydroSystemUnitBlock."
+            )
+
+        # ================================================================
+        # Output
+        # ================================================================
+        return {
+            # Generale
+            "block_id": block_id,
+            "time_horizon": time_horizon,
+            "number_units": number_units,
+            "number_electrical_generators": number_electrical_generators,
+            "number_nodes": number_nodes,
+            "number_primary_zones": number_primary_zones,
+            "number_lines": number_lines,
+
+            # Per il top-level AbstractPath
+            "hydro_system_index": hydro_system_index,  # = second_group_index
+            "polyhedral_index": polyhedral_index,      # = third_group_index
+
+            # Per il Benders AbstractPath
+            "hydro_unit_blocks": hydro_unit_blocks,
+            "n_hydro_units": n_hydro_units,
+            "n_reservoirs_total": n_reservoirs_total,
+
+            # Per il data mapping
+            "unit_blocks_by_type": unit_blocks_by_type,
+
+            # Per il parsing soluzione
+            "unit_block_names": unit_block_names,
+        }
+
+
+def parse_all_stage_blocks(stage_block_paths: Sequence[Union[str, Path]]) -> List[Dict[str, Any]]:
+    """
+    Chiama parse_block_structure su ognuno dei Block_i e restituisce
+    la lista dei dizionari, nello stesso ordine dei path in input.
+    Affinché funzioni, l'utente deve indicare i file esterni tramite path espliciti.
+    """
+    # Verifichiamo che la lista non sia vuota
+    if not stage_block_paths:
+        raise ValueError(
+            "La lista contenente i path non può essere vuota"
+        )
+
+    # Accumulatore che conterrà un dizionario per ogni riga
+    acc: List[Dict[str, Any]] = []
+
+    for path in stage_block_paths:
+        # parse_block_structure apre il file, lo legge e lo chiude
+        try:
+            structure = parse_block_structure(path)
+        except (FileNotFoundError, OSError) as exc:
+            raise FileNotFoundError(
+                f"Impossibile leggere il Block allo stage corrispondente "
+                f"al path {path!r}: {exc}"
+            ) from exc
+        acc.append(structure)
+
+    return acc
+
+def validate_stage_structures(
+    stage_structures: Sequence[Dict[str, Any]],
+) -> None:
+    """
+    Verifica che le strutture dei vari stage siano coerenti tra loro.
+
+    Controlli effettuati:
+    - la lista non è vuota;
+    - i campi dimensionali (time_horizon, number_nodes, ...) sono
+      uguali su tutti gli stage;
+    - hydro_system_index e polyhedral_index sono uguali su tutti gli
+      stage (servono all'AbstractPath top-level);
+    - n_hydro_units e n_reservoirs_total sono uguali (servono a
+      StateSize);
+    - ogni tipo di UnitBlock compare su tutti gli stage con lo stesso
+      numero di elementi, e gli stessi nomi;
+    - gli HydroUnitBlock hanno la stessa forma (stessi reservoir,
+      stessi archi) su tutti gli stage;
+    - i block_id sono univoci (non è un errore se differiscono, anzi:
+      devono differire).
+
+    Solleva ValueError al primo problema trovato.
+    """
+    # ---------------------------------------------------------------
+    # Controllo di base: lista non vuota.
+    # ---------------------------------------------------------------
+    if not stage_structures:
+        raise ValueError("La lista in input non può essere vuota.")
+
+    # ---------------------------------------------------------------
+    # Helper interno: verifica che un campo scalare sia uguale su
+    # tutti gli stage. Restituisce il valore di riferimento.
+    # ---------------------------------------------------------------
+    def _check_uniform(key: str) -> Any:
+        reference = stage_structures[0][key]
+        for i, structure in enumerate(stage_structures[1:], start=1):
+            if structure[key] != reference:
+                raise ValueError(
+                    f"Il campo {key!r} è incoerente tra gli stage: "
+                    f"lo stage 0 ha {reference!r}, lo stage {i} ha "
+                    f"{structure[key]!r}."
+                )
+        return reference
+
+    # ---------------------------------------------------------------
+    # Campi scalari che devono essere uguali su tutti gli stage.
+    # ---------------------------------------------------------------
+    _check_uniform("time_horizon")
+    _check_uniform("number_nodes")
+    _check_uniform("number_primary_zones")
+    _check_uniform("number_lines")
+
+    _check_uniform("hydro_system_index")
+    _check_uniform("polyhedral_index")
+
+    _check_uniform("n_hydro_units")
+    _check_uniform("n_reservoirs_total")
+
+    # ---------------------------------------------------------------
+    # block_id: devono essere TUTTI diversi (ogni stage è un file
+    # separato, quindi ha il suo id).
+    # ---------------------------------------------------------------
+    ids = [s["block_id"] for s in stage_structures]
+    if len(set(ids)) != len(ids):
+        raise ValueError(
+            f"I block_id degli stage non sono univoci: {ids}. "
+            "Ogni Block_i.nc4 dovrebbe avere un id distinto."
+        )
+
+    # ---------------------------------------------------------------
+    # unit_blocks_by_type: stessi tipi, stesso numero di elementi
+    # per tipo, stessi nomi.
+    # ---------------------------------------------------------------
+    reference_types = stage_structures[0]["unit_blocks_by_type"]
+
+    for i, structure in enumerate(stage_structures[1:], start=1):
+        current_types = structure["unit_blocks_by_type"]
+
+        # Stesso insieme di tipi.
+        if set(current_types) != set(reference_types):
+            raise ValueError(
+                f"I tipi di UnitBlock differiscono tra lo stage 0 e lo "
+                f"stage {i}: stage 0 ha {sorted(reference_types)}, "
+                f"stage {i} ha {sorted(current_types)}."
+            )
+
+        # Stesso numero di elementi e stessi nomi per ogni tipo.
+        for tipo in reference_types:
+            ref_items = reference_types[tipo]
+            cur_items = current_types[tipo]
+
+            if len(ref_items) != len(cur_items):
+                raise ValueError(
+                    f"Il tipo {tipo!r} ha un numero diverso di elementi "
+                    f"tra lo stage 0 ({len(ref_items)}) e lo stage {i} "
+                    f"({len(cur_items)})."
+                )
+
+            # Confronto dei nomi come insiemi: l'ordine può variare
+            # tra stage, purché i nomi coincidano.
+            ref_names = {name for _, name in ref_items}
+            cur_names = {name for _, name in cur_items}
+            if ref_names != cur_names:
+                only_ref = ref_names - cur_names
+                only_cur = cur_names - ref_names
+                raise ValueError(
+                    f"I nomi degli UnitBlock di tipo {tipo!r} differiscono "
+                    f"tra lo stage 0 e lo stage {i}. "
+                    f"Solo nello stage 0: {sorted(only_ref)}. "
+                    f"Solo nello stage {i}: {sorted(only_cur)}."
+                )
+
+    # ---------------------------------------------------------------
+    # hydro_unit_blocks: stessa "forma" (nome, reservoir, archi),
+    # ignorando l'indice che potrebbe variare.
+    # ---------------------------------------------------------------
+    def _hydros_without_index(structure):
+        return [
+            {k: v for k, v in h.items() if k != "index"}
+            for h in structure["hydro_unit_blocks"]
+        ]
+
+    reference_hydros = _hydros_without_index(stage_structures[0])
+
+    for i, structure in enumerate(stage_structures[1:], start=1):
+        current_hydros = _hydros_without_index(structure)
+        if current_hydros != reference_hydros:
+            raise ValueError(
+                f"Gli HydroUnitBlock differiscono tra lo stage 0 e lo "
+                f"stage {i}: stage 0 ha {reference_hydros}, "
+                f"stage {i} ha {current_hydros}."
+            )
+
 # -------------------------------------------------------
 # ------------------ ABSTRACT PATHS ---------------------
 # -------------------------------------------------------
@@ -994,18 +1406,31 @@ def build_sddp_top_abstract_path(
     """
     AbstractPath top-level dell'SDDPBlock.
 
-    Secondo SDDPBlock::serialize():
-        PathDim = NumPolyhedralFunctionsPerSubBlock
     Ogni path va da un BendersBlock (reference) a una PolyhedralFunction
-    (target). La struttura di ogni path è "OBBB" con
-    PathGroupIndices = [MASK, 0, 0, 3], derivata dal notebook di riferimento.
+    (target). La struttura di ogni path è "OBBB" con:
+
+        PathNodeTypes   = "O", "B", "B", "B"
+        PathGroupIndices = [MASK, 0, second_group_index, third_group_index]
+
+    I due indici non sono costanti: vanno estratti dalla struttura
+    dell'UCBlock esterno (il file Block_i.nc4) tramite il parser.
+
+    - `second_group_index` è la posizione dell'HydroSystemUnitBlock tra
+      i figli del UCBlock (tipicamente 0).
+    - `third_group_index` è la posizione del PolyhedralFunctionBlock
+      dentro l'HydroSystemUnitBlock, che coincide con il numero di
+      HydroUnitBlock dell'HydroSystemUnitBlock (tipicamente 1 se c'è
+      un solo bacino).
 
     Parameters
     ----------
-    n_stages : int
-        Numero di stadi (TimeHorizon dell'SDDPBlock).
-    n_polyhedral_per_sub_block : int, default 1
-        Numero di PolyhedralFunction per sotto-blocco.
+    n_polyhedral_per_sub_block : int
+        Numero di PolyhedralFunction per sotto-blocco (K nel
+        gergo del notebook). Se 0, restituisce un AbstractPath vuoto.
+    second_group_index : int
+        Posizione dell'HydroSystemUnitBlock tra i figli del UCBlock.
+    third_group_index : int
+        Posizione del PolyhedralFunctionBlock dentro l'HydroSystemUnitBlock.
 
     Returns
     -------
@@ -1055,19 +1480,28 @@ def build_sddp_top_abstract_path(
         "PathGroupIndices": path_group_indices,
     }
 
-def build_sddp_benders_abstract_path(n_bacini: int) -> Dict[str, Any]:
+def build_sddp_benders_abstract_path(
+    hydro_unit_indices: Sequence[int],
+) -> Dict[str, Any]:
     """
     AbstractPath della BendersBFunction: un percorso per ogni bacino.
 
-    Ogni percorso ha 3 nodi 'B', 'B', 'C':
-    - Primo 'B': scende nel BendersBlock (group=0)
-    - Secondo 'B': scende nel k-esimo blocco figlio (group=k)
-    - 'C': punta al vincolo 0 di quel blocco (element=0)
+    Ogni percorso ha 3 nodi:
+
+        PathNodeTypes       = "B", "B", "C"
+        PathGroupIndices    = [0, k, 0]
+        PathElementIndices  = [MASK, MASK, 0]
+
+    dove `k` è la posizione dell'HydroUnitBlock dentro il suo
+    HydroSystemUnitBlock (NON l'indice globale dello UnitBlock nel UCBlock).
 
     Parameters
     ----------
-    n_bacini : int
-        Numero di bacini. Se 0, restituisce un AbstractPath vuoto.
+    hydro_unit_indices : Sequence[int]
+        Lista esplicita degli indici degli HydroUnitBlock. Ogni valore è
+        la posizione dell'HydroUnitBlock dentro il suo
+        HydroSystemUnitBlock. Una lista vuota produce un AbstractPath
+        vuoto (nessun bacino).
 
     Returns
     -------
@@ -1077,11 +1511,19 @@ def build_sddp_benders_abstract_path(n_bacini: int) -> Dict[str, Any]:
     """
     _UINT32_MASK = np.uint32(4294967295)
 
-    if n_bacini < 0:
-        raise ValueError(f"n_bacini deve essere >= 0, ricevuto {n_bacini}.")
+    # Normalizziamo in lista di int (accetta tuple, array numpy, ecc.).
+    indices = [int(i) for i in hydro_unit_indices]
 
-    # Caso degenere: nessun bacino -> nessun percorso.
-    if n_bacini == 0:
+    # Validazione: nessun indice negativo.
+    for idx in indices:
+        if idx < 0:
+            raise ValueError(
+                f"Tutti gli indici in 'hydro_unit_indices' devono essere >= 0, "
+                f"ricevuto {idx}."
+            )
+
+    # Caso degenere: nessun bacino.
+    if not indices:
         return {
             "PathDim": 0,
             "TotalLength": 0,
@@ -1091,30 +1533,32 @@ def build_sddp_benders_abstract_path(n_bacini: int) -> Dict[str, Any]:
             "PathElementIndices": np.array([], dtype=np.uint32),
         }
 
-    # PathStart: [0, 3, 6, 9, ...]
-    path_start = np.arange(0, 3 * n_bacini, 3, dtype=np.uint32)
+    n_paths = len(indices)
 
-    # PathNodeTypes: "BBC" ripetuto n_bacini volte
+    # PathStart: [0, 3, 6, 9, ...]
+    path_start = np.arange(0, 3 * n_paths, 3, dtype=np.uint32)
+
+    # PathNodeTypes: "BBC" ripetuto n_paths volte.
     path_node_types = np.tile(
         np.array(["B", "B", "C"], dtype="S1"),
-        n_bacini,
+        n_paths,
     )
 
-    # PathGroupIndices: [0, k, 0] per ogni k = 0..n-1
+    # PathGroupIndices: [0, idx, 0] per ogni idx nella lista.
     groups = []
-    for k in range(n_bacini):
-        groups.extend([0, k, 0])
+    for idx in indices:
+        groups.extend([0, idx, 0])
     path_group_indices = np.array(groups, dtype=np.uint32)
 
-    # PathElementIndices: [MASK, MASK, 0] ripetuto n volte
+    # PathElementIndices: [MASK, MASK, 0] ripetuto n_paths volte.
     path_element_indices = np.tile(
         np.array([_UINT32_MASK, _UINT32_MASK, 0], dtype=np.uint32),
-        n_bacini,
+        n_paths,
     )
 
     return {
-        "PathDim": int(n_bacini),
-        "TotalLength": int(3 * n_bacini),
+        "PathDim": int(n_paths),
+        "TotalLength": int(3 * n_paths),
         "PathStart": path_start,
         "PathNodeTypes": path_node_types,
         "PathGroupIndices": path_group_indices,
@@ -1155,7 +1599,6 @@ def build_sddp_stochastic_block_abstract_path(
     group_indices = []
 
     cursor = 0
-    hydro_counter = 0   # contatore progressivo per i bacini
 
     for mapping in data_mappings:
         fn = mapping["function_name"]
@@ -1165,9 +1608,10 @@ def build_sddp_stochastic_block_abstract_path(
             groups = [_UINT32_MASK, 0]
 
         elif fn == "HydroUnitBlock::set_inflow":
+            # L'indice dell'HydroUnitBlock viene letto dal mapping, come per gli intermittenti
+            k = int(mapping["abstract_paths"][0]["group_indices"][0])
             nodes = ["O", "B", "B", "B"]
-            groups = [_UINT32_MASK, 0, 0, hydro_counter]
-            hydro_counter += 1
+            groups = [_UINT32_MASK, 0, 0, k]
 
         elif fn == "IntermittentUnitBlock::set_maximum_power":
             # L'indice dell'UnitBlock è in mapping["abstract_paths"][0]["group_indices"][0]
@@ -1197,3 +1641,458 @@ def build_sddp_stochastic_block_abstract_path(
         "PathNodeTypes": np.array(node_types, dtype="S1"),
         "PathGroupIndices": np.array(group_indices, dtype=np.uint32),
     }
+
+
+# -------------------------------------------------------
+# ---------------- PARSER DATA MAPPING ------------------
+# -------------------------------------------------------
+
+def build_sddp_demand_mappings(
+        *,
+        number_nodes: int,
+        time_horizon: int,
+        dss_start: int,
+) -> List[Dict[str, Any]]:
+    """
+    Produce una lista di NumberNodes dizionari, uno per nodo del UCBlock.
+    Ogni dizionario è un data mapping completo.
+    Usiamo Subset per il SetForm dei demand e Range per il SetTo
+
+    Parameters
+    ----------
+    numer_nodes: int
+        NumberNodes del UCBlock -> Quanti nodi ci sono
+    time_horizon: int
+        TimeHorizon dello stage -> Quanti snapshot per stage
+    dss_start: int
+        Offset del parametro demand dentro il vettore di scenario dello stage
+
+    Returns
+    ---------
+    list of dict
+        Una lista di number_nodes data mapping, uno per nodo del UCBlock
+    """
+    # Verifichiamo che i parametri siano validi
+    if number_nodes < 1:
+        raise ValueError(
+            f"{number_nodes} deve essere maggiore o uguale ad 1"
+        )
+    if time_horizon < 1:
+        raise ValueError(
+            f"{time_horizon} deve essere maggiore o uguale ad 1"
+        )
+    if dss_start < 0:
+        raise ValueError(
+            f"{dss_start} deve essere maggiore o uguale a 0"
+        )
+
+    mappings: List[Dict[str, Any]] = []
+
+    for i in range(number_nodes):
+        # Indici per questo nodo
+        set_from_start = dss_start + i * time_horizon
+        set_from_end = set_from_start + time_horizon
+        set_to_start = i * time_horizon
+        set_to_end = set_to_start + time_horizon
+
+        # SetFrom è una Subset esplicita: tutti i valori da
+        # set_from_start a (set_from_end - 1)
+        set_from_elements = list(range(set_from_start, set_from_end))
+
+        # SetTo è una Range: due valori [set_to_start, set_to_end)
+        set_to_elements = [set_to_start, set_to_end]
+
+        # set_elements è SetFrom seguito da SetTo
+        set_elements = set_from_elements + set_to_elements
+
+        set_size = [time_horizon, 0]
+
+        mappings.append({
+            "target": "demand",
+            "function_name": "UCBlock::set_active_power_demand",
+            "caller": "B",
+            "data_type": "D",
+            "set_size": set_size,
+            "set_elements": set_elements,
+            "abstract_paths": [
+                {
+                    "node_types": "",
+                    "group_indices": [],
+                    "element_indices": [],
+                    "range_indices": [],
+                }
+            ],
+        })
+
+    return mappings
+
+def build_sddp_hydro_mappings(
+        *,
+        hydro_units: List[Dict[str, Any]],
+        time_horizon: int,
+        dss_start: int,
+) -> List[Dict[str, Any]]:
+    """
+    Costruisce i data mapping per gli inflow idroelettrici di uno stage SDDP.
+
+    Restituisce una lista di len(hydro_units) dizionari, uno per ogni
+    HydroUnitBlock. Ogni dizionario mappa una fetta del vettore di scenario
+    dello stage nel campo Inflows del proprio HydroUnitBlock, secondo la
+    struttura:
+
+        mapping j (hydro j):
+            SetFrom = Range [dss_start + j*N, dss_start + (j+1)*N)
+            SetTo   = Range [0, N)
+        dove N = n_reservoirs * time_horizon.
+
+    Parameters
+    ----------
+    hydro_units : list of dict
+        Lista di HydroUnitBlock, ciascuno con chiavi "index" (posizione
+        dentro il suo HydroSystemUnitBlock), "name", "n_reservoirs",
+        "n_arcs". Tipicamente e' structure["hydro_unit_blocks"].
+    time_horizon : int
+        Numero di snapshot per stage.
+    dss_start : int
+        Offset del parametro inflow dentro il vettore di scenario dello stage.
+
+    Returns
+    -------
+    list of dict
+        Una lista di len(hydro_units) data mapping.
+    """
+    # Verifichiamo che l'input sia valido
+    if time_horizon < 1:
+        raise ValueError(
+            f"{time_horizon} deve essere maggiore o uguale ad 1"
+        )
+    if dss_start < 0:
+        raise ValueError(
+            f"{dss_start} deve essere maggiore o uguale a 0"
+        )
+
+    # Consideriamo il caso vuoto
+    if not hydro_units:
+        return []
+
+    hydro_mappings: List[Dict[str, Any]] = []
+
+    for j, hydro in enumerate(hydro_units):
+        # Estraiamo i dati dell'hydro j
+        hydro_index = hydro["index"]
+        n_reservoirs = hydro["n_reservoirs"]
+
+        values_per_hydro = n_reservoirs * time_horizon
+
+        # Calcoliamo i quattro indici
+        set_from_start = dss_start + j * values_per_hydro
+        set_from_end = set_from_start + values_per_hydro
+        set_to_start = 0
+        set_to_end = values_per_hydro
+
+        hydro_mappings.append({
+            "target": "inflow",
+            "function_name": "HydroUnitBlock::set_inflow",
+            "caller": "B",
+            "data_type": "D",
+            "set_size": [0, 0],
+            "set_elements": [
+                set_from_start, set_from_end, # SetFrom: Range
+                set_to_start, set_to_end, # SetTo: Range
+            ],
+            "abstract_paths": [
+                {
+                    "node_types": "B",
+                    "group_indices": [str(hydro_index)],
+                    "element_indices": [None],
+                    "range_indices": [None],
+                }
+            ]
+        })
+
+    return hydro_mappings
+
+def build_sddp_intermittent_mappings(
+        *,
+        intermittent_units: List[Tuple[int, str]],
+        time_horizon: int,
+        dss_start: int,
+) -> List[Dict[str, Any]]:
+    """
+    Costruisce i data mapping per la potenza massima intermittente di uno
+    stage SDDP.
+
+    Restituisce una lista di len(intermittent_units) dizionari, uno per
+    ogni IntermittentUnitBlock. Ogni dizionario mappa una fetta del vettore
+    di scenario dello stage nel campo MaxPower del proprio
+    IntermittentUnitBlock, secondo la struttura:
+
+        mapping j (intermittente j):
+            SetFrom = Range [dss_start + j*T, dss_start + (j+1)*T)
+            SetTo   = Range [0, T)
+        dove T = time_horizon.
+
+    Parameters
+    ----------
+    intermittent_units : list of tuple
+        Lista di coppie (unitblock_index, name) come fornite dal parser
+        in unit_blocks_by_type["IntermittentUnitBlock"]. L'indice e'
+        la posizione dello UnitBlock_i nel UCBlock (26, 27, ...).
+    time_horizon : int
+        Numero di snapshot per stage.
+    dss_start : int
+        Offset del parametro nel vettore di scenario dello stage.
+
+    Returns
+    -------
+    list of dict
+        Una lista di len(intermittent_units) data mapping.
+    """
+    # Verifichiamo i dati in input
+    if time_horizon < 1:
+        raise ValueError(
+            f"{time_horizon} deve essere maggiore o uguale ad 1"
+        )
+    if dss_start < 0:
+        raise ValueError(
+            f"{dss_start} deve essere maggiore o uguale a 0"
+        )
+
+    if not intermittent_units:
+        return []
+
+    intermittent_mappings: List[Dict[str, Any]] = []
+
+    for j, (unitblock_index, _name) in enumerate(intermittent_units):
+        # Ogni intermittente ha un solo campo MaxPower di lunghezza TimeHorizon
+        values_per_unit = time_horizon
+
+        set_from_start = dss_start + j * values_per_unit
+        set_from_end = set_from_start + values_per_unit
+        set_to_start = 0
+        set_to_end = values_per_unit
+
+        intermittent_mappings.append({
+            "target": "renewable_maxpower",
+            "function_name": "IntermittentUnitBlock::set_maximum_power",
+            "caller": "B",
+            "data_type": "D",
+            "set_size": [0, 0],
+            "set_elements": [
+                set_from_start, set_from_end,
+                set_to_start, set_to_end,
+            ],
+            "abstract_paths": [
+                {
+                    "node_types": "B",
+                    "group_indices": [str(unitblock_index)],
+                    "element_indices": [None],
+                    "range_indices": [None],
+                }
+            ]
+        })
+
+    return intermittent_mappings
+
+def build_sddp_benders_mapping(
+        *,
+        dss_start: int,
+) -> Dict[str, Any]:
+    """
+    Costruisce il data mapping per la BendersBFunction di uno stage SDDP.
+
+    Restituisce un singolo dizionario, non una lista. Il mapping modifica
+    il termine costante della BendersBFunction leggendo un valore dal
+    vettore di scenario dello stage.
+
+    Struttura:
+        SetFrom = Subset {dss_start}
+        SetTo   = Subset {0}
+        Path    = "O"  (l'Objective del BendersBlock)
+
+    Parameters
+    ----------
+    dss_start : int
+        Offset del valore da leggere nel vettore di scenario dello stage.
+
+    Returns
+    -------
+    dict
+        Il data mapping per la BendersBFunction.
+    """
+    # Verifichiamo l'input dato
+    if dss_start < 0:
+        raise ValueError(
+            f"{dss_start} deve essere maggiore o uguale ad 0"
+        )
+
+    return {
+        "target": "benders",
+        "function_name": "BendersBFunction::modify_constants",
+        "caller": "B",
+        "data_type": "D",
+        "set_size": [1, 1],
+        "set_elements": [dss_start, 0],
+        "abstract_paths": [
+            {
+                "node_types": "O",
+                "group_indices": [0xFFFFFFFF], # Valore maschera che il builder usa per i nodi O
+                "element_indices": [None],
+                "range_indices": [None],
+            }
+        ],
+    }
+
+# -----------------------------------------------------------
+# --------- Produttore payload dello StochasticBlock --------
+# -----------------------------------------------------------
+
+def build_sddp_stochastic_block_data(data_mappings):
+    """
+    Assembla una lsita di data mapping nel payload dello StochasticBlock
+    di uno stage SDDP.
+    """
+
+    if not data_mappings:
+        raise ValueError(
+            f"{data_mappings} non può essere vuoto"
+        )
+
+    function_names = []
+    callers = []
+    data_types = []
+    set_size = []
+    set_elements = []
+
+    for mapping in data_mappings:
+        function_names.append(mapping["function_name"])
+        callers.append(mapping["caller"])
+        data_types.append(mapping["data_type"])
+        set_size.extend(mapping["set_size"])
+        set_elements.extend(mapping["set_elements"])
+
+    abstract_path = build_sddp_stochastic_block_abstract_path(data_mappings)
+
+    return {
+        "NumberDataMappings": len(data_mappings),
+        "FunctionName": np.array(function_names, dtype="object"),
+        "Caller": np.array(callers, dtype="object"),
+        "DataType": np.array(data_types, dtype="object"),
+        "SetSize": np.array(set_size, dtype=np.uint32),
+        "SetElements": np.array(set_elements, dtype=np.uint32),
+        "AbstractPath": abstract_path,
+    }
+
+def build_sddp_stochastic_block(
+        *,
+        stochastic_parameters: Sequence[str],
+        dss_offsets: Mapping[str, Mapping[str, int]],
+        structure: Mapping[str, Any],
+        time_horizon: int,
+) -> Dict[str, Any]:
+    """
+    Costruisce il payload dello StochasticBlock per uno stage SDDP.
+
+    Orchestra i quattro builder di mapping (demand, hydro, intermittent,
+    benders) e produce un unico payload pronto per essere serializzato
+    nel blocco StochasticBlock_i.
+
+    Parameters
+    ----------
+    stochastic_parameters : Sequence[str]
+        Lista dei parametri stocastici selezionati dall'utente (chiavi
+        del registry STOCHASTIC_PARAMETER_REGISTRY).
+    dss_offsets : Mapping[str, Mapping[str, int]]
+        Offset di ciascun parametro nel vettore di scenario dello stage.
+        Deve avere chiavi in {parametro: {"start": int, "end": int,
+        "size": int}}. Corrisponde a self.sddp_dss_offsets[stage_name].
+    structure : Mapping[str, Any]
+        Struttura dello stage, dal parser. Deve contenere almeno
+        "number_nodes", "hydro_unit_blocks", "unit_blocks_by_type".
+    time_horizon : int
+        Numero di snapshot per stage (TimeHorizon dello stage).
+
+    Returns
+    -------
+    Dict[str, Any]
+        Payload dello StochasticBlock.
+    """
+    # Verifichiamo la validità degli input
+    if not stochastic_parameters:
+        raise ValueError(
+            f"{stochastic_parameters} non può essere vuoto"
+        )
+    if not dss_offsets:
+        raise ValueError(
+            f"{dss_offsets} non può essere vuoto"
+        )
+    for key in ("number_nodes", "hydro_unit_blocks", "unit_blocks_by_type"):
+        if key not in structure:
+            raise KeyError(
+                f"structure non contiene la chiave obbligatoria {key!r}."
+            )
+    if time_horizon < 1:
+        raise ValueError(
+            f"{time_horizon} deve essere maggiore o uguale a 1"
+        )
+
+    # Inizializziamo la lista dei mapping
+    data_mappings: List[Dict[str, Any]] = []
+
+    for parameter in stochastic_parameters:
+        # Recuperiamo lo spec dal registry
+        spec = STOCHASTIC_PARAMETER_REGISTRY[parameter]
+        mapping_kind = spec["mapping_kind"]
+
+        # Recuperiamo l'offset DSS per questo parametro
+        offset = dss_offsets.get(parameter)
+        if offset is None:
+            raise KeyError(
+                f"Parametro {parameter!r} selezionato ma senza offset DSS "
+                f"per questo stage. Offset disponibili: {sorted(dss_offsets)}."
+            )
+
+        # Dispatch in base a mapping_kind
+        if mapping_kind == "ucblock_timeseries":
+            data_mappings.extend(build_sddp_demand_mappings(
+                number_nodes=structure["number_nodes"],
+                time_horizon=time_horizon,
+                dss_start=offset["start"],
+            ))
+            continue
+
+        if mapping_kind == "unitblock_timeseries":
+            unitblock_type = spec["unitblock_type"]
+
+            if unitblock_type == "HydroUnitBlock":
+                data_mappings.extend(build_sddp_hydro_mappings(
+                    hydro_units=structure["hydro_unit_blocks"],
+                    time_horizon=time_horizon,
+                    dss_start=offset["start"],
+                ))
+                continue
+
+            if unitblock_type == "IntermittentUnitBlock":
+                intermittent_units = structure["unit_blocks_by_type"].get(
+                    "IntermittentUnitBlock", []
+                )
+                data_mappings.extend(build_sddp_intermittent_mappings(
+                    intermittent_units=list(intermittent_units),
+                    time_horizon=time_horizon,
+                    dss_start=offset["start"],
+                ))
+                continue
+
+            raise NotImplementedError(
+                f"unitblock_type {unitblock_type!r} non supportato dal "
+                f"produttore SDDP per il parametro {parameter!r}."
+            )
+
+        raise ValueError(
+            f"mapping_kind {mapping_kind!r} non supportato per il "
+            f"parametro {parameter!r}."
+        )
+
+    data_mappings.append(build_sddp_benders_mapping(dss_start=int(dss_offsets["hydro_inflow"]["start"])))
+
+    return build_sddp_stochastic_block_data(data_mappings)

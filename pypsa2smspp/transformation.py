@@ -3292,6 +3292,26 @@ class Transformation:
             "dimensions": dimensions,
         }
 
+        # Parsing dei Block_i.nc4
+
+        workdir = Path(self.workdir)
+        stage_block_paths = [
+            workdir / f"Block_{t}.nc4" for t in range(len(stage_names))
+        ]
+
+        missing = [fp for fp in stage_block_paths if not fp.exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"Block_i.nc4 non trovati in {workdir}: "
+                f"{[fp.name for fp in missing]}. "
+                "L'utente deve fornirli prima di costruire l'SDDPBlock."
+            )
+
+        stage_structures = mu.parse_all_stage_blocks(stage_block_paths)
+        mu.validate_stage_structures(stage_structures)
+
+        self.sddp_data["stage_structures"] = stage_structures
+
         return self.sddp_data
 
     def add_sddp_top_abstract_path(self, sddp_block, ap_data, name_id="AbstractPath"):
@@ -3538,12 +3558,21 @@ class Transformation:
         # I parametri vengono da stochastic_parameters["top_path"], già validati
         # da normalize_sddp_parameters. Dipendono dalla struttura del file
         # Block_i.nc4, che è esterno e non generato da questa libreria.
-        top_path_params = self.stochastic_parameters["top_path"]
+        # La struttura dello stage 0 è rappresentativa di tutti gli stage,
+        # perché validate_stage_structures garantisce che hydro_system_index
+        # e polyhedral_index siano uniformi.
+        stage_structures = self.sddp_data["stage_structures"]
+        structure0 = stage_structures[0]
+
+        # K resta un parametro utente: il parser non lo può dedurre dai
+        # Block_i.nc4, perché nel file di riferimento è dichiarato a
+        # livello SDDPBlock, non di stage.
+        K = int(self.stochastic_parameters["top_path"]["K"])
 
         top_ap_data = mu.build_sddp_top_abstract_path(
-            n_polyhedral_per_sub_block=top_path_params["K"],
-            second_group_index=top_path_params["second_group_index"],
-            third_group_index=top_path_params["third_group_index"],
+            n_polyhedral_per_sub_block=K,
+            second_group_index=structure0["hydro_system_index"],
+            third_group_index=structure0["polyhedral_index"],
         )
         self.add_sddp_top_abstract_path(sddp_block, top_ap_data)
 
@@ -3608,12 +3637,11 @@ class Transformation:
             benders_b_func.add_dimension("NumRow", 0)
 
             # AbstractPath interno della BendersBFunction
-            # Punta ai vincoli di stato (bilancio dei bacini)
-            # Il numero di bacini viene da stochastic_parameters["benders_path"], già
-            # validato da normalize_sddp_parameters
-            benders_path_params = self.stochastic_parameters["benders_path"]
+            structure_t = stage_structures[stage_idx]
             benders_ap_data = mu.build_sddp_benders_abstract_path(
-                n_bacini = benders_path_params["n_bacini"]
+                hydro_unit_indices=[
+                    h["index"] for h in structure_t["hydro_unit_blocks"]
+                ],
             )
             self.add_benders_abstract_path(benders_b_func, benders_ap_data)
 
@@ -3630,41 +3658,73 @@ class Transformation:
             # -------------------------------------------------------------
             # 7d. StochasticBlock (AbstractPath + BendersBlock)
             # -------------------------------------------------------------
-            # Per ora senza data mappings (NumberDataMappings = 0).
-            # In Fase 4 (scenari) riempiremo DataType, FunctionName, Caller,
-            # SetSize, SetElements e l'AbstractPath con i mapping reali.
-            stochastic_block = Block().from_kwargs(block_type="StochasticBlock")
-            stochastic_block.add_dimension("SetSizeSize", 0)
-            stochastic_block.add_dimension("SetElementsSize", 0)
-            stochastic_block.add_dimension("NumberDataMappings", 0)
+            stage_name = stage_names[stage_idx]
 
-            # Variabili vuote (verranno riempite quando implementeremo gli scenari)
+            payload = mu.build_sddp_stochastic_block(
+                stochastic_parameters=self.problem_structure.get(
+                    "stochastic_parameters", []
+                ),
+                dss_offsets=self.sddp_dss_offsets[stage_name],
+                structure=structure_t,
+                time_horizon=int(
+                    self.sddp_data["stage_time_horizons"][stage_name]
+                ),
+            )
+
+            stochastic_block = Block().from_kwargs(block_type="StochasticBlock")
+            stochastic_block.add_dimension(
+                "NumberDataMappings",
+                int(payload["NumberDataMappings"]),
+            )
+            stochastic_block.add_dimension(
+                "SetSizeSize",
+                int(payload["SetSize"].shape[0]),
+            )
+            stochastic_block.add_dimension(
+                "SetElementsSize",
+                int(payload["SetElements"].shape[0]),
+            )
+
             stochastic_block.add_variable(
                 "DataType", "S1", ("NumberDataMappings",),
-                np.array([], dtype="S1"),
+                np.asarray(payload["DataType"], dtype="S1"),
             )
             stochastic_block.add_variable(
                 "FunctionName", "str", ("NumberDataMappings",),
-                np.array([], dtype="U50"),
+                np.asarray(payload["FunctionName"], dtype="U200"),
             )
             stochastic_block.add_variable(
                 "Caller", "S1", ("NumberDataMappings",),
-                np.array([], dtype="S1"),
+                np.asarray(payload["Caller"], dtype="S1"),
             )
             stochastic_block.add_variable(
                 "SetSize", "u4", ("SetSizeSize",),
-                np.array([], dtype=np.uint32),
+                np.asarray(payload["SetSize"], dtype=np.uint32),
             )
             stochastic_block.add_variable(
                 "SetElements", "u4", ("SetElementsSize",),
-                np.array([], dtype=np.uint32),
+                np.asarray(payload["SetElements"], dtype=np.uint32),
             )
 
             # AbstractPath dello StochasticBlock
-            # TODO: non possiamo popolarlo senza prima entrare in fase 3
+            sb_ap = payload["AbstractPath"]
             sb_abstract_path = Block().from_kwargs(block_type="AbstractPath")
-            sb_abstract_path.add_dimension("PathDim", 0)
-            sb_abstract_path.add_dimension("TotalLength", 0)
+            sb_abstract_path.add_dimension("PathDim", int(sb_ap["PathDim"]))
+            sb_abstract_path.add_dimension(
+                "TotalLength", int(sb_ap["TotalLength"])
+            )
+            sb_abstract_path.add_variable(
+                "PathStart", "u4", ("PathDim",),
+                np.asarray(sb_ap["PathStart"], dtype=np.uint32),
+            )
+            sb_abstract_path.add_variable(
+                "PathNodeTypes", "c", ("TotalLength",),
+                np.asarray(sb_ap["PathNodeTypes"], dtype="S1"),
+            )
+            sb_abstract_path.add_variable(
+                "PathGroupIndices", "u4", ("TotalLength",),
+                np.asarray(sb_ap["PathGroupIndices"], dtype=np.uint32),
+            )
             stochastic_block.add_block("AbstractPath", block=sb_abstract_path)
 
             # Aggiunge il BendersBlock allo StochasticBlock
