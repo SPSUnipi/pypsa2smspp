@@ -1016,7 +1016,7 @@ def parse_block_structure(block_path: Union[str, Path]) -> Dict[str, Any]:
 
         # Per il Benders AbstractPath
         "hydro_unit_blocks": [            # lista di dict, un elemento per HydroUnitBlock
-            {"index": 0, "name": "SS1_Z1_0", "n_reservoirs": 1, "n_arcs": 2},
+            {"index": 0, "name": "SS1_Z1_0", "n_reservoirs": 1, "n_arcs": 2, "initial_volumetric": [1000.0], "min_volumetric": [...], "max_volumetric": [...],},
         ],
         "n_hydro_units": 1,
         "n_reservoirs_total": 1,
@@ -1055,6 +1055,26 @@ def parse_block_structure(block_path: Union[str, Path]) -> Dict[str, Any]:
     def _display_name(group, fallback: str) -> str:
         """Nome leggibile di un gruppo: :name se c'è, altrimenti fallback."""
         return group.getncattr("name") if "name" in group.ncattrs() else fallback
+
+    def _read_variable(group, var_name: str, default=None):
+        """
+        Legge una variabile numerica da un gruppo netCDF4 e la restituisce
+        come lista 1D di float.
+        """
+        if var_name not in group.variables:
+            return default
+
+        # group.variables[var_name][:] restituisce un ndarray (o un
+        # masked array) con la stessa forma della variabile nel file.
+        # Es. InitialVolumetric ha shape (NumberReservoirs,) quindi
+        # otteniamo un array 1D. Per variabili scalari (shape ())
+        # otteniamo un array 0-D, che .ravel() porta a shape (1,)
+        arr = np.asarray(group.variables[var_name][:], dtype=float)
+
+        # .ravel() appiattisce qualsiasi forma a 1D; .tolist() converte
+        # in lista Python di float. Così il chiamante riceve sempre una
+        # lista, indipendentemente dalla forma originale.
+        return arr.ravel().tolist()
 
     # ================================================================
     # Apertura file
@@ -1144,6 +1164,21 @@ def parse_block_structure(block_path: Union[str, Path]) -> Dict[str, Any]:
                         )
                         n_arcs = _dim_size(sub, "NumberArcs", default=0)
 
+                        # Leggiamo i volumi caratteristici del bacino
+
+                        initial_volumetric = _read_variable(
+                            sub, "InitialVolumetric" # Volume iniziale, usato per costruire InitialState e AdmissibleState
+                        )
+
+                        # MinVolumetric e MaxVolumetric definiscono il range ammissibile per validare poi AdmissibleState
+
+                        min_volumetric = _read_variable(
+                            sub, "MinVolumetric"
+                        )
+                        max_volumetric = _read_variable(
+                            sub, "MaxVolumetric"
+                        )
+
                         hydro_unit_blocks.append({
                             # `index` = posizione nell'HydroSystemUnitBlock:
                             # è quello che serve al Benders AbstractPath.
@@ -1151,6 +1186,9 @@ def parse_block_structure(block_path: Union[str, Path]) -> Dict[str, Any]:
                             "name": hydro_name,
                             "n_reservoirs": n_reservoirs,
                             "n_arcs": n_arcs,
+                            "initial_volumetric": initial_volumetric,
+                            "min_volumetric": min_volumetric,
+                            "max_volumetric": max_volumetric,
                         })
                         n_hydro_units += 1
                         n_reservoirs_total += n_reservoirs
@@ -1379,7 +1417,7 @@ def validate_stage_structures(
     # ---------------------------------------------------------------
     def _hydros_without_index(structure):
         return [
-            {k: v for k, v in h.items() if k != "index"}
+            {k: v for k, v in h.items() if k not in ("index", "initial_volumetric")}
             for h in structure["hydro_unit_blocks"]
         ]
 
@@ -1393,6 +1431,190 @@ def validate_stage_structures(
                 f"stage {i}: stage 0 ha {reference_hydros}, "
                 f"stage {i} ha {current_hydros}."
             )
+
+# -------------------------------------------------------
+# -------------------- STATE INFO -----------------------
+# -------------------------------------------------------
+
+def build_sddp_state_info(
+        structure: Mapping[str, Any],
+        time_horizon: int,
+) -> Dict[str, Any]:
+    """
+    Costruisce le informazioni di stato per l'SDDPBlock.
+
+    Lo stato dello stage è il vettore dei volumi iniziali dei bacini.
+    Nel caso multi-bacino, StateSize è la somma di n_reservoirs su tutti
+    gli HydroUnitBlock e i valori sono concatenati nello stesso ordine.
+
+    Parameters
+    ----------
+    structure : Mapping[str, Any]
+        Struttura dello stage dal parser. Deve contenere
+        "hydro_unit_blocks", ciascuno con "n_reservoirs" e
+        "initial_volumetric".
+    time_horizon : int
+        Numero di stadi dell'SDDPBlock. Serve per costruire
+        AdmissibleState come ripetizione di InitialState.
+
+    Returns
+    -------
+    dict
+        - "state_size": int, dimensione dello stato
+        - "initial_state": np.ndarray 1D, valori iniziali
+        - "admissible_state": np.ndarray 1D, valori ammissibili
+          (replicati TimeHorizon volte)
+    """
+    # Verifichiamo gli input
+    if time_horizon < 1:
+        raise ValueError(
+            f"{time_horizon} deve essere maggiore o uguale a 1"
+        )
+
+    if "hydro_unit_blocks" not in structure:
+        raise KeyError(
+            f"{structure} non contiene 'hydro_unit_blocks'"
+        )
+
+    hydro_units = structure["hydro_unit_blocks"]
+
+    # StateSize = somma di n_reservoirs su tutti gli HydroUnitBlock
+    state_size = sum(int(h["n_reservoirs"]) for h in hydro_units)
+
+    # InitialState = concatenazione di InitialVolumetric
+    initial_state: List[float] = []
+    for h in hydro_units:
+        vals = h.get("initial_volumetric")
+        if vals is None:
+            raise ValueError(
+                f"HydroUnitBlock {h.get('name')!r} non ha "
+                "InitialVolumetric: il parser non lo ha letto dal "
+                "Block_i.nc4, oppure la variabile manca nel file."
+            )
+        if len(vals) != int(h["n_reservoirs"]):
+            raise ValueError(
+                f"HydroUnitBlock {h.get('name')!r}: InitialVolumetric "
+                f"ha {len(vals)} valori, attesi {h['n_reservoirs']}."
+            )
+        initial_state.extend(float(v) for v in vals)
+
+
+    # AdmissibleState = InitialState x TimeHorizon
+    admissible_state = initial_state * time_horizon
+
+    return {
+        "state_size": int(state_size),
+        "initial_state": np.asarray(initial_state, dtype=float),
+        "admissible_state": np.asarray(admissible_state, dtype=float),
+    }
+
+# -------------------------------------------------------
+# ------------------- BENDERS DATA ----------------------
+# -------------------------------------------------------
+
+def build_sddp_benders_function_data(
+        structure: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """
+    Costruisce le informazioni per il blocco BendersBFunction.
+
+    BendersBFunction implementa la mappattura affine:
+    M(x) = A · x + b
+    dove:
+    - x è lo stato in ingresso (vettore di StateSize componenti, i volumi iniziali dei bacini)
+    - A è una matrice NumRow × NumVar
+    - b è un vettore di NumRow componenti
+
+    Parameters
+    ----------
+    structure: Mapping[str, Any]
+        Dizionario restituito da parse_block_structure per lo stage corrente
+
+    Returns
+    -------
+    dict:
+        dizionario composto da nove chiavi:
+            {
+                "NumVar": int, -> Numero di colonne di A (= dimensione dello stato),
+                "NumRow": int, -> Numero di righe di A (= numero di vincoli modificati),
+                "NumNonzero": int, -> Numero di elementi non-zero di A
+                "Column": np.ndarray, -> Indici di colonna dei non-zero
+                "A": np.ndarray, -> Valori dei non-zero
+                "NumNonzeroAtRow": np.ndarray, -> Quanti non-zero ci sono in ciascuna riga
+                "b": np.ndarray, -> Termini costanti
+                "ConstraintSide": np.ndarray, -> Lato modificato per ogni riga
+            }
+    """
+    # Verifichiamo i valori dell'input
+    if "hydro_unit_blocks" not in structure:
+        raise KeyError(
+            f"{structure} non contiene 'hydro_unit_blocks'"
+        )
+
+    hydro_units = structure["hydro_unit_blocks"]
+
+    if not hydro_units:
+        raise ValueError(
+            "hydro_unit_blocks è vuoto: nessuno stato da modellare"
+        )
+
+    n_reservoirs_total = sum(int(h["n_reservoirs"]) for h in hydro_units)
+
+    # Costruiamo Column: gli indici di colonna 0..N-1. range(N) li genera
+    # già in ordine, quindi basta convertire in array uint32.
+    column = np.array(
+        list(range(n_reservoirs_total)),
+        dtype=np.uint32,
+    )
+
+    # Costruiamo la matrice A
+    a_values = np.array(
+        [1.0] * n_reservoirs_total,
+        dtype=float,
+    )
+
+    # NumNonzeroAtRow: un solo non-zero per riga.
+    num_nonzero_at_row = np.array(
+        [1] * n_reservoirs_total,
+        dtype=np.uint32,
+    )
+
+    # Costruiamo b
+    # b = 0 staticamente: l'inflow all'istante 0 viene scritto
+    # in b dal DataMapping BendersBFunction::modify_constants a
+    # runtime, non da noi. Quindi qui mettiamo zero come
+    # placeholder, e il solver lo sovrascriverà applicando il
+    # DataMapping.
+    b_values = np.array(
+        [0.0] * n_reservoirs_total,
+        dtype=float,
+    )
+
+    # Costruiamo ConstraintSide
+    # 'R' = Right-hand side: il volume iniziale del bacino entra
+    # nel lato destro del proprio vincolo di bilancio idrico
+    # (v_0 + flussi = V_init + inflow_0).
+    constraint_sides = np.array(
+        ["R"] * n_reservoirs_total,
+        dtype="S1",
+    )
+
+    # Calcoliamo le tre dimensioni
+    num_var = int(n_reservoirs_total)
+    num_row = int(n_reservoirs_total)
+    num_non_zero = int(n_reservoirs_total)
+
+    return {
+        "NumVar": num_var,
+        "NumRow": num_row,
+        "NumNonzero": num_non_zero,
+        "Column": column,
+        "A": a_values,
+        "NumNonzeroAtRow": num_nonzero_at_row,
+        "b": b_values,
+        "ConstraintSide": constraint_sides,
+    }
+
 
 # -------------------------------------------------------
 # ------------------ ABSTRACT PATHS ---------------------
