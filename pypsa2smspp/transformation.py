@@ -35,6 +35,8 @@ from pypsa2smspp.utils import (
     networkblock_dimensions,
     investmentblock_dimensions,
     hydroblock_dimensions,
+    add_unit_block,
+    hydro_system_unit_solutions,
     get_attr_name,
     process_dcnetworkblock,
     get_block_name,
@@ -132,6 +134,7 @@ class Transformation:
         enable_thermal_units: bool = False,
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
         nuclear_units: Optional[Mapping[str, Union[bool, Mapping[str, Any], str, Path]]] = None,
+        hydro_system: bool = False,
 
         # --- I/O ---
         workdir: Union[str, Path] = "output",
@@ -216,6 +219,28 @@ class Transformation:
             Notes:
               - Ignored when `enable_thermal_units=False`.
 
+        hydro_system : bool, default False
+            If True, the hydro StorageUnits (carrier hydro or PHS), instead
+            of being HydroUnitBlocks of the UCBlock, are the HydroUnitBlock_j
+            of a single HydroSystemUnitBlock, which also holds the future
+            cost of the water left in all the reservoirs at the end of the
+            horizon (a PolyhedralFunctionBlock with one active Variable per
+            reservoir and no cut). This is the form of the UCBlock of each
+            stage of an SDDPBlock, whose cuts are rows of that function.
+
+            Notes:
+              - The function written has no row and the data of
+                `TransformationConfig.HydroSystemUnitBlock_parameters`, by
+                default the bound 0: it adds nothing to the cost.
+              - A MILPSolver needs the "linearized" PolyhedralFunctionBlock,
+                which the InnerBCfg.txt of smspp_ucblock_solver asks for: to
+                solve the UCBlock directly, the `configfile` has to be in a
+                directory holding it, as the installed ucblock_solver/config.
+              - The hydro StorageUnits have to come after the other
+                StorageUnits, so that the generators of the
+                HydroSystemUnitBlock keep their place, and they cannot be
+                extendable, nor have stochastic inflows.
+
         workdir : str | Path, default "output"
             Output directory for SMS++ artifacts. The directory is created if it does not exist.
 
@@ -283,6 +308,15 @@ class Transformation:
                     )
                 merged.update(rules)
             self.nuclear_units[str(carrier).strip().lower()] = merged
+
+        self.hydro_system = bool(hydro_system)
+        if self.hydro_system and "hydro_inflow" in (
+                (stochastic_parameters or {}).get("parameters") or ()):
+            raise NotImplementedError(
+                "hydro_system does not support stochastic inflows: their "
+                "DataMappings address the HydroUnitBlocks as UnitBlocks of "
+                "the UCBlock."
+            )
 
         self.workdir = Path(workdir)
         self.name = str(name)
@@ -1239,6 +1273,9 @@ class Transformation:
         solution_data : dict or None, optional
             Optional dictionary used for inspection/debugging.
         """
+        if self.hydro_system:
+            solution_block = hydro_system_unit_solutions(
+                solution_block, self.unitblocks, num_units)
         for i in range(num_units):
             block_key = f"UnitBlock_{i}"
     
@@ -2354,9 +2391,9 @@ class Transformation:
                 )
 
             # Attach to UCBlock
-            master.blocks[name_id].add_block(
-                unit_block["enumerate"],
-                block=unit_block_obj,
+            add_unit_block(
+                master.blocks[name_id], unit_block, unit_block_obj,
+                self.hydro_system, self.config.HydroSystemUnitBlock_parameters,
             )
     
         # -----------------

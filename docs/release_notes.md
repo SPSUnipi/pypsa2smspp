@@ -9,6 +9,7 @@
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 * Translate the global constraints on the dispatch into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 * Translate the thermal generators of chosen carriers into NuclearUnitBlocks (`nuclear_units`, off by default), with rules read from `data/nuclear_rules.yaml` or from a file of the user [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
+* Write the hydro units inside a HydroSystemUnitBlock, with the empty future cost of their water, as the UCBlock of a stage of an SDDPBlock wants them (`hydro_system`, off by default)
 
 ### Minor Changes and Bug Fixes
 

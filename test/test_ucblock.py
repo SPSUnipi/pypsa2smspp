@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+import re
+import shutil
 from pathlib import Path
+import numpy as np
+import pysmspp
 import pytest
 
 from conftest import (
@@ -28,15 +32,18 @@ NON_BINDING_NUCLEAR_RULES.update(modulation_ramp_fraction=1.0,
                                  modulation_time=2.0)
 
 
-def run_ucblock(xlsx_path: Path) -> None:
+def run_ucblock(xlsx_path: Path, hydro_system: bool = False,
+                configfile="auto"):
     """
     UCBlock regression test:
     - build network from Excel
     - solve reference with PyPSA
     - run full SMS++ pipeline in one call (no YAML)
     - compare objectives
+
+    Returns the Transformation and the network it wrote the solution in.
     """
-    case_name = xlsx_path.stem
+    case_name = xlsx_path.stem + ("_hsub" if hydro_system else "")
 
     # Artifacts (optional)
     network_nc = OUT_TEST / f"network_{case_name}.nc"
@@ -81,13 +88,14 @@ def run_ucblock(xlsx_path: Path) -> None:
         # so that the optimum is the one of PyPSA
         nuclear_units=({"nuclear": NON_BINDING_NUCLEAR_RULES}
                        if "nuclear" in set(network.generators.carrier) else None),
+        hydro_system=hydro_system,
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
         fp_temp="smspp_{name}_temp.nc",
         fp_log="smspp_{name}_log.txt",
         fp_solution="smspp_{name}_solution.nc",
-        configfile="auto",
+        configfile=configfile,
         pysmspp_options={},  # keep pySMSpp defaults
     )
 
@@ -103,10 +111,86 @@ def run_ucblock(xlsx_path: Path) -> None:
     except Exception:
         pass
 
+    return transformation, n
+
 
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
 def test_ucblock(test_case_xlsx):
     run_ucblock(test_case_xlsx)
+
+
+def ucblock_solver_config():
+    """
+    The BlockSolverConfig of the installed smspp_ucblock_solver, None if there
+    is none. Its directory holds the InnerBCfg.txt that the tool reads by
+    default, which asks for the "linearized" PolyhedralFunctionBlock that a
+    MILPSolver needs.
+    """
+    solver = shutil.which("smspp_ucblock_solver")
+    if solver is None:
+        return None
+    config = (Path(solver).resolve().parent.parent / "share" / "SMS++_tools"
+              / "ucblock_solver" / "config")
+    inner = config / "InnerBCfg.txt"
+    if not (inner.exists() and (config / "BSCfg.txt").exists()
+            and "PolyhedralFunctionBlock" in inner.read_text()):
+        return None
+    return pysmspp.SMSConfig(fp=config / "BSCfg.txt")
+
+
+# the networks with a hydro StorageUnit
+hydro_cases = [(path, name)
+               for path, name in zip(test_cases["xlsx_paths"], test_cases["ids"])
+               if re.search(r"_\d+h(_|$)", path.stem)]
+
+
+@pytest.mark.parametrize("test_case_xlsx",
+                         [path for path, _ in hydro_cases],
+                         ids=[name for _, name in hydro_cases])
+def test_ucblock_hydro_system(test_case_xlsx):
+    """
+    The hydro units in a HydroSystemUnitBlock, whose future cost of the water
+    has no cut: the optimum is the one of PyPSA and of the HydroUnitBlocks in
+    the UCBlock, and the solution of the hydro units is read back.
+    """
+    config = ucblock_solver_config()
+    if config is None:
+        pytest.skip("no installed smspp_ucblock_solver linearizing a "
+                    "PolyhedralFunctionBlock")
+
+    # the profiles that the xlsx does not give are drawn at random: the two
+    # networks are drawn alike
+    np.random.seed(0)
+    plain, n_plain = run_ucblock(test_case_xlsx)
+    np.random.seed(0)
+    system, n = run_ucblock(test_case_xlsx, hydro_system=True,
+                            configfile=config)
+
+    assert (float(system.result.objective_value)
+            == pytest.approx(float(plain.result.objective_value),
+                             rel=REL_TOL, abs=ABS_TOL))
+
+    hydro = n.storage_units.index[
+        n.storage_units.carrier.isin(["hydro", "PHS"])]
+    ucblock = system.sms_network.blocks["Block_0"]
+    units = [ucblock.blocks[key] for key in ucblock.blocks
+             if key.startswith("UnitBlock_")]
+    assert ucblock.dimensions["NumberUnits"].value == len(units)
+    hsub = units[-1]
+    assert hsub.block_type == "HydroSystemUnitBlock"
+    assert hsub.dimensions["NumberHydroUnits"].value == len(hydro)
+    assert [hsub.blocks[f"HydroUnitBlock_{j}"].attributes["name"].value
+            for j in range(len(hydro))] == list(hydro)
+    polyhedral = hsub.blocks["PolyhedralFunctionBlock"]
+    assert polyhedral.dimensions["PolyFunction_NumVar"].value == len(hydro)
+
+    # the hydro units have their solution, the one of the HydroUnitBlocks in
+    # the UCBlock
+    for attr in ("p_dispatch", "p_store", "state_of_charge"):
+        assert not n.storage_units_t[attr][hydro].isna().any().any()
+        np.testing.assert_allclose(n.storage_units_t[attr][hydro],
+                                   n_plain.storage_units_t[attr][hydro],
+                                   rtol=REL_TOL, atol=ABS_TOL)
 
 
 if __name__ == "__main__":

@@ -17,11 +17,13 @@ They are typically imported and used within the Transformation class.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import re
 from pypsa2smspp import logger
+from pysmspp import Block
 from typing import Optional, Sequence, Union
 
 
@@ -630,6 +632,143 @@ def hydroblock_dimensions():
     dimensions["NumberArcs"] = 3 * dimensions["NumberReservoirs"]
     dimensions["TotalNumberPieces"] = 3
     return dimensions
+
+
+def add_unit_block(ucblock, unit_block, block, hydro_system=False,
+                   future_cost=None):
+    """
+    Attach the Block of a unit to the UCBlock, as its UnitBlock_i.
+
+    With hydro_system the HydroUnitBlocks are instead the HydroUnitBlock_j of
+    a single HydroSystemUnitBlock, which is the UnitBlock_i of the first of
+    them. Since the generators of the HydroSystemUnitBlock are those of its
+    HydroUnitBlocks, in their order, the hydro units have to be the last ones
+    for the generators to keep their place [GeneratorNode]. Its
+    PolyhedralFunctionBlock, the future cost of the water, has one active
+    Variable per reservoir, no row, and the scalars in future_cost.
+
+    Parameters
+    ----------
+    ucblock : pysmspp.Block
+        The UCBlock, whose NumberUnits is set to the UnitBlocks it holds.
+    unit_block : dict
+        The unit, an entry of Transformation.unitblocks.
+    block : pysmspp.Block
+        The Block of the unit.
+    hydro_system : bool, default False
+        Whether the HydroUnitBlocks go in a HydroSystemUnitBlock.
+    future_cost : dict, optional
+        The scalar variables of the PolyhedralFunctionBlock, by name.
+    """
+    if not hydro_system:
+        ucblock.add_block(unit_block["enumerate"], block=block)
+        return
+
+    units = [key for key in ucblock.blocks if key.startswith("UnitBlock_")]
+    system = ucblock.blocks[units[-1]] if units else None
+    if system is not None and system.block_type != "HydroSystemUnitBlock":
+        system = None
+
+    if unit_block["block"] != "HydroUnitBlock":
+        if system is not None:
+            raise ValueError(
+                f"{unit_block['name']} comes after the hydro units, which "
+                "hydro_system wants to be the last units: put the hydro "
+                "StorageUnits after the other ones."
+            )
+        ucblock.add_block(unit_block["enumerate"], block=block)
+        return
+
+    if np.any(unit_block.get("Extendable", False)):
+        raise ValueError(
+            f"{unit_block['name']} is an extendable hydro unit, which "
+            "hydro_system does not support."
+        )
+
+    if system is None:
+        system = Block().from_kwargs(block_type="HydroSystemUnitBlock")
+        system.add_dimension("NumberHydroUnits", 0)
+        polyhedral = Block().from_kwargs(block_type="PolyhedralFunctionBlock")
+        polyhedral.add_dimension("PolyFunction_NumVar", 0)
+        for name, value in (future_cost or {}).items():
+            polyhedral.add_variable(name, "float", (), value)
+        system.add_block("PolyhedralFunctionBlock", block=polyhedral)
+        ucblock.add_block(unit_block["enumerate"], block=system)
+        units.append(unit_block["enumerate"])
+
+    # the HydroUnitBlocks are listed before the PolyhedralFunctionBlock
+    polyhedral = system.blocks.pop("PolyhedralFunctionBlock")
+    j = system.dimensions["NumberHydroUnits"].value
+    system.add_block(f"HydroUnitBlock_{j}", block=block)
+    system.blocks["PolyhedralFunctionBlock"] = polyhedral
+
+    system.add_dimension("NumberHydroUnits", j + 1, force=True)
+    polyhedral.add_dimension(
+        "PolyFunction_NumVar",
+        polyhedral.dimensions["PolyFunction_NumVar"].value
+        + unit_block["dimensions"]["NumberReservoirs"],
+        force=True,
+    )
+    ucblock.add_dimension("NumberUnits", len(units), force=True)
+
+
+def hydro_system_unit_solutions(solution_block, unitblocks, num_units):
+    """
+    The Solutions of the units of a UCBlock whose HydroUnitBlocks are in a
+    HydroSystemUnitBlock [see add_unit_block()], as UnitBlock_i in the order
+    of the units of Transformation.unitblocks: the Solution of the j-th
+    HydroUnitBlock is its HydroSystemUnitSolution_j, with the rows of the
+    ActivePower of the HydroSystemUnitBlock that are of its generators.
+
+    Parameters
+    ----------
+    solution_block : pysmspp.Block
+        The Solution of the UCBlock.
+    unitblocks : dict
+        Transformation.unitblocks.
+    num_units : int
+        The number of units in unitblocks.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        An object whose blocks are the Solutions of the units, by UnitBlock_i;
+        a missing one is left out.
+    """
+    kinds = {unit["enumerate"]: unit["block"] for unit in unitblocks.values()
+             if "enumerate" in unit}
+    blocks = {}
+    system = None
+    hydro_index = 0
+    generator_index = 0
+    unit_index = 0
+    for i in range(num_units):
+        key = f"UnitBlock_{i}"
+        if kinds.get(key) == "HydroUnitBlock":
+            if system is None:
+                system = solution_block.blocks.get(f"UnitBlock_{unit_index}")
+                unit_index += 1
+            solution = (None if system is None else system.blocks.get(
+                f"HydroSystemUnitSolution_{hydro_index}"))
+            hydro_index += 1
+            if solution is not None:
+                variables = dict(solution.variables)
+                flow = variables.get("VolumetricFlow")
+                power = system.variables.get("ActivePower")
+                if flow is not None and power is not None:
+                    number_generators = np.shape(flow.data)[0]
+                    variables.setdefault("ActivePower", SimpleNamespace(
+                        data=np.asarray(power.data)[
+                            generator_index:generator_index + number_generators]))
+                    generator_index += number_generators
+                solution = SimpleNamespace(variables=variables,
+                                           blocks=solution.blocks)
+        else:
+            solution = solution_block.blocks.get(f"UnitBlock_{unit_index}")
+            unit_index += 1
+        if solution is not None:
+            blocks[key] = solution
+    return SimpleNamespace(blocks=blocks)
 
 # -------------------------------- Correction --------------------------------------
 

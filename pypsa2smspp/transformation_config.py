@@ -13,6 +13,7 @@ class TransformationConfig:
         Lines_parameters (dict): Parameters for lines in the network.
         Links_parameters (dict): Parameters for links in the network.
         HydroUnitBlock_parameters (dict): Parameters for hydro units.
+        HydroSystemUnitBlock_parameters (dict): Future cost of the water of the hydro units.
         max_hours_stores_parameters (double): Maximum hours of storage capacity.
     """
     def __init__(self, *args, **kwargs):
@@ -166,6 +167,14 @@ class TransformationConfig:
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
         
+        # the future cost of the water of the HydroSystemUnitBlock [see
+        # hydro_system in Transformation], a PolyhedralFunction with no row:
+        # the scalars written in its group, by default the bound 0, so that
+        # it adds nothing to the cost (with no bound it would be -inf)
+        self.HydroSystemUnitBlock_parameters = {
+            "PolyFunction_lb": 0.0,
+        }
+
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
