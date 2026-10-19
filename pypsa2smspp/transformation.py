@@ -37,6 +37,7 @@ from pypsa2smspp.utils import (
     hydroblock_dimensions,
     add_unit_block,
     hydro_system_unit_solutions,
+    hydro_system_mapping_paths,
     get_attr_name,
     process_dcnetworkblock,
     get_block_name,
@@ -239,7 +240,10 @@ class Transformation:
               - The hydro StorageUnits have to come after the other
                 StorageUnits, so that the generators of the
                 HydroSystemUnitBlock keep their place, and they cannot be
-                extendable, nor have stochastic inflows.
+                extendable.
+              - The DataMappings of a stochastic parameter of a hydro unit
+                (e.g., `hydro_inflow`) reach its HydroUnitBlock inside the
+                HydroSystemUnitBlock.
 
         workdir : str | Path, default "output"
             Output directory for SMS++ artifacts. The directory is created if it does not exist.
@@ -310,13 +314,6 @@ class Transformation:
             self.nuclear_units[str(carrier).strip().lower()] = merged
 
         self.hydro_system = bool(hydro_system)
-        if self.hydro_system and "hydro_inflow" in (
-                (stochastic_parameters or {}).get("parameters") or ()):
-            raise NotImplementedError(
-                "hydro_system does not support stochastic inflows: their "
-                "DataMappings address the HydroUnitBlocks as UnitBlocks of "
-                "the UCBlock."
-            )
 
         self.workdir = Path(workdir)
         self.name = str(name)
@@ -3086,6 +3083,9 @@ class Transformation:
                 "No stochastic data mappings were built for the TSSB StochasticBlock."
             )
 
+        if self.hydro_system:
+            data_mappings = hydro_system_mapping_paths(data_mappings,
+                                                       self.unitblocks)
         stochastic_block = build_tssb_stochastic_block_data(data_mappings)
 
         self.dimensions["tssb"]["sb"] = {

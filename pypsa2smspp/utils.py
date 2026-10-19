@@ -770,6 +770,60 @@ def hydro_system_unit_solutions(solution_block, unitblocks, num_units):
             blocks[key] = solution
     return SimpleNamespace(blocks=blocks)
 
+
+def hydro_system_mapping_paths(data_mappings, unitblocks):
+    """
+    The data mappings of a StochasticBlock whose UCBlock has its
+    HydroUnitBlocks in a HydroSystemUnitBlock [see add_unit_block()]: a path
+    B(i) to the i-th unit, when this is the j-th HydroUnitBlock, becomes
+    B(h) B(j) to the HydroUnitBlock_j inside the HydroSystemUnitBlock, which
+    is the UnitBlock_h (its PolyhedralFunctionBlock being its last sub-Block,
+    the HydroUnitBlock_j is its j-th one). The paths to the other units do
+    not change, the hydro units being the last ones.
+
+    Parameters
+    ----------
+    data_mappings : list of dict
+        The data mappings, each with its "abstract_paths" whose group
+        indices start from the UCBlock.
+    unitblocks : dict
+        Transformation.unitblocks.
+
+    Returns
+    -------
+    list of dict
+        The data mappings, the ones to a hydro unit with their paths changed.
+    """
+    hydro = sorted(int(unit["enumerate"].split("_")[-1])
+                   for unit in unitblocks.values()
+                   if unit.get("block") == "HydroUnitBlock"
+                   and "enumerate" in unit)
+    if not hydro:
+        return data_mappings
+    position = {index: j for j, index in enumerate(hydro)}
+    system = hydro[0]
+
+    mappings = []
+    for mapping in data_mappings:
+        paths = []
+        for path in mapping.get("abstract_paths") or []:
+            groups = list(path.get("group_indices", []))
+            if (path.get("node_types", "").startswith("B") and groups
+                    and int(groups[0]) in position):
+                path = {
+                    "node_types": "B" + path["node_types"],
+                    "group_indices": [str(system),
+                                      str(position[int(groups[0])])]
+                                     + groups[1:],
+                    "element_indices": [None] + list(path["element_indices"]),
+                    "range_indices": [None] + list(path["range_indices"]),
+                }
+            paths.append(path)
+        if "abstract_paths" in mapping and mapping["abstract_paths"] is not None:
+            mapping = dict(mapping, abstract_paths=paths)
+        mappings.append(mapping)
+    return mappings
+
 # -------------------------------- Correction --------------------------------------
 
 def correct_dimensions(

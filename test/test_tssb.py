@@ -3,15 +3,22 @@ from __future__ import annotations
 
 from pathlib import Path
 import csv
+import re
+import shutil
 from typing import Iterable, Sequence, Tuple
 
+import numpy as np
 import pytest
 import pypsa
+import pysmspp
 
 from conftest import (
     create_test_config,
     safe_remove,
     tssb_test_cases,
+    test_cases,
+    REL_TOL,
+    ABS_TOL,
     OUT_TEST,
 )
 
@@ -154,6 +161,7 @@ def apply_tssb_stochastic_data(
     load = n.loads_t.p_set.copy()
     pmaxpu = n.generators_t.p_max_pu.copy()
     marginal = n.generators.marginal_cost.copy()
+    inflow = n.storage_units_t.inflow.copy()
 
     n.set_scenarios(PROB)
 
@@ -187,6 +195,16 @@ def apply_tssb_stochastic_data(
 
             for scenario in SCENARIOS:
                 n.generators.marginal_cost[scenario] = marginal_value[scenario]
+
+        elif st_p == "hydro_inflow":
+            inflow_value = {
+                "low": inflow * 0,
+                "med": inflow,
+                "high": inflow * 4,
+            }
+
+            for scenario in SCENARIOS:
+                n.storage_units_t.inflow[scenario] = inflow_value[scenario]
 
         else:
             raise ValueError(f"Unknown stochastic parameter: {st_p}")
@@ -335,3 +353,125 @@ if __name__ == "__main__":
     )
 
     print(f"Objective report written to: {OBJECTIVES_CSV}")
+
+
+# ---------------------------------------------------------------------------
+# hydro_system: the hydro units in a HydroSystemUnitBlock, stochastic inflows
+# ---------------------------------------------------------------------------
+
+# the networks with a hydro StorageUnit
+hydro_cases = [(path, name)
+               for path, name in zip(test_cases["xlsx_paths"], test_cases["ids"])
+               if re.search(r"_\d+h(_|$)", path.stem)]
+
+
+def tssb_solver_config():
+    """
+    The BlockSolverConfig of the installed smspp_tssb_solver, None if there is
+    none. Its directory holds the InnerBCfg.txt that asks for the
+    "linearized" PolyhedralFunctionBlock that a MILPSolver needs.
+    """
+    solver = shutil.which("smspp_tssb_solver")
+    if solver is None:
+        return None
+    config = (Path(solver).resolve().parent.parent / "share" / "SMS++_tools"
+              / "tssb_solver" / "config")
+    inner = config / "InnerBCfg.txt"
+    if not (inner.exists() and (config / "TSSBSCfg.txt").exists()
+            and "PolyhedralFunctionBlock" in inner.read_text()):
+        return None
+    return pysmspp.SMSConfig(fp=config / "TSSBSCfg.txt")
+
+
+def run_tssb_hydro(xlsx_path: Path, hydro_system: bool):
+    """
+    The two-stage problem of a network whose demand and hydro inflows are
+    stochastic, solved by PyPSA and by SMS++; returns the two objectives and
+    the Transformation.
+    """
+    stochastic_parameters = ["demand", "hydro_inflow"]
+    case_name = (f"{xlsx_path.stem}__hydro_inflow"
+                 + ("_hsub" if hydro_system else ""))
+    workdir = OUT_TEST / "tssb" / case_name
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    # the profiles that the xlsx does not give are drawn at random: the
+    # networks are drawn alike
+    np.random.seed(0)
+    nd = NetworkDefinition(create_test_config(xlsx_path,
+                                              fp=TSSB_APPLICATION_INI))
+    n = add_slack_unit(clean_ciclicity_storage(nd.n))
+    # PyPSA 1.2 does not build the ramp limits of a stochastic network (it
+    # broadcasts the extendable flags over the names only); the start-up and
+    # shut-down limits of 1 in the xlsx are no limit for a unit that is not
+    # committable, and SMS++ does not read them
+    for component in (n.generators, n.links):
+        component[["ramp_limit_start_up", "ramp_limit_shut_down"]] = np.nan
+    # the reservoirs start empty, otherwise what they hold covers the
+    # horizon and the inflows would not change the optimum
+    n.storage_units["state_of_charge_initial"] = 0.0
+    n = apply_tssb_stochastic_data(n, stochastic_parameters)
+
+    reference = n.copy()
+    reference.optimize(solver_name="highs")
+    obj_pypsa = float(reference.objective
+                      + getattr(reference, "objective_constant", 0.0))
+
+    transformation = Transformation(
+        name=case_name,
+        configfile=tssb_solver_config() if hydro_system else TSSB_CONFIGFILE,
+        enable_thermal_units=False,
+        hydro_system=hydro_system,
+        workdir=workdir,
+        stochastic_parameters={
+            "stochastic_type": "tssb",
+            "parameters": stochastic_parameters,
+        },
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        # the MILPSolver needs the "linearized" PolyhedralFunctionBlock of the
+        # HydroSystemUnitBlock, which InnerBCfg.txt asks for
+        pysmspp_options={"B": "InnerBCfg.txt"} if hydro_system else {},
+    )
+    transformation.run(n, verbose=False)
+
+    return obj_pypsa, float(transformation.result.objective_value), \
+        transformation
+
+
+@pytest.mark.parametrize("xlsx_path",
+                         [path for path, _ in hydro_cases],
+                         ids=[name for _, name in hydro_cases])
+def test_tssb_hydro_system(xlsx_path):
+    """
+    The stochastic inflows of the hydro units reach their HydroUnitBlocks
+    inside the HydroSystemUnitBlock: the optimum is the one of PyPSA and of
+    the HydroUnitBlocks in the UCBlock.
+    """
+    if tssb_solver_config() is None:
+        pytest.skip("no installed smspp_tssb_solver linearizing a "
+                    "PolyhedralFunctionBlock")
+
+    obj_pypsa, obj_plain, _ = run_tssb_hydro(xlsx_path, hydro_system=False)
+    obj_pypsa_hsub, obj_hsub, transformation = run_tssb_hydro(
+        xlsx_path, hydro_system=True)
+
+    assert obj_pypsa_hsub == pytest.approx(obj_pypsa, rel=1e-9)
+    assert obj_plain == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    assert obj_hsub == pytest.approx(obj_plain, rel=REL_TOL, abs=ABS_TOL)
+
+    # the mapping of set_inflow of the j-th hydro unit goes down to the
+    # HydroUnitBlock_j inside the HydroSystemUnitBlock, the last UnitBlock
+    stochastic = transformation.tssb_data["stochastic_block"]
+    path = stochastic["AbstractPath"]
+    starts = [start for start, name in zip(path["PathStart"],
+                                           stochastic["FunctionName"])
+              if name == "HydroUnitBlock::set_inflow"]
+    assert starts
+    system = transformation.dimensions["UCBlock"]["NumberUnits"] - len(starts)
+    for j, start in enumerate(starts):
+        assert list(path["PathNodeTypes"][start:start + 2]) == [b"B", b"B"]
+        assert [str(g) for g in path["PathGroupIndices"][start:start + 2]] \
+            == [str(system), str(j)]
