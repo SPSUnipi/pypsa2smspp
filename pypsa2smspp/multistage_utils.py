@@ -2315,6 +2315,32 @@ def build_sddp_stochastic_block(
             f"parametro {parameter!r}."
         )
 
-    data_mappings.append(build_sddp_benders_mapping(dss_start=int(dss_offsets["hydro_inflow"]["start"])))
+    # -----------------------------------------------------------------
+    # Benders mapping: serve solo se c'è uno stato da modellare, cioè
+    # se la struttura ha almeno un HydroUnitBlock.
+    # -----------------------------------------------------------------
+    hydro_units = structure.get("hydro_unit_blocks", [])
+    n_reservoirs_total = sum(int(h["n_reservoirs"]) for h in hydro_units)
+
+    if n_reservoirs_total > 0:
+        if "hydro_inflow" not in dss_offsets:
+            raise ValueError(
+                f"La struttura dello stage ha {n_reservoirs_total} "
+                "bacini (HydroUnitBlock nei Block_i.nc4), ma "
+                "'hydro_inflow' non è tra i parametri stocastici "
+                "selezionati in stochastic_parameters. Il benders "
+                "mapping non può essere costruito: senza l'offset "
+                "dell'inflow, il termine costante b della "
+                "BendersBFunction non può essere popolato. Aggiungi "
+                "'hydro_inflow' alla lista dei parametri, oppure "
+                "verifica che la rete e i Block_i.nc4 siano coerenti."
+            )
+        data_mappings.append(
+            build_sddp_benders_mapping(
+                dss_start=int(dss_offsets["hydro_inflow"]["start"])
+            )
+        )
+    # Se n_reservoirs_total == 0, non c'è stato da propagare e il
+    # benders mapping viene saltato.
 
     return build_sddp_stochastic_block_data(data_mappings)

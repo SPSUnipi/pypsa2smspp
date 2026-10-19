@@ -3277,23 +3277,7 @@ class Transformation:
 
             self.sddp_dss_offsets[stage_name] = stage_offsets
 
-        # Costruiamo la matrice globale degli scenari
-        scenarios_info = mu.build_sddp_scenarios(stage_data_list)
-        # Calcoliamo le dimensioni per il costruttore di SDDPBlock
-        dimensions = mu.build_sddp_dimensions(stage_data_list, scenarios_info)
-
-        self.sddp_data = {
-            "stage_names": stage_names,
-            "stage_snapshots": stage_snapshots_map,
-            "stage_time_horizons": stage_time_horizons,
-            "parameters": stochastic_parameters,
-            "stage_data_list": stage_data_list,
-            "scenarios_info": scenarios_info,
-            "dimensions": dimensions,
-        }
-
         # Parsing dei Block_i.nc4
-
         workdir = Path(self.workdir)
         stage_block_paths = [
             workdir / f"Block_{t}.nc4" for t in range(len(stage_names))
@@ -3310,7 +3294,28 @@ class Transformation:
         stage_structures = mu.parse_all_stage_blocks(stage_block_paths)
         mu.validate_stage_structures(stage_structures)
 
-        self.sddp_data["stage_structures"] = stage_structures
+        # Costruiamo lo state_info dallo stage 0
+        state_info = mu.build_sddp_state_info(
+            stage_structures[0],
+            time_horizon=len(stage_names)
+        )
+
+        # Costruiamo la matrice globale degli scenari
+        scenarios_info = mu.build_sddp_scenarios(stage_data_list)
+        # Calcoliamo le dimensioni per il costruttore di SDDPBlock
+        dimensions = mu.build_sddp_dimensions(stage_data_list, scenarios_info, state_info=state_info)
+
+        self.sddp_data = {
+            "stage_names": stage_names,
+            "stage_snapshots": stage_snapshots_map,
+            "stage_time_horizons": stage_time_horizons,
+            "parameters": stochastic_parameters,
+            "stage_data_list": stage_data_list,
+            "scenarios_info": scenarios_info,
+            "dimensions": dimensions,
+            "stage_structures": stage_structures,
+            "state_info": state_info,
+        }
 
         return self.sddp_data
 
@@ -3632,12 +3637,59 @@ class Transformation:
             # Nel notebook ha dimensioni NumNonzero, NumVar, NumRow (per ora 0)
             # e contiene un AbstractPath interno + il blocco segnaposto.
             benders_b_func = Block().from_kwargs()
-            benders_b_func.add_dimension("NumNonzero", 0)
-            benders_b_func.add_dimension("NumVar", 0)
-            benders_b_func.add_dimension("NumRow", 0)
+
+            structure_t = stage_structures[stage_idx]
+            bf_data = mu.build_sddp_benders_function_data(structure_t)
+
+            # Aggiungiamo le dimensioni
+            benders_b_func.add_dimension(
+                "NumNonzero", int(bf_data["NumNonzero"])
+            )
+            benders_b_func.add_dimension(
+                "NumVar", int(bf_data["NumVar"])
+            )
+            benders_b_func.add_dimension(
+                "NumRow", int(bf_data["NumRow"])
+            )
+
+            # Aggiungiamo le variabili
+            benders_b_func.add_variable(
+                "Column",
+                "u4",
+                ("NumNonzero",),
+                bf_data["Column"],
+            )
+
+            benders_b_func.add_variable(
+                "A",
+                "double",
+                ("NumNonzero",),
+                bf_data["A"],
+            )
+
+            benders_b_func.add_variable(
+                "NumNonzeroAtRow",
+                "u4",
+                ("NumRow",),
+                bf_data["NumNonzeroAtRow"],
+            )
+
+            benders_b_func.add_variable(
+                "b",
+                "double",
+                ("NumRow",),
+                bf_data["b"],
+            )
+
+            benders_b_func.add_variable(
+                "ConstraintSide",
+                "S1",
+                ("NumRow",),
+                bf_data["ConstraintSide"],
+            )
 
             # AbstractPath interno della BendersBFunction
-            structure_t = stage_structures[stage_idx]
+
             benders_ap_data = mu.build_sddp_benders_abstract_path(
                 hydro_unit_indices=[
                     h["index"] for h in structure_t["hydro_unit_blocks"]
@@ -3652,7 +3704,8 @@ class Transformation:
             # 7c. BendersBlock (contiene BendersBFunction)
             # -------------------------------------------------------------
             benders_block = Block().from_kwargs(block_type="BendersBlock")
-            benders_block.add_dimension("NumVar", 0)
+            # nella BendersBFunction, la NumVar è il numero di colonne di A = numero di variabili di stato = n_reservoirs_total
+            benders_block.add_dimension("NumVar", int(bf_data["NumVar"]))
             benders_block.add_block("BendersBFunction", block=benders_b_func)
 
             # -------------------------------------------------------------
@@ -3737,23 +3790,6 @@ class Transformation:
 
         # Restituisce il master (SMSNetwork), come fanno gli altri convert_*
         return master
-
-    def _parse_sddp_solution_to_unitblocks(self, solution, n, solution_data):
-        """
-        Parsa SDDPBlockSolution
-        """
-        raise NotImplementedError(
-            "SDDP solution parsing is not implemented yet (Fase 6)."
-        )
-
-    def _inverse_transformation_sddp(self, objective_smspp, n):
-        """
-        Crea un xarray.Dataset con la dimensione 'stage'
-        """
-        raise NotImplementedError(
-            "SDDP inverse transformation is not implemented yet (Fase 6)."
-        )
-
 
 #############################################################################################
 ############################## Backup #######################################################
