@@ -32,11 +32,6 @@ def normalize_sddp_parameters(
             "snapshots_per_stage": 31,
             "top_path": {
                 "K": 1,
-                "second_group_index": 0,
-                "third_group_index": 3,
-            },
-            "benders_path": {
-                "n_bacini": 3,
             },
         }
 
@@ -126,58 +121,37 @@ def normalize_sddp_parameters(
             f"{type(top_path).__name__}."
         )
 
-    for key in ("K", "second_group_index", "third_group_index"):
-        if key not in top_path:
-            raise ValueError(
-                f"'top_path' manca della chiave obbligatoria {key!r}."
-            )
-        value = top_path[key]
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(
-                f"'top_path[{key!r}]' deve essere un intero, ricevuto "
-                f"{type(value).__name__} ({value!r})."
-            )
-        if value < 0:
-            raise ValueError(
-                f"'top_path[{key!r}]' deve essere >= 0, ricevuto {value}."
-            )
-
-    # Validazione benders_path (obbligatorio per SDDP)
-    benders_path = sp.get("benders_path", None)
-
-    if benders_path is None:
+    if "K" not in top_path:
         raise ValueError(
-            "SDDP richiede 'benders_path' in stochastic_parameters: "
-            "un dizionario con la chiave 'n_bacini'."
+            "'top_path' manca della chiave obbligatoria 'K'."
         )
 
-    if not isinstance(benders_path, dict):
+    K = top_path["K"]
+    if isinstance(K, bool) or not isinstance(K, int):
         raise ValueError(
-            f"'benders_path' deve essere un dizionario, ricevuto "
-            f"{type(benders_path).__name__}."
+            f"'top_path['K']' deve essere un intero, ricevuto "
+            f"{type(K).__name__} ({K!r})."
+        )
+    if K < 0:
+        raise ValueError(
+            f"'top_path['K']' deve essere >= 0, ricevuto {K}."
         )
 
-    if "n_bacini" not in benders_path:
+    # Solo K=1 è supportato (un solo PolyhedralFunctionBlock per
+    # HydroSystemUnitBlock, creato da convert_to_ucblock)
+    if K != 1:
         raise ValueError(
-            "'benders_path' manca della chiave obbligatoria 'n_bacini'."
-        )
-    n_bacini = benders_path["n_bacini"]
-    if isinstance(n_bacini, bool) or not isinstance(n_bacini, int):
-        raise ValueError(
-            f"'benders_path['n_bacini']' deve essere un intero, ricevuto "
-            f"{type(n_bacini).__name__} ({n_bacini!r})."
-        )
-    if n_bacini < 0:
-        raise ValueError(
-            f"'benders_path['n_bacini']' deve essere >= 0, ricevuto {n_bacini}."
+            f"'top_path['K']' = {K} non è supportato: "
+            "attualmente l'implementazione crea un solo "
+            "PolyhedralFunctionBlock per HydroSystemUnitBlock, quindi "
+            "solo K=1 è coerente con la struttura prodotta."
         )
 
     return {
         "stochastic_type": "sddp",
         "parameters": parameters,
         "snapshots_per_stage": snapshots_per_stage,
-        "top_path": dict(top_path),
-        "benders_path": dict(benders_path),
+        "top_path": {"K": int(top_path["K"])},
     }
 
 
@@ -1507,6 +1481,79 @@ def build_sddp_state_info(
         "initial_state": np.asarray(initial_state, dtype=float),
         "admissible_state": np.asarray(admissible_state, dtype=float),
     }
+
+# ------------------------------------------------------
+# ------------- SLICING RETE PER STAGE ----------------
+# ------------------------------------------------------
+
+def slice_network_for_stage(
+        n,
+        stage_snapshots: pd.Index,
+) -> "pypsa.Network":
+    """
+    Restituisce una rete PyPSA deterministica contenente solo gli
+    snapshot dello stage specificato.
+
+    La rete risultante è una copia della rete base (pimo scenario se
+    stocastica), con n.snapshots filtrato a stage_snapshots e con tutte
+    le serie temporali filtrate di conseguenza.
+    Gli asset restano gli stessi.
+
+    Parameters
+    ----------
+    n: pypsa.Network
+    stage_snapshots: pd.Index
+        Snapshot dello stage.
+
+    Returns
+    -------
+    pypsa.Network
+    """
+    # Se stocastica, prendiamo il primo scenario, altrimenti è già n
+    n_base = su.get_base_scenario_network(n)
+
+    # Copiamo per non modificare l'originale
+    n_stage = n_base.copy()
+
+    # Filtriamo gli snapshot
+    n_stage.set_snapshots(pd.Index(stage_snapshots))
+
+    return n_stage
+
+# -------------------------------------------------------
+# ---------------- CHECK RETE PER SDDP -----------------
+# -------------------------------------------------------
+
+def network_has_hydro_storage(n) -> bool:
+    """
+    Verifica se la rete ha almeno una StorageUnit con carrier idroelettrico.
+
+    I carrier riconosciuti come idroelettrici sono gli stessi che
+    `iterate_components` (in transformation.py) mappa a HydroUnitBlock,
+    cioè "hydro" e "PHS".
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        Rete PyPSA (stocastica o deterministica).
+
+    Returns
+    -------
+    bool
+        True se almeno una StorageUnit ha carrier idroelettrico.
+    """
+    n_base = su.get_base_scenario_network(n)
+
+    if n_base.storage_units.empty:
+        return False
+
+    hydro_carriers = {"hydro", "PHS"}
+    carriers = (
+        n_base.storage_units["carrier"]
+        .astype(str)
+        .str.strip()
+    )
+    return bool(carriers.isin(hydro_carriers).any())
 
 # -------------------------------------------------------
 # ------------------- BENDERS DATA ----------------------
