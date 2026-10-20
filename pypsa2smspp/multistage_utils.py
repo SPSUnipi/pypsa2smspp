@@ -2322,6 +2322,16 @@ def build_sddp_stochastic_block(
     hydro_units = structure.get("hydro_unit_blocks", [])
     n_reservoirs_total = sum(int(h["n_reservoirs"]) for h in hydro_units)
 
+    if n_reservoirs_total > 1:
+        raise NotImplementedError(
+            f"Il benders mapping supporta solo 1 serbatoio in totale, "
+            f"ma la struttura ne ha {n_reservoirs_total}. Il DataMapping "
+            "BendersBFunction::modify_constants ha SetFrom di cardinalità 1 "
+            "e SetTo di cardinalità 1, quindi legge un solo valore e lo "
+            "scrive in b[0]. Con più serbatoi servirebbero più mapping o "
+            "un mapping con SetFrom di cardinalità > 1: non implementato."
+        )
+
     if n_reservoirs_total > 0:
         if "hydro_inflow" not in dss_offsets:
             raise ValueError(

@@ -2567,10 +2567,15 @@ class Transformation:
             inner_block_name = "Block_0"
 
         # --------------------------------------------------
-        # Resolve configfile/template
+        # Workdir
         # --------------------------------------------------
 
-        # TODO: non esiste template di default per SDDP, quindi l'utente deve fornire un configfile esplicito?
+        workdir = Path(self.workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        # --------------------------------------------------
+        # Resolve configfile/template
+        # --------------------------------------------------
 
         default_template_map = {
             "UCBlock": "UCBlock/uc_solverconfig.txt",
@@ -2581,7 +2586,42 @@ class Transformation:
 
         cfg = self.configfile
 
-        if cfg is None or cfg == "auto":
+        if block_type == "SDDPBlock":
+            # SDDP richiede 10 file di configurazione SMSPP nella workdir.
+            # I primi due sono i punti di ingresso (-S e -B), gli altri sono
+            # referenziati al loro interno.
+            required_sddp_configs = [
+                "SDDPSCfg.txt",  # -S: SolverConfig
+                "SDDPBCfg.txt",  # -B: BlockConfig (meta-map)
+                "PFBCfg.txt",  # PolyhedralFunctionBlock
+                "SUBCfg.txt",  # SlackUnitBlock
+                "BUBCfg.txt",  # BatteryUnitBlock
+                "TUBCfg-OVC.txt",  # ThermalUnitBlock
+                "DCNBCfg.txt",  # DCNetworkBlock
+                "ACBCfg.txt",  # ACNetworkBlock
+                "BCfg.txt",  # default per gli altri Block
+                "UCBSCfg.txt",  # strInnerBSC dentro SDDPSCfg.txt
+            ]
+
+            missing = [
+                name for name in required_sddp_configs
+                if not (workdir / name).exists()
+            ]
+
+            if missing:
+                raise FileNotFoundError(
+                    f"Mancano {len(missing)} dei {len(required_sddp_configs)} "
+                    f"file di configurazione SMSPP nella workdir {workdir}:\n"
+                    + "\n".join(f"  - {name}" for name in missing)
+                    + "\n\nQuesti file si trovano nel repository SMSPP, "
+                      "tipicamente sotto tools/sddp_solver/config/ o una "
+                      "cartella simile. Vanno copiati nella workdir prima "
+                      "di lanciare l'ottimizzazione."
+                )
+            configfile = pysmspp.SMSConfig(
+                fp=str((workdir / "SDDPSCfg.txt").resolve())
+            )
+        elif cfg is None or cfg == "auto":
             if block_type not in default_template_map:
                 raise ValueError(
                     f"No default config template is defined for block type {block_type!r}. "
@@ -2606,10 +2646,8 @@ class Transformation:
                 )
 
         # --------------------------------------------------
-        # Workdir and filepaths
+        # filepaths
         # --------------------------------------------------
-        workdir = Path(self.workdir)
-        workdir.mkdir(parents=True, exist_ok=True)
 
         fp_temp = str(workdir / str(self.fp_temp).format(name=self.name))
         fp_log = None if self.fp_log is None else str(workdir / str(self.fp_log).format(name=self.name))
@@ -2630,6 +2668,12 @@ class Transformation:
         # Solver options
         # --------------------------------------------------
         solver_options = dict(self.pysmspp_options or {})
+
+        # pySMSpp non ha un template per SDDP, quindi usiamo i file di configurazione di SMSPP
+        if block_type == "SDDPBlock":
+            solver_options.setdefault("B", "SDDPBCfg.txt")
+            solver_options.setdefault("smspp_solver", "SDDPSolver")
+            solver_options.setdefault("solver_path", "sddp_solver")
 
         # pySMSpp has no tool of its own for the multi-stage block: the command
         # line of mssb_solver is the one of tssb_solver, so the same wrapper
@@ -3568,6 +3612,16 @@ class Transformation:
         # e polyhedral_index siano uniformi.
         stage_structures = self.sddp_data["stage_structures"]
         structure0 = stage_structures[0]
+
+        if structure0["hydro_system_index"] != 0:
+            raise NotImplementedError(
+                f"Il path top-level attuale assume che l'HydroSystemUnitBlock "
+                f"sia figlio 0 del UCBlock, ma il parser ha trovato "
+                f"hydro_system_index={structure0['hydro_system_index']}. "
+                "Il codice usa il valore dal parser, quindi è parametrico, ma "
+                "questo caso non è mai stato testato. Va verificata la struttura "
+                "dei Block_i.nc4 e, se necessario, aggiunto un test dedicato."
+            )
 
         # K resta un parametro utente: il parser non lo può dedurre dai
         # Block_i.nc4, perché nel file di riferimento è dichiarato a
