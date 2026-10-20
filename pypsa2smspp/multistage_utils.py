@@ -2198,7 +2198,7 @@ def build_sddp_benders_mapping(
     return {
         "target": "benders",
         "function_name": "BendersBFunction::modify_constants",
-        "caller": "B",
+        "caller": "F",
         "data_type": "D",
         "set_size": [1, 1],
         "set_elements": [dss_start, 0],
