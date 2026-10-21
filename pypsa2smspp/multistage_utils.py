@@ -1642,7 +1642,7 @@ def build_sddp_benders_function_data(
     # nel lato destro del proprio vincolo di bilancio idrico
     # (v_0 + flussi = V_init + inflow_0).
     constraint_sides = np.array(
-        ["R"] * n_reservoirs_total,
+        ["B"] * n_reservoirs_total,
         dtype="S1",
     )
 
