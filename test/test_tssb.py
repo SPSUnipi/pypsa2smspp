@@ -16,6 +16,9 @@ from conftest import (
     REL_TOL,
     ABS_TOL,
     scenario_reference_objective,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
 import math
@@ -200,6 +203,7 @@ def apply_tssb_stochastic_data(
 def run_tssb_block(
     xlsx_path: Path,
     stochastic_parameters: Sequence[str],
+    multi_carrier: bool = False,
 ) -> None:
     """
     TSSB regression test:
@@ -209,7 +213,8 @@ def run_tssb_block(
     - save the SMS++ objective to CSV.
     """
     parameter_tag = _parameter_tag(stochastic_parameters)
-    case_name = f"{xlsx_path.stem}__{parameter_tag}"
+    case_name = f"{xlsx_path.stem}__{parameter_tag}" + (
+        "_carriers" if multi_carrier else "")
 
     workdir = OUT_TEST / "tssb" / case_name
     workdir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +231,7 @@ def run_tssb_block(
 
     nd = NetworkDefinition(parser)
     n = nd.n
+    skip_carrier_form(n, multi_carrier)
 
     n = clean_ciclicity_storage(n)
 
@@ -245,6 +251,8 @@ def run_tssb_block(
         enable_thermal_units=False,
         # a committable link is a ConversionUnitBlock
         enable_conversion_units=bool(n.links.committable.any()),
+        # the buses of each carrier in a carrier of the UCBlock
+        multi_carrier=multi_carrier,
         workdir=workdir,
         stochastic_parameters={
             "stochastic_type": "tssb",
@@ -290,13 +298,15 @@ def run_tssb_block(
     STOCHASTIC_PARAMETER_CASES,
     ids=STOCHASTIC_PARAMETER_IDS,
 )
-def test_tssb(xlsx_path, stochastic_parameters):
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
+def test_tssb(xlsx_path, stochastic_parameters, multi_carrier):
     if not tssb_test_cases["xlsx_paths"]:
         pytest.skip("No TSSB Excel test cases found")
 
     run_tssb_block(
         xlsx_path=xlsx_path,
         stochastic_parameters=stochastic_parameters,
+        multi_carrier=multi_carrier,
     )
 
 

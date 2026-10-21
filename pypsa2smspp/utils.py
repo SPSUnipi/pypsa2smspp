@@ -2408,6 +2408,98 @@ def conversion_unit_ports(n, name):
     return ports
 
 
+# the carriers of the buses of PyPSA that are the electricity, the carrier 0
+# of the UCBlock, and the names in the UCBlock of those that UnitBlock knows
+# by another one; any other carrier keeps its name
+ELECTRIC_BUS_CARRIERS = ("AC", "DC", "")
+CARRIER_NAMES = {"H2": "hydrogen"}
+
+
+def bus_carriers(n):
+    """
+    The carriers of the UCBlock that the buses of `n` give and the node of
+    each bus in its carrier.
+
+    The buses whose carrier is in ELECTRIC_BUS_CARRIERS (or not given) are
+    the nodes of the electricity, the carrier 0; each other carrier of the
+    buses is a carrier of the UCBlock, in the order of their names, named as
+    CARRIER_NAMES says. The nodes of a carrier are its buses in the order of
+    n.buses.
+
+    Returns
+    -------
+    tuple
+        The names of the carriers, starting with "electricity", and the
+        pandas.Series of the pairs (carrier, node) indexed by the buses.
+    """
+    kind = n.buses.carrier.fillna("").astype(str)
+    electric = kind.isin(ELECTRIC_BUS_CARRIERS)
+    if not electric.any():
+        raise ValueError(
+            "bus_carriers: no electric bus, while the carrier 0 of the "
+            "UCBlock is the electricity.")
+    others = sorted(set(kind[~electric]))
+    carriers = ["electricity"] + [CARRIER_NAMES.get(c, c) for c in others]
+    index = pd.Series(0, index=n.buses.index)
+    for c, name in enumerate(others, start=1):
+        index[kind == name] = c
+    node = index.groupby(index).cumcount()
+    return carriers, pd.Series(list(zip(index, node)), index=n.buses.index)
+
+
+def link_ports(n, name):
+    """
+    The ports of the link `name` as pairs (bus, efficiency), the efficiency
+    being a numpy.ndarray over the snapshots: bus0 with -1, as the link draws
+    p0 from it, and then each output of conversion_unit_ports().
+    """
+    T = len(n.snapshots)
+    ports = [(n.links.at[name, "bus0"], -np.ones(T))]
+    for _, bus, column in conversion_unit_ports(n, name):
+        ports.append((bus, n.get_switchable_as_dense("Link", column)[name]
+                      .to_numpy(dtype=float)))
+    return ports
+
+
+def carrier_unit_links(n, links, bus_node):
+    """
+    The links among `links` whose ports are on more than one carrier, each of
+    which is a unit with an output on the carrier of each port instead of a
+    (hyper)arc of the network, as a link joins the nodes of one carrier only.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network.
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines.
+    bus_node : pd.Series
+        The pair (carrier, node) of each bus [see bus_carriers()].
+
+    Returns
+    -------
+    pd.Index
+        The names of the links that are units.
+    """
+    names = []
+    for name in links.index:
+        carriers = [bus_node[bus][0] for bus, _ in link_ports(n, name)]
+        if len(set(carriers)) == 1:
+            continue
+        if len(set(carriers)) != len(carriers):
+            raise ValueError(
+                f"carrier_unit_links: {name} has two ports on the same "
+                "carrier, while a generator has one node on each carrier.")
+        delays = [c for c in links.columns if c.startswith("delay")]
+        if any(float(links.at[name, c] or 0) != 0 for c in delays):
+            raise ValueError(
+                f"carrier_unit_links: {name} delays its output, which the "
+                "unit it becomes cannot do (a committable link can, as a "
+                "ConversionUnitBlock).")
+        names.append(name)
+    return pd.Index(names, dtype=links.index.dtype)
+
+
 def conversion_unit_variables(n, name, scaled=False):
     """
     Computes the ConversionUnitBlock of a committable link of PyPSA.

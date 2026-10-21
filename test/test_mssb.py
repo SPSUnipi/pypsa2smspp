@@ -27,6 +27,9 @@ from conftest import (
     scenario_reference_objective,
     solver_reads_conversion_unit,
     solver_solves_no_line_network,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
 from pypsa2smspp.network_correction import add_slack_unit, clean_dispatch_setpoints
@@ -204,7 +207,8 @@ def build_two_level_network(conversion_unit: bool = False,
 
 
 def _transformation(tree: dict, name: str,
-                    enable_conversion_units: bool = False) -> Transformation:
+                    enable_conversion_units: bool = False,
+                    multi_carrier: bool = False) -> Transformation:
     workdir = OUT_TEST / "mssb" / name
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -213,6 +217,7 @@ def _transformation(tree: dict, name: str,
         configfile=MSSB_CONFIGFILE,
         enable_thermal_units=False,
         enable_conversion_units=enable_conversion_units,
+        multi_carrier=multi_carrier,
         workdir=str(workdir),
         stochastic_parameters={
             "stochastic_type": "mssb",
@@ -436,11 +441,13 @@ def test_mssb_matches_the_flat_optimum():
 )
 @pytest.mark.parametrize("heater", [True, False],
                          ids=["heater", "no_line"])
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
 @pytest.mark.skipif(
     not solver_reads_conversion_unit(),
     reason="the SMS++ solver does not know the ConversionUnitBlock",
 )
-def test_mssb_with_a_conversion_unit_matches_the_leaves(heater):
+def test_mssb_with_a_conversion_unit_matches_the_leaves(heater,
+                                                        multi_carrier):
     """
     With a committable CHP, a ConversionUnitBlock, and nothing extendable,
     the leaves are independent, and the optimum of the multi-stage block is
@@ -453,6 +460,7 @@ def test_mssb_with_a_conversion_unit_matches_the_leaves(heater):
         pytest.skip("the SMS++ solver does not solve a network with no line")
 
     n, tree = build_two_level_network(conversion_unit=True, heater=heater)
+    skip_carrier_form(n, multi_carrier)
     # nothing is extendable: a slack covers what the fixed capacities do not
     n = add_slack_unit(n)
 
@@ -461,8 +469,9 @@ def test_mssb_with_a_conversion_unit_matches_the_leaves(heater):
     expected = scenario_reference_objective(reference)
 
     transformation = _transformation(
-        tree, "mssb_conversion_unit" + ("" if heater else "_no_line"),
-        enable_conversion_units=True)
+        tree, "mssb_conversion_unit" + ("" if heater else "_no_line")
+        + ("_carriers" if multi_carrier else ""),
+        enable_conversion_units=True, multi_carrier=multi_carrier)
     transformation.run(n, verbose=False)
     obtained = float(transformation.result.objective_value)
 
@@ -553,7 +562,9 @@ def _leaves_objective(n: pypsa.Network, solar=None) -> float:
     reason="the SMS++ solver does not know the ConversionUnitBlock",
 )
 @pytest.mark.parametrize("stochastic_type", ["tssb", "mssb"])
-def test_investment_outside_with_a_conversion_unit(stochastic_type):
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
+def test_investment_outside_with_a_conversion_unit(stochastic_type,
+                                                   multi_carrier):
     """
     The investment in the solar generator stated once, in an InvestmentBlock
     over the TSSB or the MSSB, with a committable CHP, a ConversionUnitBlock,
@@ -573,6 +584,7 @@ def test_investment_outside_with_a_conversion_unit(stochastic_type):
 
     n, tree = build_two_level_network(conversion_unit=True,
                                       solar_extendable=True)
+    skip_carrier_form(n, multi_carrier)
     n = add_slack_unit(n)
 
     reference = n.copy()
@@ -587,7 +599,8 @@ def test_investment_outside_with_a_conversion_unit(stochastic_type):
     if stochastic_type == "mssb":
         stochastic["tree"] = tree
 
-    name = f"{stochastic_type}_investment_outside_conversion_unit"
+    name = f"{stochastic_type}_investment_outside_conversion_unit" + (
+        "_carriers" if multi_carrier else "")
     workdir = OUT_TEST / "mssb" / name
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -596,6 +609,7 @@ def test_investment_outside_with_a_conversion_unit(stochastic_type):
         configfile=INVESTMENT_OUTSIDE_CONFIGFILE,
         enable_thermal_units=False,
         enable_conversion_units=True,
+        multi_carrier=multi_carrier,
         capacity_expansion_ucblock=False,
         workdir=str(workdir),
         stochastic_parameters=stochastic,

@@ -28,8 +28,12 @@ def normalize_key(key: str) -> str:
 
 def component_definition(n, unit_block: dict) -> str:
     """
-    Maps a unit block type to its corresponding PyPSA component name.
+    Maps a unit block type to its corresponding PyPSA component name, unless
+    the unit block says it (a link between carriers is an
+    IntermittentUnitBlock).
     """
+    if "component" in unit_block:
+        return unit_block["component"]
     block = unit_block['block']
     match block:
         case "IntermittentUnitBlock":

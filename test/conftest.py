@@ -177,6 +177,65 @@ def solver_reads_conversion_unit():
     return solver_loads(probe)
 
 
+def solver_reads_carriers():
+    """
+    True if the smspp_ucblock_solver on PATH loads a UCBlock with more than
+    one energy carrier, which is in SMS++ since UCBlock 0.8 (the format of
+    Transformation(multi_carrier=True)); the check loads, without solving
+    it, a UCBlock with the electricity and the heat, one node each, and a
+    unit with its output on the heat.
+    """
+    probe = OUT_TEST / "carriers_probe.nc4"
+    with netCDF4.Dataset(probe, "w") as nc:
+        nc.setncattr("SMS++_file_type", 1)
+        uc = nc.createGroup("Block_0")
+        uc.setncattr("type", "UCBlock")
+        for dim, size in (("TimeHorizon", 1), ("NumberUnits", 1),
+                          ("NumberElectricalGenerators", 1), ("NumberNodes", 1),
+                          ("NumberCarriers", 2)):
+            uc.createDimension(dim, size)
+        uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 0.0
+        uc.createVariable("CarrierName", str, ("NumberCarriers",))[:] = \
+            np.array(["electricity", "heat"], dtype=object)
+        uc.createVariable("GeneratorNode", "i4",
+                          ("NumberElectricalGenerators", "NumberCarriers"))[:] = [[-1, 0]]
+        heat = uc.createGroup("Carrier_1")
+        heat.createDimension("NumberNodes", 1)
+        heat.createVariable("EnergyDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        unit = uc.createGroup("UnitBlock_0")
+        unit.setncattr("type", "IntermittentUnitBlock")
+        unit.createVariable("MaxPower", "f8")[...] = 10.0
+        unit.createDimension("NumberOutputs", 1)
+        unit.createVariable("OutputCarrier", str, ("NumberOutputs",))[:] = \
+            np.array(["heat"], dtype=object)
+        unit.createVariable("OutputEfficiency", "f8",
+                            ("TimeHorizon", "NumberOutputs"))[:] = 1.0
+
+    return solver_loads(probe)
+
+
+# the two forms of the buses of a network: the nodes of one network, or those
+# of a carrier of the UCBlock for each carrier of the buses [see
+# Transformation(multi_carrier=...)]
+BUS_FORMS = [False, True]
+BUS_FORM_IDS = ["network", "carriers"]
+
+
+def skip_carrier_form(n, multi_carrier):
+    """
+    Skips the carrier form of a network whose buses are all electric, which
+    is the network form, and that of any network if the solver on PATH does
+    not read the carriers [see solver_reads_carriers()].
+    """
+    if not multi_carrier:
+        return
+    from pypsa2smspp.utils import ELECTRIC_BUS_CARRIERS
+    if set(n.buses.carrier.fillna("").astype(str)) <= set(ELECTRIC_BUS_CARRIERS):
+        pytest.skip("all the buses are electric: no carrier form")
+    if not solver_reads_carriers():
+        pytest.skip("the SMS++ solver does not read the carriers")
+
+
 def solver_reads_conversion_extensions():
     """
     True if the smspp_ucblock_solver on PATH loads a ConversionUnitBlock

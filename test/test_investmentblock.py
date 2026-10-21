@@ -11,6 +11,9 @@ from conftest import (
     REL_TOL,
     ABS_TOL,
     OUT_TEST,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
 from network_definition import NetworkDefinition
@@ -89,7 +92,7 @@ def _append_objective_row(
         )
 
 
-def run_investment_block(xlsx_path: Path) -> None:
+def run_investment_block(xlsx_path: Path, multi_carrier: bool = False) -> None:
     """
     InvestmentBlock regression test:
     - build network from Excel
@@ -98,7 +101,7 @@ def run_investment_block(xlsx_path: Path) -> None:
     - compare objectives
     - save PyPSA/SMS++ objectives to CSV
     """
-    case_name = xlsx_path.stem
+    case_name = xlsx_path.stem + ("_carriers" if multi_carrier else "")
 
     # Artifacts (optional)
     network_nc = OUT_TEST / f"network_{case_name}.nc"
@@ -112,6 +115,7 @@ def run_investment_block(xlsx_path: Path) -> None:
     nd = NetworkDefinition(parser)
 
     n = nd.n
+    skip_carrier_form(n, multi_carrier)
     n = clean_ciclicity_storage(n)
     if "sector" not in xlsx_path.name:
         n = add_slack_unit(n)
@@ -153,6 +157,8 @@ def run_investment_block(xlsx_path: Path) -> None:
         capacity_expansion_ucblock=False,  # InvestmentBlock
         # a committable link is a ConversionUnitBlock
         enable_conversion_units=bool(n.links.committable.any()),
+        # the buses of each carrier in a carrier of the UCBlock
+        multi_carrier=multi_carrier,
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
@@ -186,8 +192,9 @@ def run_investment_block(xlsx_path: Path) -> None:
         pass
 
 
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_investment(test_case_xlsx):
+def test_investment(test_case_xlsx, multi_carrier):
     name_l = test_case_xlsx.name.lower()
     # a modular asset is extendable, and the InvestmentBlock writes it with
     # an integer design, the number of its modules
@@ -201,7 +208,7 @@ def test_investment(test_case_xlsx):
     if name_l.endswith(("_ramp.xlsx", "_ramp_on.xlsx")):
         pytest.skip("Skipping case for investment block")
 
-    run_investment_block(test_case_xlsx)
+    run_investment_block(test_case_xlsx, multi_carrier)
 
 
 if __name__ == "__main__":

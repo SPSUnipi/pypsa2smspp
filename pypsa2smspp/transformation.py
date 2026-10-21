@@ -42,6 +42,9 @@ from pypsa2smspp.utils import (
     nuclear_rule_variables,
     conversion_links,
     conversion_unit_variables,
+    bus_carriers,
+    carrier_unit_links,
+    link_ports,
     forbid_unreachable_switches,
     free_initial_ramp,
     fix_commitment_on,
@@ -136,6 +139,7 @@ class Transformation:
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
         nuclear_units: Optional[Mapping[str, Union[bool, Mapping[str, Any], str, Path]]] = None,
         enable_conversion_units: bool = False,
+        multi_carrier: bool = False,
 
         # --- I/O ---
         workdir: Union[str, Path] = "output",
@@ -239,6 +243,35 @@ class Transformation:
                 translated (see conversion_unit_variables() for what is
                 refused).
 
+        multi_carrier : bool, default False
+            Controls whether the carriers of the buses are carriers of the
+            UCBlock.
+
+            Behaviour:
+              - False: every bus is a node of the one network of the
+                UCBlock, whatever its carrier, and a link between buses of
+                different carriers is a (hyper)arc of it.
+              - True : the electric buses (AC, DC or no carrier) are the
+                nodes of the electricity, the carrier 0, and the buses of
+                each other carrier those of a carrier of its own (see
+                bus_carriers()), whose network has the lines and links
+                between them; a link whose ports are on more than one
+                carrier is an IntermittentUnitBlock whose power is p0, with
+                an output on the carrier of each port (efficiency -1 on bus0
+                and efficiency, efficiency2, ... on bus1, bus2, ...), or a
+                ConversionUnitBlock if it is committable and
+                `enable_conversion_units` is True, whose generators have
+                each its output on the carrier of its bus; any other unit
+                has its output on the carrier of its bus. The demand of the
+                loads is that of the nodes of their carriers.
+
+            Notes:
+              - A link with two ports on the same carrier, or that delays
+                its output and is not a ConversionUnitBlock, is refused, as
+                is the merge of the links (`merge_links`).
+              - The lines and links of a carrier other than the electricity
+                can be neither extendable nor hyperarcs.
+
         workdir : str | Path, default "output"
             Output directory for SMS++ artifacts. The directory is created if it does not exist.
 
@@ -289,6 +322,11 @@ class Transformation:
         self.capacity_expansion_ucblock = bool(capacity_expansion_ucblock)
         self.enable_thermal_units = bool(enable_thermal_units)
         self.enable_conversion_units = bool(enable_conversion_units)
+        self.multi_carrier = bool(multi_carrier)
+        if self.multi_carrier and merge_links:
+            raise ValueError(
+                "multi_carrier: the links are not merged, each of them "
+                "being a unit or a line of its carrier.")
         
         self.intermittent_carriers = intermittent_carriers
         self.nuclear_units = {}
@@ -335,6 +373,7 @@ class Transformation:
         self.unitblock_design_data = []
         self._conversion_links = pd.Index([])
         self._conversion_data = {}
+        self._carrier_links = pd.Index([])
 
  
         
@@ -551,14 +590,23 @@ class Transformation:
             else links_merged_df.index[:0]
         )
         links_merged_df = links_merged_df.drop(self._conversion_links)
+        # with the carriers, the links between two of them are units too
+        # [see _add_carrier_link_units()]
+        if self.multi_carrier:
+            self._carriers, self._bus_node = bus_carriers(n)
+            self._line_layout_cache = None
+            self._carrier_links = carrier_unit_links(n, links_merged_df,
+                                                     self._bus_node)
+            links_merged_df = links_merged_df.drop(self._carrier_links)
+        unit_links = self._conversion_links.union(self._carrier_links)
         # in the UCBlock form an extendable one has the design of its unit,
         # not that of a line
         if self.capacity_expansion_ucblock:
-            designs = int(n.links.loc[self._conversion_links,
+            designs = int(n.links.loc[unit_links,
                                       "p_nom_extendable"].astype(bool).sum())
             self.dimensions["InvestmentBlock"]["NumberDesignLines"] -= designs
             self.dimensions["NetworkBlock"]["NumberDesignLines_links"] -= designs
-        network_links = n.links.drop(self._conversion_links)
+        network_links = n.links.drop(unit_links)
 
         links_before = links_merged_df.copy()
         
@@ -630,6 +678,10 @@ class Transformation:
         self.dimensions["UCBlock"]["NumberElectricalGenerators"] += sum(
             len(buses) for _, _, buses in self._conversion_data.values()
         )
+        # and each link between carriers one unit with one generator
+        self.dimensions["UCBlock"]["NumberUnits"] += len(self._carrier_links)
+        self.dimensions["UCBlock"]["NumberElectricalGenerators"] += len(
+            self._carrier_links)
     
         self._dc_index = build_dc_index(n, links_before, links_after)
     
@@ -692,6 +744,9 @@ class Transformation:
                 unitblock_index = self._add_conversion_units(
                     n, generator_node, generator_owner, investment_meta,
                     unitblock_index)
+                unitblock_index = self._add_carrier_link_units(
+                    n, generator_node, generator_owner, investment_meta,
+                    unitblock_index)
     
             if components.empty:
                 continue
@@ -708,10 +763,10 @@ class Transformation:
     
             components_type = components.list_name
 
-            # all the links may be ConversionUnitBlocks, and then the network
-            # has none
+            # all the links may be units, and then the network has none
             if components_type == "links" and components_df.empty \
-                    and len(self._conversion_links):
+                    and len(self._conversion_links.union(
+                        self._carrier_links)):
                 continue
     
             use_investmentblock = (
@@ -913,6 +968,57 @@ class Transformation:
 
         return unitblock_index
 
+    def _add_carrier_link_units(self, n, generator_node, generator_owner,
+                                investment_meta, unitblock_index):
+        """
+        Adds an IntermittentUnitBlock for each link between carriers [see
+        carrier_unit_links()], whose power is p0 within the bounds of the
+        link and with its marginal cost, and its generator to the nodes and
+        owners of the generators of the UCBlock, on bus0; its outputs on the
+        carriers of its ports are written by convert_to_ucblock(). An
+        extendable one is an asset as an extendable generator is.
+
+        Returns
+        -------
+        int
+            The index of the next UnitBlock.
+        """
+        if self._carrier_links.empty:
+            return unitblock_index
+
+        links = n.links.loc[self._carrier_links]
+        # a link has no bound on the energy of the horizon
+        parameters = {
+            key: value
+            for key, value in self.config.IntermittentUnitBlock_parameters.items()
+            if key not in ("MinGeneration", "MaxGeneration")
+        }
+        attr_name = "IntermittentUnitBlock_parameters"
+        if not self.capacity_expansion_ucblock:
+            self.add_InvestmentBlock(n, links, "Link")
+        for name in links.index:
+            generator_node.append(int(n.buses.index.get_loc(
+                links.at[name, "bus0"])))
+            generator_owner.append(("links", name))
+            self.add_UnitBlock(attr_name, links.loc[[name]], n.links_t,
+                               "Link", n, name, unitblock_index,
+                               parameters=parameters)
+            block_name = get_block_name(attr_name, unitblock_index,
+                                        links.loc[[name]])
+            self.unitblocks[block_name]["component"] = "Link"
+            # its outputs, one per port
+            self.unitblocks[block_name]["ports"] = link_ports(n, name)
+            if is_extendable(links.loc[[name]], "Link", nominal_attrs):
+                investment_meta["index_extendable"].append(unitblock_index)
+                investment_meta["Blocks"].append(
+                    f"IntermittentUnitBlock_{unitblock_index}")
+                investment_meta["asset_type"].append(0)
+                self._store_unitblock_design_variable(attr_name,
+                                                      unitblock_index)
+            unitblock_index += 1
+
+        return unitblock_index
+
     ### 3b ###
     def add_pollutant_budget(self, n):
         """
@@ -1041,7 +1147,7 @@ class Transformation:
             or np.any(self._intermittent_module_size(n.links, "Link") > 0))
 
     ### 5 ###
-    def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
+    def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None, parameters=None):
         """
         Adds a unit block to the `unitblocks` dictionary for a given component.
 
@@ -1064,7 +1170,9 @@ class Transformation:
             Dictionary of transformed parameters for the component.
         """
         
-        if hasattr(self.config, attr_name):
+        if parameters is not None:
+            unitblock_parameters = parameters
+        elif hasattr(self.config, attr_name):
             unitblock_parameters = getattr(self.config, attr_name)
         else:
             print("Block not yet implemented") # TODO: Replace with logger
@@ -1593,8 +1701,60 @@ class Transformation:
             self.networkblock["Scenarios"][scenario_name].setdefault("Lines", {})
             target = self.networkblock["Scenarios"][scenario_name]["Lines"]
     
-        blocks = solution_block.blocks
-    
+        if self.multi_carrier:
+            self._read_carrier_network_lines(solution_block, target)
+        else:
+            self._read_network_lines(solution_block.blocks, target)
+
+    def _read_carrier_network_lines(self, solution_block, target):
+        """
+        Reads the flows of the lines of all the carriers, those of the
+        electricity from the solution of the UCBlock and those of a carrier
+        c from its group "Carrier_c", into the arrays over all the lines of
+        the network, in the order of LineName [see _line_layout()]; a carrier
+        whose flows are not in the solution has them at 0. The injections
+        are those of the electricity.
+        """
+        line_carrier, index = self._line_layout()
+        T = int(self.dimensions["UCBlock"]["TimeHorizon"])
+        flows = np.zeros((T, line_carrier.size))
+        design = np.asarray(self.networkblock.get("Design", {}).get(
+            "DesignLines", {}).get("value", []), dtype=int)
+        design_values = {}
+        for c in range(len(self._carriers)):
+            selected = np.flatnonzero(line_carrier == c)
+            if selected.size == 0:
+                continue
+            blocks = solution_block.blocks if c == 0 else getattr(
+                solution_block.blocks.get(f"Carrier_{c}"), "blocks", {})
+            local = {}
+            if c == 0 or blocks:
+                self._read_network_lines(blocks, local)
+            if c == 0:
+                target.update(local)
+            if "FlowValue" in local:
+                flows[:, selected] = np.atleast_2d(
+                    local["FlowValue"])[:, index[selected]]
+            if "DesignValue" in local:
+                # the design lines of the carrier, in the order of the
+                # network as those of all of them
+                values = np.atleast_1d(local["DesignValue"])
+                for k, j in enumerate(np.sort(design[line_carrier[design]
+                                                     == c])):
+                    design_values[j] = values[..., k]
+        target["FlowValue"] = flows
+        if design_values:
+            target["DesignValue"] = np.stack(
+                [design_values[j] for j in sorted(design_values)], axis=-1)
+
+    def _read_network_lines(self, blocks, target):
+        """
+        Reads FlowValue and NodeInjection (and DesignValue) of the
+        NetworkBlocks among `blocks` into `target`
+        [see parse_networkblock_lines()].
+        """
+        vars_of_interest = ("FlowValue", "NodeInjection")
+
         # --- Case 1: aggregated NetworkBlock -------------------------------------
         if "NetworkBlock" in blocks:
             block = blocks["NetworkBlock"]
@@ -2448,11 +2608,19 @@ class Transformation:
         # -----------------
         for name, variable in self.investmentblock.items():
             if name != 'Blocks':
+                value = variable['value']
+                # with the carriers, the lines of an asset are numbered one
+                # carrier after the other
+                if self.multi_carrier and name == "Assets":
+                    value = np.array(value).copy()
+                    lines = np.asarray(
+                        self.investmentblock["AssetType"]["value"]) == 1
+                    value[lines] = self._carrier_line_indices(value[lines])
                 kwargs[name] = Variable(
                     name,
                     variable['type'],
                     variable['size'],
-                    variable['value']
+                    value
                 )
     
         # -----------------
@@ -2534,6 +2702,12 @@ class Transformation:
             **ucblock_vars,
             **line_vars,
         }
+
+        # the nodes, the lines and the demand of the carriers other than the
+        # electricity are in their groups
+        carrier_blocks = {}
+        if self.multi_carrier:
+            block_kwargs, carrier_blocks = self._split_carriers(block_kwargs)
     
         # -----------------
         # Add UCBlock itself
@@ -2544,6 +2718,18 @@ class Transformation:
             id=f"{index_id}",
             **block_kwargs,
         )
+
+        if self.multi_carrier:
+            ucblock = master.blocks[name_id]
+            ucblock.add_dimension("NumberCarriers", len(self._carriers))
+            ucblock.add_variable("CarrierName", "str", ("NumberCarriers",),
+                                 np.array(self._carriers, dtype=object))
+            ucblock.add_variable(
+                "GeneratorNode", "int",
+                ("NumberElectricalGenerators", "NumberCarriers"),
+                self._generator_carrier_nodes())
+            for c, carrier_block in carrier_blocks.items():
+                ucblock.add_block(f"Carrier_{c}", block=carrier_block)
 
         # -----------------
         # Pollutant budget, added to the Block directly
@@ -2625,6 +2811,9 @@ class Transformation:
                     shut_down_cost.dimensions, shut_down_cost.data,
                 )
 
+            if self.multi_carrier:
+                self._add_unit_outputs(unit_block_obj, ub_name, unit_block)
+
             # Attach to UCBlock
             master.blocks[name_id].add_block(
                 unit_block["enumerate"],
@@ -2642,6 +2831,308 @@ class Transformation:
         return master
     
     
+    def _demand_bus_order(self, n):
+        """
+        The buses in the order of the nodes of the demand: None for that of
+        n.buses, or with the carriers that of UCBlock::set_energy_demand, the
+        nodes of the electricity first and then those of each other carrier.
+        """
+        if not self.multi_carrier:
+            return None
+        # the buses of a stochastic network are indexed by scenario too
+        buses = dict.fromkeys(n.buses.index.get_level_values(-1))
+        return sorted(buses, key=lambda bus: self._bus_node[bus])
+
+    def _line_layout(self):
+        """
+        The carrier of each line of the network (in the order of LineName)
+        and its index among the lines of its carrier; the links between two
+        carriers being units, each line joins two nodes of one carrier. A
+        hyperarc must be one of the electricity.
+
+        Returns
+        -------
+        tuple of numpy.ndarray
+            The carriers and the indices.
+        """
+        if self._line_layout_cache is not None:
+            return self._line_layout_cache
+        number_lines = int(self.dimensions["UCBlock"].get("NumberLines", 0))
+        if number_lines == 0:
+            self._line_layout_cache = (np.zeros(0, dtype=int),
+                                       np.zeros(0, dtype=int))
+            return self._line_layout_cache
+        variables = self.networkblock["Lines"]["variables"]
+        start = np.ravel(np.asarray(variables["StartLine"]["value"],
+                                    dtype=int))
+        end = np.ravel(np.asarray(variables["EndLine"]["value"], dtype=int))
+        carrier = np.array([c for c, _ in self._bus_node.values])
+        if np.any(carrier[start] != carrier[end]):
+            raise ValueError(
+                "multi_carrier: a line joins two carriers, while it should "
+                "be a unit.")
+        if start.size != number_lines:
+            # hyperarcs, whose branches all go to the electricity
+            if np.any(carrier[start] != 0):
+                raise ValueError(
+                    "multi_carrier: a hyperarc of a carrier other than the "
+                    "electricity is not translated.")
+            line_carrier = np.zeros(number_lines, dtype=int)
+        else:
+            line_carrier = carrier[start]
+        index = np.zeros(number_lines, dtype=int)
+        for c in np.unique(line_carrier):
+            index[line_carrier == c] = np.arange(
+                int((line_carrier == c).sum()))
+        self._line_layout_cache = (line_carrier, index)
+        return self._line_layout_cache
+
+    def _carrier_line_indices(self, lines):
+        """
+        The indices of the given lines of the network in the UCBlock, where
+        the lines of the carriers are numbered one carrier after the other,
+        those of the electricity first (as the assets of an InvestmentFunction
+        are).
+        """
+        line_carrier, index = self._line_layout()
+        lines = np.asarray(lines, dtype=int)
+        first = np.concatenate(([0], np.cumsum(np.bincount(
+            line_carrier, minlength=len(self._carriers)))))
+        return (first[line_carrier[lines]] + index[lines]).astype(
+            lines.dtype if lines.size else int)
+
+    def _generator_ports(self):
+        """
+        The buses of each generator of the UCBlock: that of its node, or
+        the ports of the link if it is the generator of a link between
+        carriers.
+        """
+        if getattr(self, "_generator_ports_cache", None) is not None:
+            return self._generator_ports_cache
+        buses = self._bus_node.index
+        nodes = np.asarray(self.ucblock_variables["generator_node"]["value"],
+                           dtype=int)
+        link_ports = {u["name"]: [bus for bus, _ in u["ports"]]
+                      for u in self.unitblocks.values() if "ports" in u}
+        ports = []
+        for g, (kind, name) in enumerate(self._generator_owner):
+            if kind == "links" and name in link_ports:
+                ports.append(link_ports[name])
+            else:
+                ports.append([buses[nodes[g]]])
+        self._generator_ports_cache = ports
+        return ports
+
+    def _generator_carrier_nodes(self):
+        """
+        GeneratorNode with the carriers: the node of each generator on each
+        carrier, -1 where it has none.
+        """
+        ports = self._generator_ports()
+        table = -np.ones((len(ports), len(self._carriers)), dtype=int)
+        for g, buses in enumerate(ports):
+            for bus in buses:
+                c, node = self._bus_node[bus]
+                table[g, c] = node
+        return table
+
+    def _add_unit_outputs(self, block, name, unit_block):
+        """
+        Adds to the Block of the unit `name` its outputs [see
+        UnitBlock::get_output_carrier()]: one on the carrier of each port of
+        a link between carriers, with its efficiency, and otherwise one with
+        efficiency 1 on the carrier of the node of its generators, given per
+        generator if they are not all on the same carrier (the ports of a
+        ConversionUnitBlock); a unit whose generators are all on the
+        electricity has the default output and nothing is written.
+        """
+        T = int(self.dimensions["UCBlock"]["TimeHorizon"])
+        if "ports" in unit_block:
+            ports = unit_block["ports"]
+            block.add_dimension("NumberOutputs", len(ports))
+            block.add_variable(
+                "OutputCarrier", "str", ("NumberOutputs",),
+                np.array([self._carriers[self._bus_node[bus][0]]
+                          for bus, _ in ports], dtype=object))
+            block.add_variable(
+                "OutputEfficiency", "float", ("TimeHorizon", "NumberOutputs"),
+                np.column_stack([np.broadcast_to(eff, (T,))
+                                 for _, eff in ports]))
+            return
+
+        if not hasattr(self, "_unit_generators"):
+            # the generators of each unit, which are numbered unit after unit
+            owners = self._generator_owner
+            self._unit_generators = {}
+            g = 0
+            for key in self.unitblocks:
+                if key.startswith("DCNetworkBlock"):
+                    continue
+                first = g
+                while g < len(owners) and owners[g] == owners[first]:
+                    g += 1
+                self._unit_generators[key] = list(range(first, g))
+        ports = self._generator_ports()
+        carriers = [self._bus_node[ports[g][0]][0]
+                    for g in self._unit_generators[name]]
+        if not any(carriers):
+            return
+        block.add_dimension("NumberOutputs", 1)
+        if len(set(carriers)) == 1:
+            block.add_variable(
+                "OutputCarrier", "str", ("NumberOutputs",),
+                np.array([self._carriers[carriers[0]]], dtype=object))
+            block.add_variable("OutputEfficiency", "float",
+                               ("TimeHorizon", "NumberOutputs"),
+                               np.ones((T, 1)))
+            return
+        if "NumberGenerators" not in block.dimensions:
+            block.add_dimension("NumberGenerators", len(carriers))
+        block.add_variable(
+            "OutputCarrier", "str", ("NumberGenerators", "NumberOutputs"),
+            np.array([[self._carriers[c]] for c in carriers], dtype=object))
+        block.add_variable(
+            "OutputEfficiency", "float",
+            ("TimeHorizon", "NumberGenerators", "NumberOutputs"),
+            np.ones((T, len(carriers), 1)))
+
+    def _split_carriers(self, kwargs):
+        """
+        Splits the nodes, the demand and the lines of the UCBlock among the
+        carriers: those of the electricity stay in `kwargs`, with the lines
+        and the nodes numbered among them, those of each other carrier c go
+        to the Block of its group "Carrier_c", the demand being its
+        "EnergyDemand".
+
+        Returns
+        -------
+        tuple
+            The keyword arguments of the UCBlock and the Block of each
+            carrier other than the electricity, by carrier.
+        """
+        kwargs = dict(kwargs)
+        kwargs.pop("GeneratorNode", None)
+        carrier = np.array([c for c, _ in self._bus_node.values])
+
+        # one network for the whole horizon only if the electricity has
+        # extendable lines [see _carrier_design_networks()]
+        if "NumberNetworks" in kwargs and self.capacity_expansion_ucblock:
+            line_carrier, _ = self._line_layout()
+            design = np.asarray(self.networkblock["Design"]["DesignLines"]
+                                ["value"], dtype=int)
+            if not np.any(line_carrier[design] == 0):
+                del kwargs["NumberNetworks"]
+        node = np.array([k for _, k in self._bus_node.values])
+        blocks = {c: Block() for c in range(1, len(self._carriers))}
+
+        def dims_of(var):
+            d = var.dimensions
+            return (d,) if isinstance(d, str) else tuple(d)
+
+        # the nodes and their demand
+        demand = kwargs["ActivePowerDemand"]
+        values = np.asarray(demand.data, dtype=float)
+        kwargs["NumberNodes"] = int((carrier == 0).sum())
+        kwargs["ActivePowerDemand"] = Variable(
+            demand.name, demand.var_type, dims_of(demand),
+            values[carrier == 0])
+        for c, block in blocks.items():
+            block.add_dimension("NumberNodes", int((carrier == c).sum()))
+            block.add_variable("EnergyDemand", demand.var_type,
+                               dims_of(demand), values[carrier == c])
+        if "NodeName" in kwargs:
+            names = np.asarray(kwargs["NodeName"].data, dtype=object)
+            kwargs["NodeName"] = Variable(
+                "NodeName", kwargs["NodeName"].var_type, ("NumberNodes",),
+                names[carrier == 0])
+
+        # the lines; a network of more than one node has their number even
+        # if it has none, as that of the electricity
+        line_carrier, _ = self._line_layout()
+        for c, block in blocks.items():
+            if (carrier == c).sum() > 1 and not np.any(line_carrier == c):
+                block.add_dimension("NumberLines", 0)
+        if line_carrier.size == 0:
+            return kwargs, blocks
+        originals = {key: var for key, var in kwargs.items()
+                     if isinstance(var, Variable)
+                     and "NumberLines" in dims_of(var)}
+        for c in range(len(self._carriers)):
+            selected = np.flatnonzero(line_carrier == c)
+            if c == 0:
+                kwargs["NumberLines"] = int(selected.size)
+            elif selected.size:
+                blocks[c].add_dimension("NumberLines", int(selected.size))
+            else:
+                continue
+            extra_dims = set()
+            for key, var in originals.items():
+                dims = dims_of(var)
+                data = np.take(np.asarray(var.data), selected,
+                               axis=dims.index("NumberLines"))
+                # the nodes of the lines, numbered in their carrier
+                if key in ("StartLine", "EndLine"):
+                    data = node[data.astype(int)].astype(data.dtype)
+                if c == 0:
+                    if selected.size:
+                        kwargs[key] = Variable(key, var.var_type, dims, data)
+                    else:
+                        del kwargs[key]
+                else:
+                    blocks[c].add_variable(key, var.var_type, dims, data)
+                    extra_dims.update(d for d in dims if d not in (
+                        "NumberLines", "NumberNodes", "TimeHorizon"))
+            # the dimensions of the network data are read in its group
+            for d in sorted(extra_dims):
+                blocks[c].add_dimension(d, int(kwargs[d]))
+        # the branches of hyperarcs, all of the electricity [see
+        # _line_layout()]
+        for key in ("StartLine", "EndLine"):
+            var = kwargs.get(key)
+            if isinstance(var, Variable) and key not in originals:
+                data = np.asarray(var.data)
+                kwargs[key] = Variable(key, var.var_type, dims_of(var),
+                                       node[data.astype(int)].astype(
+                                           data.dtype))
+        return kwargs, blocks
+
+    def _carrier_design_networks(self, ucblock, design_kwargs):
+        """
+        Adds, for each carrier with extendable lines, the DesignNetworkBlock
+        of its network, the only one covering the whole horizon: that of the
+        electricity in the UCBlock, those of the other carriers in their
+        groups "Carrier_c" [see UCBlock::deserialize()]. The data of the
+        design lines are those of `design_kwargs`, split among the carriers,
+        and the lines are numbered within their carrier.
+        """
+        line_carrier, index = self._line_layout()
+        lines = np.asarray(design_kwargs["DesignLines"].data, dtype=int)
+        for c in np.unique(line_carrier[lines]):
+            selected = np.flatnonzero(line_carrier[lines] == c)
+            kwargs = {}
+            for key, var in design_kwargs.items():
+                if not isinstance(var, Variable):
+                    kwargs[key] = var
+                    continue
+                dims = ((var.dimensions,) if isinstance(var.dimensions, str)
+                        else tuple(var.dimensions))
+                data = np.asarray(var.data)
+                if "NumberDesignLines" in dims:
+                    data = np.take(data, selected,
+                                   axis=dims.index("NumberDesignLines"))
+                if key == "DesignLines":
+                    data = index[lines[selected]].astype(data.dtype)
+                kwargs[key] = Variable(key, var.var_type, dims, data)
+            kwargs["NumberDesignLines"] = int(selected.size)
+            design_block = Block().from_kwargs(
+                block_type="DesignNetworkBlock", **kwargs)
+            if c == 0:
+                ucblock.add_block("NetworkBlock_0", block=design_block)
+            else:
+                carrier = ucblock.blocks[f"Carrier_{c}"]
+                carrier.add_dimension("NumberNetworks", 1)
+                carrier.add_block("NetworkBlock_0", block=design_block)
+
     def convert_to_designnetworkblock(self, master, ucblock_name):
         """
         Optionally adds a DesignNetworkBlock inside the UCBlock, used when
@@ -2688,6 +3179,13 @@ class Transformation:
         # Add dimensions (from investmentblock)
         for dim_name, dim_value in self.dimensions['InvestmentBlock'].items():
             design_kwargs[dim_name] = dim_value
+
+        # with the carriers, the design lines of each carrier are in the
+        # DesignNetworkBlock of its network
+        if self.multi_carrier:
+            self._carrier_design_networks(master.blocks[ucblock_name],
+                                          design_kwargs)
+            return
     
     
         # Create the DesignNetworkBlock
@@ -3032,7 +3530,8 @@ class Transformation:
                         f"Unsupported UCBlock stochastic parameter {parameter!r}."
                     )
     
-                dss_parts.append(build_dss_demand(n))
+                dss_parts.append(build_dss_demand(
+                    n, bus_order=self._demand_bus_order(n)))
                 continue
     
             if mapping_kind == "unitblock_timeseries":
@@ -3225,6 +3724,15 @@ class Transformation:
         }
         
         network_block_index = len(self.unitblocks)
+
+        if self.multi_carrier and investment_meta["design_lines"]:
+            self.design_variables = calculate_design_variables(
+                investment_meta={"design_lines": []},
+                unitblock_design_data=self.unitblock_design_data,
+                network_block_index=network_block_index,
+            ) + self._carrier_design_variables(
+                investment_meta["design_lines"], network_block_index)
+            return self.design_variables
     
         self.design_variables = calculate_design_variables(
             investment_meta=investment_meta,
@@ -3232,6 +3740,44 @@ class Transformation:
             network_block_index=network_block_index,
         )
         return self.design_variables
+
+    def _carrier_design_variables(self, design_lines, first_network):
+        """
+        The design variables of the extendable lines with the carriers, in
+        the order of the lines of the network: that of a line of carrier c
+        is in the DesignNetworkBlock of the carrier [see
+        _carrier_design_networks()], at the position of the line among the
+        design lines of the carrier. The NetworkBlock of the UCBlock follow
+        its units, those of the electricity first and then those of each
+        other carrier: one with a design, as many as the instants if it has
+        more than one node, none otherwise.
+        """
+        line_carrier, _ = self._line_layout()
+        design_lines = np.asarray(design_lines, dtype=int)
+        bus_carrier = np.array([c for c, _ in self._bus_node.values])
+        T = int(self.dimensions["UCBlock"]["TimeHorizon"])
+        block_index = []
+        index = first_network
+        for c in range(len(self._carriers)):
+            block_index.append(index)
+            if np.any(line_carrier[design_lines] == c):
+                index += 1
+            elif (bus_carrier == c).sum() > 1:
+                index += T
+        positions = {}
+        variables = []
+        for line in design_lines:
+            c = int(line_carrier[line])
+            position = positions.get(c, 0)
+            positions[c] = position + 1
+            variables.append({
+                "block_index": int(block_index[c]),
+                "var_name": "x_network",
+                "component_type": "network",
+                "element_index": position,
+                "range_index": position + 1,
+            })
+        return variables
 
     
     def build_tssb_stochastic_block(self, n):
@@ -3267,6 +3813,11 @@ class Transformation:
                         set_from_start=offset["start"],
                         set_from_end=offset["end"],
                         scenario_size=offset["size"],
+                        # with the carriers, the demand of all their nodes
+                        function_name=(
+                            "UCBlock::set_energy_demand"
+                            if self.multi_carrier else
+                            spec["function_name"]),
                     )
                 )
                 continue
