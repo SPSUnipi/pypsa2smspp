@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, Tuple
 from pathlib import Path
+import pypsa
 
 import pypsa2smspp.stochastic_utils as su
 from pypsa2smspp.constants import STOCHASTIC_PARAMETER_REGISTRY
@@ -1638,7 +1639,7 @@ def build_sddp_benders_function_data(
     )
 
     # Costruiamo ConstraintSide
-    # 'R' = Right-hand side: il volume iniziale del bacino entra
+    # il volume iniziale del bacino entra
     # nel lato destro del proprio vincolo di bilancio idrico
     # (v_0 + flussi = V_init + inflow_0).
     constraint_sides = np.array(
@@ -1929,7 +1930,7 @@ def build_sddp_demand_mappings(
 
     Parameters
     ----------
-    numer_nodes: int
+    number_nodes: int
         NumberNodes del UCBlock -> Quanti nodi ci sono
     time_horizon: int
         TimeHorizon dello stage -> Quanti snapshot per stage

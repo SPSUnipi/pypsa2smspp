@@ -1,0 +1,107 @@
+PS C:\Users\bianc\tesi_progetto\pypsa2smspp> python test_sddp_creation.py --trim-hydro
+======================================================================
+Caricamento rete
+======================================================================
+WARNING:pypsa.network.io:Importing network from PyPSA version v1.1.0 while current version is v1.2.0. Read the release notes at `https://go.pypsa.org/release-notes` to prepare your network for import.
+INFO:pypsa.network.io:New version 1.4.0 available! (Current: 1.2.0)
+INFO:pypsa.network.io:Imported network 'Unnamed Network' has buses, carriers, generators, links, loads, storage_units, stores, sub_networks
+Snapshots:      100
+has_scenarios:  True
+scenarios:      ['scenario_001', 'scenario_002', 'scenario_003']
+Buses:          45
+Generators:     36
+StorageUnits:   12
+Stores:         36
+Links:          93
+Loads:          6
+Hydro/PHS:      12 storage unit
+[trim] Rimuovo 9 storage unit:
+       - ('scenario_001', 'IT0 0 PHS')
+       - ('scenario_001', 'IT1 0 PHS')
+       - ('scenario_001', 'IT1 0 hydro')
+       - ('scenario_002', 'IT0 0 PHS')
+       - ('scenario_002', 'IT1 0 PHS')
+       - ('scenario_002', 'IT1 0 hydro')
+       - ('scenario_003', 'IT0 0 PHS')
+       - ('scenario_003', 'IT1 0 PHS')
+       - ('scenario_003', 'IT1 0 hydro')
+
+[trim] Stato dopo il trim:
+       scenario_001: ['IT0 0 hydro']
+       scenario_002: ['IT0 0 hydro']
+       scenario_003: ['IT0 0 hydro']
+
+======================================================================
+Creazione modello SDDP
+======================================================================
+[START] consistency_check
+[ OK  ] consistency_check (0.000s)
+[START] direct
+[ OK  ] direct (1.249s)
+[START] prepare_tssb_interface
+[ OK  ] prepare_tssb_interface (0.000s)
+[START] prepare_sddp_interface
+[SDDP] Generando Block_0.nc4 per stage_0 (25 snapshot)
+[SDDP] Generando Block_1.nc4 per stage_1 (25 snapshot)
+[SDDP] Generando Block_2.nc4 per stage_2 (25 snapshot)
+[SDDP] Generando Block_3.nc4 per stage_3 (25 snapshot)
+[ OK  ] prepare_sddp_interface (7.641s)
+[START] convert_to_blocks
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 0 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_0.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 1 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_1.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 2 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_2.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 3 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_3.nc4 treated as attribute.
+  warnings.warn(
+[ OK  ] convert_to_blocks (0.208s)
+
+======================================================================
+Riepilogo
+======================================================================
+SMSNetwork creata correttamente.
+Blocchi top-level: ['Block_0']
+
+Stadi (4): ['stage_0', 'stage_1', 'stage_2', 'stage_3']
+Parametri stocastici: ['demand', 'hydro_inflow']
+TimeHorizon per stage: {'stage_0': 25, 'stage_1': 25, 'stage_2': 25, 'stage_3': 25}
+
+Scenari: 3, scenario_size = 1600
+State info: {'state_size': 1, 'initial_state': array([-1.]), 'admissible_state': array([-1., -1., -1., -1.])}
+
+Dimensioni SDDPBlock:
+  TimeHorizon: 4
+  NumSubBlocksPerStage: 1
+  NumberScenarios: 3
+  ScenarioSize: 1600
+  SubScenarioSize: 400
+  NumberRandomDataGroups: 2
+  SizeRandomDataGroups: [375, 25]
+  AdmissibleStateSize: 4
+  InitialStateSize: 1
+  StateSize: 1
+  InitialState: array shape=(1,), dtype=float64
+  AdmissibleState: array shape=(4,), dtype=float64
+
+  OK: numero stadi (4) coerente.
+
+======================================================================
+File prodotti in C:\Users\bianc\tesi_progetto\pypsa2smspp\test_sddp_workdir:
+======================================================================
+  Block_0.nc4                         188.0 KB
+  Block_1.nc4                         188.0 KB
+  Block_2.nc4                         188.0 KB
+  Block_3.nc4                         188.0 KB
+  SDDPBlock_test_sddp.nc4             127.5 KB
+
+NOTA: il file SDDPBlock_*.nc4 fa riferimento ai Block_i.nc4 con path
+relativi. Se lo sposti, i riferimenti si rompono. Tienili insieme.

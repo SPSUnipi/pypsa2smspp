@@ -1622,9 +1622,6 @@ class Transformation:
             A PyPSA network instance from which the data will be extracted.
         """
         if self.problem_structure.get("is_stochastic", False):
-            if self.problem_structure.get("stochastic_type") == "sddp":
-                self._inverse_transformation_sddp(objective_smspp, n)
-
             self._inverse_transformation_stochastic(objective_smspp, n)
         else:
             self._inverse_transformation_deterministic(objective_smspp, n)
@@ -3367,7 +3364,7 @@ class Transformation:
         # Costruiamo lo UCBlock dentro sn
         # Internamente ogni blocco è nominato Block_0
         # Il nome esterno è quello che cambia
-        sub.convert_to_ucblock(sn, index_id=0, name_id="Block_0", wrap_hydro_in_system=True)
+        sub.convert_to_ucblock(sn, index_id=stage_idx, name_id="Block_0", wrap_hydro_in_system=True)
 
         # Salviamo su disco
         path = workdir / f"Block_{stage_idx}.nc4"
