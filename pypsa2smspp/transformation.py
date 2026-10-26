@@ -363,6 +363,10 @@ class Transformation:
         self.tssb_data = None
         self.design_variables = []
         self.stochastic_parameters = dict(stochastic_parameters or {})
+        # Default per la frazione di MaxVolumetric usata come V0 in SDDP.
+        # Se l'utente passa "initial_state_fraction" in stochastic_parameters,
+        # prepare_sddp_interface lo sovrascrive
+        self.sddp_initial_state_fraction = 0.5
         self.unitblock_design_data = []
 
         self.sddp_data = None
@@ -3357,7 +3361,109 @@ class Transformation:
         if len(n_stage.storage_units) != 0:
             n_stage.storage_units['snapshots_weighting'] = n_stage.snapshot_weightings['stores'].iloc[0]
 
+        # HydroUnitBlock::set_initial_volume lancia std::invalid_argument se
+        # InitialVolumetric < 0, quindi il Block_i.nc4 non può contenere la
+        # sentinella ciclica -1. Forziamo sulla rete slicizzata:
+        #   - cyclic_state_of_charge = False  (così la lambda non emette -1)
+        #   - state_of_charge_initial = V0    (>= 0)
+        # con V0 = fraction * p_nom * max_hours = fraction * MaxVolumetric.
+        hydro_carriers = {"hydro", "phs"}
+
+        if not n_stage.storage_units.empty:
+            # carriers delle storage unit, normalizzati (strip + lower) per
+            # confrontarli con hydro_carriers senza sorprese da spazi/maiuscole
+            carriers = (
+                n_stage.storage_units["carrier"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+            hydro_mask = carriers.isin(hydro_carriers)
+
+            if hydro_mask.any():
+                # Frazione letta da self (default 0.5 se non passata dall'utente)
+                fraction = getattr(self, "sddp_initial_state_fraction", 0.5)
+
+                # Itera sulle storage unit idro dello stage (rete deterministica,
+                # quindi Index semplice, non MultiIndex)
+                for name, row in n_stage.storage_units[hydro_mask].iterrows():
+                    # p_nom può essere NaN se la rete è malformata: in quel caso
+                    # usiamo 0 (V0 = 0 è ammissibile perché MinVolumetric = 0)
+                    p_nom = row["p_nom"]
+                    p_nom = 0.0 if pd.isna(p_nom) else float(p_nom)
+
+                    # max_hours è l'altro fattore di MaxVolumetric. Se NaN o <= 0
+                    # la capacità dell'invaso è 0, quindi anche V0 = 0.
+                    max_hours = row["max_hours"]
+                    if pd.isna(max_hours) or float(max_hours) <= 0:
+                        v0 = 0.0
+                    else:
+                        v0 = fraction * p_nom * float(max_hours)
+
+                    # Disattiva la sentinella ciclica: la lambda in
+                    # transformation_config.py restituisce -1 SOLO se
+                    # cyclic_state_of_charge è True. Mettendola a False, la
+                    # lambda restituisce state_of_charge_initial.values, cioè v0.
+                    n_stage.storage_units.loc[name, "cyclic_state_of_charge"] = False
+
+                    # Imposta il volume iniziale numerico. La lambda farà:
+                    # InitialVolumetric = state_of_charge_initial.values
+                    # che è esattamente v0.
+                    n_stage.storage_units.loc[name, "state_of_charge_initial"] = v0
+
         sub.direct(n_stage)
+
+        # Forma di MaxVolumetric, MinVolumetric, InitialVolumetric
+
+        _hydro_params_to_patch = (
+            "MaxVolumetric",
+            "MinVolumetric",
+            "InitialVolumetric",
+        )
+
+        for _ub_name, _ub in sub.unitblocks.items():
+            if _ub.get("block") != "HydroUnitBlock":
+                continue
+
+            _n_res = int(
+                _ub.get("dimensions", {}).get("NumberReservoirs", 1)
+            )
+            if _n_res < 1:
+                raise ValueError(
+                    f"{_ub_name}: NumberReservoirs = {_n_res} non valido."
+                )
+
+            for _param in _hydro_params_to_patch:
+                if _param not in _ub["variables"]:
+                    continue
+
+                _var = _ub["variables"][_param]
+                _arr = np.asarray(_var["value"], dtype=float).reshape(-1)
+
+                if _arr.size == 0:
+                    raise ValueError(
+                        f"{_ub_name}/{_param}: valore vuoto, impossibile "
+                        "determinare il volume rappresentativo."
+                    )
+
+                if _arr.size == _n_res:
+                    _new_value = _arr
+                else:
+                    # Valore costante nel tempo: prendiamo il primo e
+                    # broadcast su n_res posizioni.
+                    if _arr.size > 1 and not np.allclose(_arr, _arr[0]):
+                        warnings.warn(
+                            f"{_ub_name}/{_param}: valore non costante nel "
+                            f"tempo (size={_arr.size}), verrà sostituito dal "
+                            f"primo elemento {_arr[0]}."
+                        )
+                    _new_value = np.full(_n_res, _arr[0], dtype=float)
+
+                _ub["variables"][_param] = {
+                    "value": _new_value,
+                    "type": "float",
+                    "size": ("NumberReservoirs",),
+                }
 
         sn = SMSNetwork(file_type=SMSFileType.eBlockFile)
 
@@ -3467,6 +3573,11 @@ class Transformation:
 
         # Normalizziamo subito i parametri
         sddp_parameters = mu.normalize_sddp_parameters(self.stochastic_parameters)
+
+        # Propaga la frazione validata sull'istanza, così _generate_stage_ucblock può leggerla
+        self.sddp_initial_state_fraction = float(
+            sddp_parameters["initial_state_fraction"]
+        )
 
         # Otteniamo i nomi degli stadi
         stage_names = mu.get_sddp_stage_names(n, sddp_parameters)

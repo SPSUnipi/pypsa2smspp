@@ -16,8 +16,12 @@ from pathlib import Path
 
 import numpy as np
 import pypsa
+import pypsa2smspp
+import pysmspp
+import netCDF4
 
 from pypsa2smspp.transformation import Transformation
+from pypsa2smspp.multistage_utils import parse_block_structure
 
 # ================================================================
 # Configurazione
@@ -196,6 +200,25 @@ def main():
         sys.exit(1)
 
     # ---------- riepilogo ----------
+    struct = parse_block_structure("test_sddp_workdir/Block_0.nc4")
+    print("polyhedral_index:", struct["polyhedral_index"])
+    for h in struct["hydro_unit_blocks"]:
+        print(f"  index={h['index']}, name={h['name']!r}")
+
+    with netCDF4.Dataset("test_sddp_workdir/Block_0.nc4", "r") as ds:
+        hub = ds.groups["Block_0"].groups["UnitBlock_0"].groups["HydroUnitBlock_0"]
+        for name in ["MaxVolumetric", "MinVolumetric", "InitialVolumetric", "Inflows"]:
+            v = hub.variables[name]
+            print(f"{name}: dims={v.dimensions}, shape={v.shape}, value={v[:]}")
+
+    sddp = pysmspp.SMSNetwork("test_sddp_workdir/SDDPBlock_test_sddp.nc4")
+    sb0 = sddp.blocks["Block_0"].blocks["StochasticBlock_0"]
+    ap = sb0.blocks["Block"].blocks["BendersBFunction"].blocks["AbstractPath"]
+    print("PathGroupIndices:", ap.variables["PathGroupIndices"].data)
+
+    se = sb0.variables["SetElements"].data
+    print("Ultimi 8 SetElements:", se[-8:])
+
     print("\n" + "=" * 70)
     print("Riepilogo")
     print("=" * 70)

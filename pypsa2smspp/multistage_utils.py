@@ -34,6 +34,7 @@ def normalize_sddp_parameters(
             "top_path": {
                 "K": 1,
             },
+            "initial_state_fraction": 0.5,
         }
 
     L'utente fornisce solo il numero di snapshot per stadio
@@ -148,11 +149,31 @@ def normalize_sddp_parameters(
             "solo K=1 è coerente con la struttura prodotta."
         )
 
+    # Validazione initial_state_fraction
+    # Frazione di MaxVolumetric usata come volume iniziale nei Block_i.nc4.
+    # Default 0.5 (= metà della capacità dell'invaso). Deve stare in [0, 1].
+    initial_state_fraction = sp.get("initial_state_fraction", 0.5)
+
+    # bool è sottoclasse di int, quindi lo escludiamo esplicitamente
+    if isinstance(initial_state_fraction, bool) or not isinstance(
+            initial_state_fraction, (int, float)):
+        raise ValueError(
+            f"'initial_state_fraction' deve essere un numero, ricevuto "
+            f"{type(initial_state_fraction).__name__} ({initial_state_fraction!r})."
+        )
+
+    if not (0.0 <= float(initial_state_fraction) <= 1.0):
+        raise ValueError(
+            f"'initial_state_fraction' deve essere in [0, 1], ricevuto "
+            f"{initial_state_fraction}."
+        )
+
     return {
         "stochastic_type": "sddp",
         "parameters": parameters,
         "snapshots_per_stage": snapshots_per_stage,
         "top_path": {"K": int(top_path["K"])},
+        "initial_state_fraction": float(initial_state_fraction),
     }
 
 
@@ -2167,46 +2188,61 @@ def build_sddp_intermittent_mappings(
 def build_sddp_benders_mapping(
         *,
         dss_start: int,
+        n_reservoirs: int,
+        time_horizon: int,
 ) -> Dict[str, Any]:
     """
-    Costruisce il data mapping per la BendersBFunction di uno stage SDDP.
+    Data mapping per la BendersBFunction di uno stage SDDP.
 
-    Restituisce un singolo dizionario, non una lista. Il mapping modifica
-    il termine costante della BendersBFunction leggendo un valore dal
-    vettore di scenario dello stage.
+    Per N serbatoi, legge il primo valore (t=0) della serie di inflow di
+    ciascun serbatoio dal vettore di scenario e lo scrive in b[0..N-1].
 
-    Struttura:
-        SetFrom = Subset {dss_start}
-        SetTo   = Subset {0}
-        Path    = "O"  (l'Objective del BendersBlock)
+    Layout del vettore di scenario per il parametro hydro_inflow:
+      [ r0_t0, r0_t1, ..., r0_t(T-1), r1_t0, r1_t1, ..., r1_t(T-1), ... ]
+    quindi il primo valore del reservoir k è a dss_start + k*T (passo T,
+    non 1).
 
     Parameters
     ----------
     dss_start : int
-        Offset del valore da leggere nel vettore di scenario dello stage.
+        Offset del primo valore di inflow nel vettore di scenario.
+    n_reservoirs : int
+        Numero di serbatoi da mappare (>= 1).
+    time_horizon : int
+        Numero di snapshot per stage (= lunghezza della serie di inflow
+        di un singolo serbatoio).
 
     Returns
     -------
     dict
-        Il data mapping per la BendersBFunction.
+        Data mapping per BendersBFunction.
     """
-    # Verifichiamo l'input dato
     if dss_start < 0:
-        raise ValueError(
-            f"{dss_start} deve essere maggiore o uguale ad 0"
-        )
+        raise ValueError(f"dss_start deve essere >= 0, ricevuto {dss_start}")
+    if n_reservoirs < 1:
+        raise ValueError(f"n_reservoirs deve essere >= 1, ricevuto {n_reservoirs}")
+    if time_horizon < 1:
+        raise ValueError(f"time_horizon deve essere >= 1, ricevuto {time_horizon}")
+
+    # SetFrom: primo valore (t=0) della serie di inflow di ciascun serbatoio.
+    # I serbatoi sono contigui nel DSS, ognuno con T valori → passo T.
+    set_from_elements = [
+        dss_start + k * time_horizon for k in range(n_reservoirs)
+    ]
+    # SetTo: b[0], b[1], ..., b[N-1]
+    set_to_elements = list(range(n_reservoirs))
 
     return {
         "target": "benders",
         "function_name": "BendersBFunction::modify_constants",
         "caller": "F",
         "data_type": "D",
-        "set_size": [1, 1],
-        "set_elements": [dss_start, 0],
+        "set_size": [n_reservoirs, n_reservoirs],
+        "set_elements": set_from_elements + set_to_elements,
         "abstract_paths": [
             {
                 "node_types": "O",
-                "group_indices": [0xFFFFFFFF], # Valore maschera che il builder usa per i nodi O
+                "group_indices": [0xFFFFFFFF],
                 "element_indices": [None],
                 "range_indices": [None],
             }
@@ -2370,16 +2406,6 @@ def build_sddp_stochastic_block(
     hydro_units = structure.get("hydro_unit_blocks", [])
     n_reservoirs_total = sum(int(h["n_reservoirs"]) for h in hydro_units)
 
-    if n_reservoirs_total > 1:
-        raise NotImplementedError(
-            f"Il benders mapping supporta solo 1 serbatoio in totale, "
-            f"ma la struttura ne ha {n_reservoirs_total}. Il DataMapping "
-            "BendersBFunction::modify_constants ha SetFrom di cardinalità 1 "
-            "e SetTo di cardinalità 1, quindi legge un solo valore e lo "
-            "scrive in b[0]. Con più serbatoi servirebbero più mapping o "
-            "un mapping con SetFrom di cardinalità > 1: non implementato."
-        )
-
     if n_reservoirs_total > 0:
         if "hydro_inflow" not in dss_offsets:
             raise ValueError(
@@ -2395,7 +2421,9 @@ def build_sddp_stochastic_block(
             )
         data_mappings.append(
             build_sddp_benders_mapping(
-                dss_start=int(dss_offsets["hydro_inflow"]["start"])
+                dss_start=int(dss_offsets["hydro_inflow"]["start"]),
+                n_reservoirs=n_reservoirs_total,
+                time_horizon=time_horizon,
             )
         )
     # Se n_reservoirs_total == 0, non c'è stato da propagare e il
