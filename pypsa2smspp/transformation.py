@@ -2287,6 +2287,25 @@ class Transformation:
         )
         return master
 
+    def _hydro_first_order(self, owners):
+        """
+        Permutazione che porta gli elemetni hydro in testa, mantenendo
+        l'ordine relativo degli altri.
+        """
+        hydro_names = {
+            str(ub["name"]) for ub in self.unitblocks.values()
+            if ub["block"] == "HydroUnitBlock"
+        }
+        is_hydro = [
+            comp == "storage_units" and str(name) in hydro_names
+            for comp, name in owners
+        ]
+        return np.array(
+            [i for i, h in enumerate(is_hydro) if h]
+            + [i for i, h in enumerate(is_hydro) if not h],
+            dtype=int,
+        )
+
     def convert_to_ucblock(self, master, index_id, name_id, wrap_hydro_in_system: bool = False):
         """
         Converts the unit blocks into a UCBlock (or InnerBlock) format.
@@ -2335,6 +2354,24 @@ class Transformation:
                 var["type"],
                 var["size"],
                 var["value"],
+            )
+
+        # Permuta GeneratorNode per allinearsi all'ordine idro-first
+        # di wrap_hydro_in_system=True. Senza wrapper, gen_order resta None
+        # e il comportamento è invariato.
+        gen_order = None
+        if wrap_hydro_in_system and any(
+                ub["block"] == "HydroUnitBlock" for ub in self.unitblocks.values()
+        ):
+            gen_order = self._hydro_first_order(self._generator_owner)
+            gn = np.asarray(self.ucblock_variables["generator_node"]["value"])
+            assert len(gn) == len(gen_order), (
+                "GeneratorNode e generator_owner incoerenti: "
+                f"{len(gn)} vs {len(gen_order)}"
+            )
+            gv = self.ucblock_variables["generator_node"]
+            ucblock_vars[gv["name"]] = Variable(
+                gv["name"], gv["type"], gv["size"], gn[gen_order],
             )
 
         # -----------------
@@ -2402,17 +2439,28 @@ class Transformation:
                     "PollutantMinBudget", "float", ("TotalNumberPollutantZones",),
                     pb["min_budget"],
                 )
+
+            # --- permutazione idro-first (nuovo) ---
+            rho = pb["rho"]
+            storage_rho = pb["storage_rho"]
+            if gen_order is not None:
+                rho = rho[:, :, gen_order]
+                storage_rho = storage_rho[
+                    :, :, self._hydro_first_order(self._storage_owner)
+                ]
+            # --- fine permutazione ---
+
             ucblock.add_variable(
                 "PollutantRho", "float",
                 ("TimeHorizon", "NumberPollutants", "NumberElectricalGenerators"),
-                pb["rho"],
+                rho,  # <-- era pb["rho"]
             )
-            if np.any(pb["storage_rho"]):
-                ucblock.add_dimension("NumberStorages", pb["storage_rho"].shape[2])
+            if np.any(storage_rho):  # <-- era pb["storage_rho"]
+                ucblock.add_dimension("NumberStorages", storage_rho.shape[2])
                 ucblock.add_variable(
                     "PollutantStorageRho", "float",
                     ("TimeHorizon", "NumberPollutants", "NumberStorages"),
-                    pb["storage_rho"],
+                    storage_rho,  # <-- era pb["storage_rho"]
                 )
 
         # --------------------
