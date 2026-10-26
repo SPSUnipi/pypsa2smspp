@@ -877,6 +877,22 @@ class Transformation:
         )
         
         dimensions = None
+        if attr_name == "BatteryUnitBlock_parameters":
+            # the Cost of a BatteryUnitBlock is a price on the net injection,
+            # paid for the energy drawn and earned for the energy delivered,
+            # while PyPSA charges the marginal cost of a StorageUnit on its
+            # dispatch only: the two agree only for a unit that cannot store
+            cost = np.asarray(converted_dict.get("Cost", {}).get("value", 0.0),
+                              dtype=float)
+            min_power = np.asarray(converted_dict["MinPower"]["value"],
+                                   dtype=float)
+            if np.any(cost != 0) and np.any(min_power < 0):
+                raise ValueError(
+                    f"{components_df.index[0]} has a marginal cost and can "
+                    "store, while PyPSA charges that cost on the dispatch "
+                    "only, which the price on the net injection of a "
+                    "BatteryUnitBlock cannot express."
+                )
         if attr_name in ("ThermalUnitBlock_parameters",
                          "NuclearUnitBlock_parameters"):
             # a ThermalUnitBlock has neither a bound on the energy of the
