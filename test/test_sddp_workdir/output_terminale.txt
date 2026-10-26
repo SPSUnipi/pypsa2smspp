@@ -1,0 +1,113 @@
+ python test_sddp.py
+======================================================================
+Test completo pipeline SDDP
+======================================================================
+[ok] Config SMSPP: 10/10 presenti
+[ok] Solver: C:\Users\bianc\Anaconda\envs\pypsa2smspp\Library\bin\sddp_solver.exe
+WARNING:pypsa.network.io:Importing network from PyPSA version v1.1.0 while current version is v1.2.0. Read the release notes at `https://go.pypsa.org/release-notes` to prepare your network for import.
+INFO:pypsa.network.io:New version 1.4.0 available! (Current: 1.2.0)
+INFO:pypsa.network.io:Imported network 'Unnamed Network' has buses, carriers, generators, links, loads, storage_units, stores, sub_networks
+
+Rete: 100 snapshots, 12 storage, 36 generatori, 45 bus
+
+======================================================================
+Pipeline
+======================================================================
+[START] consistency_check
+[ OK  ] consistency_check (0.000s)
+[START] direct
+[ OK  ] direct (1.524s)
+[START] prepare_tssb_interface
+[ OK  ] prepare_tssb_interface (0.000s)
+[START] prepare_sddp_interface
+[SDDP] Generando Block_0.nc4 per stage_0 (25 snapshot)
+[SDDP] Generando Block_1.nc4 per stage_1 (25 snapshot)
+[SDDP] Generando Block_2.nc4 per stage_2 (25 snapshot)
+[SDDP] Generando Block_3.nc4 per stage_3 (25 snapshot)
+[ OK  ] prepare_sddp_interface (8.652s)
+[START] convert_to_blocks
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 0 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_0.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 1 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_1.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 2 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_2.nc4 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified id with value 3 treated as attribute.
+  warnings.warn(
+C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py:188: UserWarning: Non-specified filename with value Block_3.nc4 treated as attribute.
+  warnings.warn(
+[ OK  ] convert_to_blocks (0.216s)
+[START] optimize
+Executing command:
+C:\Users\bianc\Anaconda\envs\pypsa2smspp\Library\bin\sddp_solver.exe temp_test_sddp.nc -S SDDPSCfg.txt -c C:\Users\bianc\tesi_progetto\pypsa2smspp\test_sddp_workdir\ -p C:\Users\bianc\tesi_progetto\pypsa2smspp\test_sddp_workdir\ -O C:\Users\bianc\tesi_progetto\pypsa2smspp\test_sddp_workdir\solution_test_sddp.nc -B SDDPBCfg.txt
+
+temp_test_sddp.nc is a block file
+error DiscreteScenarioSet not present in ScenarioGenerator factory in deserialize
+
+job aborted:
+[ranks] message
+
+[0] application aborted
+aborting MPI_COMM_WORLD (comm=0x44000000), error -1, comm rank 0
+Peak CPU Usage: 100.00 %
+Peak Memory Usage: 97.53 MB
+Total Time: 13.10 seconds
+
+[FAIL ] optimize (13.181s) -> Failed to run C:\Users\bianc\Anaconda\envs\pypsa2smspp\Library\bin\sddp_solver.exe with error log:
+error DiscreteScenarioSet not present in ScenarioGenerator factory in deserialize
+
+
+Full log:
+temp_test_sddp.nc is a block file
+error DiscreteScenarioSet not present in ScenarioGenerator factory in deserialize
+
+job aborted:
+[ranks] message
+
+[0] application aborted
+aborting MPI_COMM_WORLD (comm=0x44000000), error -1, comm rank 0
+Peak CPU Usage: 100.00 %
+Peak Memory Usage: 97.53 MB
+Total Time: 13.10 seconds
+
+
+[ERRORE] Pipeline fallita:
+Traceback (most recent call last):
+  File "C:\Users\bianc\tesi_progetto\pypsa2smspp\test_sddp.py", line 159, in main
+    n = t.run(n, verbose=True)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bianc\tesi_progetto\pypsa2smspp\pypsa2smspp\transformation.py", line 391, in run
+    self.optimize(verbose=verbose)
+  File "C:\Users\bianc\tesi_progetto\pypsa2smspp\pypsa2smspp\transformation.py", line 430, in optimize
+    return self._optimize()
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\bianc\tesi_progetto\pypsa2smspp\pypsa2smspp\transformation.py", line 2772, in _optimize
+    self.result = self.sms_network.optimize(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\block.py", line 1532, in optimize
+    return smspp_solver.optimize(logging=logging, tracking_period=tracking_period)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bianc\AppData\Local\Programs\Python\Python312\Lib\site-packages\pysmspp\smspp_tools.py", line 342, in optimize
+    raise ValueError(
+ValueError: Failed to run C:\Users\bianc\Anaconda\envs\pypsa2smspp\Library\bin\sddp_solver.exe with error log:
+error DiscreteScenarioSet not present in ScenarioGenerator factory in deserialize
+
+
+Full log:
+temp_test_sddp.nc is a block file
+error DiscreteScenarioSet not present in ScenarioGenerator factory in deserialize
+
+job aborted:
+[ranks] message
+
+[0] application aborted
+aborting MPI_COMM_WORLD (comm=0x44000000), error -1, comm rank 0
+Peak CPU Usage: 100.00 %
+Peak Memory Usage: 97.53 MB
+Total Time: 13.10 seconds
