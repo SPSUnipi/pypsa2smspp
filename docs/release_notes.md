@@ -13,6 +13,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Write `MaxVolumetric` and `MinVolumetric` of a hydro unit as `[NumberReservoirs][TimeHorizon]`, the order of `HydroUnitBlock`; they were transposed, which SMS++ corrected only with a single reservoir [PR #71](https://github.com/SPSUnipi/pypsa2smspp/pull/71)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)

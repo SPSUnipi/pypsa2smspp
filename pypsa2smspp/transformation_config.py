@@ -133,7 +133,7 @@ class TransformationConfig:
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "StartArc": lambda p_nom: np.array([0, 0, 0]),
             "EndArc": lambda p_nom: np.array([1, 1, 1]),
-            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
+            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours).values.transpose(),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow, snapshots_weighting: (inflow.values * snapshots_weighting.values).transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
