@@ -432,6 +432,20 @@ class Transformation:
     def retrieve_solution(self, n, verbose: bool = True):
         if self.result is None:
             raise ValueError("Optimization must be run before retrieving solution. Call optimize() first.")
+
+        # PyPSA non ha un modello dati nativo per SDDP: skip del mapping,
+        # l'objective resta in self.result.objective_value.
+        if (
+                self.problem_structure.get("is_stochastic", False)
+                and self.problem_structure.get("stochastic_type") == "sddp"
+        ):
+            if verbose:
+                print(
+                    f"[SDDP] Objective: {self.result.objective_value:.6e}. "
+                    "Mapping in PyPSA non supportato."
+                )
+            return n
+
         with step(self.timer, "parse_solution_to_unitblocks", verbose=verbose):
             self.parse_solution_to_unitblocks(self.result.solution, n)
 
@@ -1287,6 +1301,19 @@ class Transformation:
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
 
+    def _parse_sddp_solution_to_unitblocks(self, solution, n, solution_data):
+        """
+        SDDP: parsing della soluzione non implementato.
+
+        Per ora questo metodo ritorna solution_data vuoto: l'objective
+        resta in self.result.objective_value, i dettagli nei file del solver.
+        """
+        import warnings
+        warnings.warn(
+            "Il parsing della soluzione SDDP non è ancora implementato",
+            stacklevel=2,
+        )
+        return solution_data
 
     def _parse_unitblocks_from_solution_block(
         self,
