@@ -1,0 +1,161 @@
+python test_sddp.py
+======================================================================
+Test completo pipeline SDDP
+======================================================================
+[ok] Config SMSPP: 10/10 presenti
+[ok] Solver: /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pypsa/network/io.py:2079: FutureWarning: pandas infers the `str` dtype for string data since its version 3.0. PyPSA still converts it back to numpy object dtype on import, but will keep it from PyPSA 2.0 on. Set `pypsa.options.api.legacy_string_dtype` explicitly to suppress this warning.
+  new_static = _coerce_string_dtypes(new_static)
+WARNING:pypsa.network.io:Importing network from PyPSA version v1.1.0 while current version is v1.4.0. Read the release notes at `https://go.pypsa.org/release-notes` to prepare your network for import.
+INFO:pypsa.network.io:Imported network 'Unnamed Network' has buses, carriers, generators, links, loads, storage_units, stores, sub_networks
+
+Rete: 100 snapshots, 12 storage, 36 generatori, 45 bus
+
+======================================================================
+Pipeline
+======================================================================
+[START] consistency_check
+[ OK  ] consistency_check (0.000s)
+[START] direct
+[ OK  ] direct (1.398s)
+[START] prepare_tssb_interface
+[ OK  ] prepare_tssb_interface (0.000s)
+[START] prepare_sddp_interface
+[SDDP] Generando Block_0.nc4 per stage_0 (25 snapshot)
+[SDDP] Generando Block_1.nc4 per stage_1 (25 snapshot)
+[SDDP] Generando Block_2.nc4 per stage_2 (25 snapshot)
+[SDDP] Generando Block_3.nc4 per stage_3 (25 snapshot)
+[ OK  ] prepare_sddp_interface (9.933s)
+[START] convert_to_blocks
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 0 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_0.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 1 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_1.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 2 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_2.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 3 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_3.nc4 treated as attribute.
+  warnings.warn(
+[ OK  ] convert_to_blocks (0.210s)
+[START] optimize
+Executing command:
+/home/bia_medici/miniconda3/envs/pypsa2smspp/bin/sddp_solver temp_test_sddp.nc -S SDDPSCfg.txt -c /home/bia_medici/tesi/pypsa2smspp/test_sddp_workdir/ -p /home/bia_medici/tesi/pypsa2smspp/test_sddp_workdir/ -O /home/bia_medici/tesi/pypsa2smspp/test_sddp_workdir/solution_test_sddp.nc -B SDDPBCfg.txt
+
+temp_test_sddp.nc is a block file
+ SDDP backward  iteration 0 value 1.25059e+10 time  0.840000s wall, 10.470000s user + 0.650000s system = 11.120000s CPU (1323.8%)
+ ACCURACY 0.0530564 Backward 1.25059e+10 Forward 1.32066e+10 p_iter 0 accuracy 0.0530564 GlobalTimer  1.300000s wall, 17.080000s user + 1.140000s system = 18.220000s CPU (1401.5%)
+
+ SDDP backward  iteration 1 value 1.25059e+10 time  0.380000s wall, 5.650000s user + 0.370000s system = 6.020000s CPU (1584.2%)
+ ACCURACY 0.0265702 Backward 1.25059e+10 Forward 1.28472e+10 p_iter 1 accuracy 0.0265702 GlobalTimer  2.010000s wall, 27.660000s user + 1.880000s system = 29.540000s CPU (1469.7%)
+
+ SDDP backward  iteration 2 value 1.25059e+10 time  0.490000s wall, 6.980000s user + 0.440000s system = 7.420000s CPU (1514.3%)
+ ACCURACY 0.0349999 Backward 1.25059e+10 Forward 1.29595e+10 p_iter 2 accuracy 0.0349999 GlobalTimer  2.810000s wall, 39.280000s user + 2.580000s system = 41.860000s CPU (1489.7%)
+
+ SDDP backward  iteration 3 value 1.25059e+10 time  0.400000s wall, 5.960000s user + 0.360000s system = 6.320000s CPU (1580.0%)
+ ACCURACY 0.0220188 Backward 1.25059e+10 Forward 1.27875e+10 p_iter 3 accuracy 0.0220188 GlobalTimer  3.450000s wall, 48.940000s user + 3.130000s system = 52.070000s CPU (1509.3%)
+
+ SDDP backward  iteration 4 value 1.25059e+10 time  0.480000s wall, 6.860000s user + 0.510000s system = 7.370000s CPU (1535.4%)
+ ACCURACY 0.0222224 Backward 1.25059e+10 Forward 1.27901e+10 p_iter 4 accuracy 0.0222224 GlobalTimer  4.200000s wall, 59.710000s user + 3.950000s system = 63.660000s CPU (1515.7%)
+
+ SDDP backward  iteration 5 value 1.25059e+10 time  0.400000s wall, 6.060000s user + 0.360000s system = 6.420000s CPU (1605.0%)
+ ACCURACY 0.0219539 Backward 1.25059e+10 Forward 1.27866e+10 p_iter 5 accuracy 0.0219539 GlobalTimer  4.910000s wall, 70.270000s user + 4.650000s system = 74.920000s CPU (1525.9%)
+
+ SDDP backward  iteration 6 value 1.25308e+10 time  0.450000s wall, 6.380000s user + 0.490000s system = 6.870000s CPU (1526.7%)
+ ACCURACY 0.0106624 Backward 1.25308e+10 Forward 1.26658e+10 p_iter 6 accuracy 0.0106624 GlobalTimer  5.680000s wall, 81.360000s user + 5.510000s system = 86.870000s CPU (1529.4%)
+
+ SDDP backward  iteration 7 value 1.25517e+10 time  0.490000s wall, 6.670000s user + 0.460000s system = 7.130000s CPU (1455.1%)
+ ACCURACY 0.0277673 Backward 1.25517e+10 Forward 1.29102e+10 p_iter 7 accuracy 0.0277673 GlobalTimer  6.470000s wall, 92.540000s user + 6.280000s system = 98.820000s CPU (1527.4%)
+
+ SDDP backward  iteration 8 value 1.25517e+10 time  0.410000s wall, 5.960000s user + 0.410000s system = 6.370000s CPU (1553.7%)
+ ACCURACY 0.0219926 Backward 1.25517e+10 Forward 1.28339e+10 p_iter 8 accuracy 0.0219926 GlobalTimer  7.180000s wall, 103.020000s user + 6.990000s system = 110.010000s CPU (1532.2%)
+
+ SDDP backward  iteration 9 value 1.25517e+10 time  0.480000s wall, 7.040000s user + 0.550000s system = 7.590000s CPU (1581.2%)
+ ACCURACY 0.00850464 Backward 1.25517e+10 Forward 1.26593e+10 p_iter 9 accuracy 0.00850464 GlobalTimer  8.000000s wall, 114.810000s user + 8.070000s system = 122.880000s CPU (1536.0%)
+
+Backward value: 12551676192.926277161
+Forward value:  12659339330.338262558
+Terminated due to iter limit
+Peak CPU Usage: 1631.50 %
+Peak Memory Usage: 228.63 MB
+Total Time: 10.11 seconds
+
+[ OK  ] optimize (10.705s)
+[SDDP] Objective: 1.265934e+10. Mapping in PyPSA non supportato.
+
+Timing summary:
+STEP                    STATUS     ELAPSED [s]
+----------------------------------------------
+consistency_check       OK        0.000
+direct                  OK        1.398
+prepare_tssb_interface  OK        0.000
+prepare_sddp_interface  OK        9.933
+convert_to_blocks       OK        0.210
+optimize                OK        10.705
+----------------------------------------------
+TOTAL                             22.246
+
+
+Idro nei Block_i.nc4:
+  IT0 0 PHS            inflow=      0.00  V0=   179497.06  Vmax=   358994.11
+  IT1 0 PHS            inflow=      0.00  V0=    16194.87  Vmax=    32389.75
+  IT0 0 hydro          inflow=  21254.68  V0=  3827586.54  Vmax=  7655173.07
+  IT1 0 hydro          inflow=    679.76  V0=   122413.46  Vmax=   244826.93
+
+======================================================================
+Risultato
+======================================================================
+Tempo totale: 22.3s
+Objective: 1.265934e+10
+n.generators_t['p'] shape: (100, 0)
+n.storage_units_t['p'] shape: (100, 0)
+
+File in /home/bia_medici/tesi/pypsa2smspp/test_sddp_workdir:
+  ACBCfg.txt                                 1.5 KB
+  ACBCfg.txt:Zone.Identifier                 0.0 KB
+  BCfg.txt                                   1.3 KB
+  BCfg.txt:Zone.Identifier                   0.0 KB
+  BUBCfg.txt                                 1.5 KB
+  BUBCfg.txt:Zone.Identifier                 0.0 KB
+  BellmanValuesAllOUT.csv                    2.8 KB
+  BellmanValuesAllOUT.nc4                   14.7 KB
+  BellmanValuesOUT.csv                       2.8 KB
+  BellmanValuesOUT.nc4                      14.7 KB
+  Block_0.nc4                              223.5 KB
+  Block_1.nc4                              223.5 KB
+  Block_2.nc4                              223.5 KB
+  Block_3.nc4                              223.5 KB
+  DCNBCfg.txt                                1.4 KB
+  DCNBCfg.txt:Zone.Identifier                0.0 KB
+  PFBCfg.txt                                 1.7 KB
+  PFBCfg.txt:Zone.Identifier                 0.0 KB
+  SDDPBCfg.txt                               1.6 KB
+  SDDPBCfg.txt:Zone.Identifier               0.0 KB
+  SDDPBlock_test_sddp.nc4                  136.5 KB
+  SDDPSCfg.txt                               2.9 KB
+  SDDPSCfg.txt:Zone.Identifier               0.0 KB
+  SUBCfg.txt                                 1.3 KB
+  SUBCfg.txt:Zone.Identifier                 0.0 KB
+  TUBCfg-OVC.txt                             1.3 KB
+  TUBCfg-OVC.txt:Zone.Identifier             0.0 KB
+  UCBSCfg.txt                                2.4 KB
+  UCBSCfg.txt:Zone.Identifier                0.0 KB
+  cuts.sddp.0.gsbd                           3.5 KB
+  cuts.sddp.gsbmf                            4.2 KB
+  cuts.txt                                   2.8 KB
+  cuts.txt.0                                 2.8 KB
+  log_test_sddp.txt                          3.2 KB
+  regressors.sddp.0.gsbd                     3.8 KB
+  regressors.sddp.gsbmf                      0.8 KB
+  solution_test_sddp.nc                    359.8 KB
+  temp_test_sddp.nc                        136.5 KB
+  visited_states.sddp.0.gsbd                 1.5 KB
+  visited_states.sddp.gsbmf                  0.7 KB
+
+[OK] Test completato.
