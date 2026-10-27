@@ -55,6 +55,7 @@ from pypsa2smspp.utils import (
     get_param_as_dense,
     pollutant_budget_data,
     ucblock_variables,
+    fold_fom_cost_into_capital_cost,
     preprocess_zero_capital_cost_extendable_generators,
     preprocess_zero_capital_cost_extendable_lines_links,
     get_bus_demand_matrix,
@@ -466,6 +467,10 @@ class Transformation:
             dataframes needed during iteration.
         """
     
+        # PyPSA counts fom_cost with capital_cost on the capacity of an
+        # extendable asset, hence so does everything below
+        n = fold_fom_cost_into_capital_cost(n)
+
         n, fixed_investment_generators = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,
@@ -568,6 +573,8 @@ class Transformation:
                 self.config.IntermittentUnitBlock_inverse,
                 self.config.BatteryUnitBlock_inverse,
                 self.config.InvestmentBlock_parameters,
+                self.config.BatteryUnitBlock_parameters,
+                self.config.BatteryUnitBlock_StorageUnit_inverse,
             )
     
         return {
@@ -2813,6 +2820,14 @@ class Transformation:
         """
         Store design-variable metadata for StaticAbstractPath construction.
 
+        A path is stored only for a design Variable that the unit block has,
+        which is the case when its investment cost is not zero (UCBlock
+        creates x_battery and x_converter on BatteryInvestmentCost and
+        ConverterInvestmentCost, x_thermal and x_intermittent on
+        InvestmentCost), while a HydroUnitBlock has none: a path to a
+        Variable that is not there stops the solver when it reads the
+        stochastic Block.
+
         Parameters
         ----------
         attr_name : str
@@ -2821,72 +2836,45 @@ class Transformation:
             Unit block index in the SMS++ structure.
         """
         block_type = attr_name.split("_")[0]
+        unit = next((u for u in self.unitblocks.values()
+                     if u.get("enumerate") == f"UnitBlock_{unitblock_index}"),
+                    None)
+        variables = unit["variables"] if unit is not None else {}
+
+        def has_cost(key):
+            entry = variables.get(key)
+            if entry is None:
+                return False
+            value = entry["value"] if isinstance(entry, dict) else entry
+            return bool(np.any(np.asarray(value, dtype=float) != 0))
+
+        def store(var_name):
+            self.unitblock_design_data.append(
+                {
+                    "block_index": unitblock_index,
+                    "var_name": var_name,
+                    "component_type": "unit",
+                    "element_index": 0,
+                    "range_index": 1,
+                }
+            )
 
         if block_type == "BatteryUnitBlock":
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_battery",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_converter",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
-
+            if has_cost("BatteryInvestmentCost"):
+                store("x_battery")
+            if has_cost("ConverterInvestmentCost"):
+                store("x_converter")
         elif block_type in ("ThermalUnitBlock", "NuclearUnitBlock"):
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_thermal",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
-
+            if has_cost("InvestmentCost"):
+                store("x_thermal")
         elif block_type == "IntermittentUnitBlock":
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_intermittent",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
-
+            if has_cost("InvestmentCost"):
+                store("x_intermittent")
         elif block_type == "HydroUnitBlock":
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_hydro",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
+            pass
+        elif has_cost("InvestmentCost") or "InvestmentCost" not in variables:
+            store("x_design")
 
-        else:
-            self.unitblock_design_data.append(
-                {
-                    "block_index": unitblock_index,
-                    "var_name": "x_design",
-                    "component_type": "unit",
-                    "element_index": 0,
-                    "range_index": 1,
-                }
-            )
-            
-            
     def _root_design_variables(self, design_variables):
         """
         The subset of the design descriptors that is decided at the root.

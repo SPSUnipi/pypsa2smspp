@@ -188,7 +188,11 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_na
     """
     Transforms a unit block into a dictionary of DataArrays.
     """
-    attr_name = f"{unit_block['block']}_inverse"
+    # a component may have an inverse of its own, its names for the same data
+    # being those of another component (a StorageUnit in a BatteryUnitBlock)
+    attr_name = f"{unit_block['block']}_{component}_inverse"
+    if not hasattr(config, attr_name):
+        attr_name = f"{unit_block['block']}_inverse"
     converted_dict = {}
     normalized_keys = {normalize_key(k): k for k in unit_block.keys()}
 
