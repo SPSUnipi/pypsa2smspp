@@ -956,6 +956,22 @@ class Transformation:
         )
 
         dimensions = None
+        if attr_name == "BatteryUnitBlock_parameters":
+            # the Cost of a BatteryUnitBlock is a price on the net injection,
+            # paid for the energy drawn and earned for the energy delivered,
+            # while PyPSA charges the marginal cost of a StorageUnit on its
+            # dispatch only: the two agree only for a unit that cannot store
+            cost = np.asarray(converted_dict.get("Cost", {}).get("value", 0.0),
+                              dtype=float)
+            min_power = np.asarray(converted_dict["MinPower"]["value"],
+                                   dtype=float)
+            if np.any(cost != 0) and np.any(min_power < 0):
+                raise ValueError(
+                    f"{components_df.index[0]} has a marginal cost and can "
+                    "store, while PyPSA charges that cost on the dispatch "
+                    "only, which the price on the net injection of a "
+                    "BatteryUnitBlock cannot express."
+                )
         if attr_name in ("ThermalUnitBlock_parameters",
                          "NuclearUnitBlock_parameters"):
             # a ThermalUnitBlock has neither a bound on the energy of the
@@ -2312,7 +2328,7 @@ class Transformation:
 
     def _hydro_first_order(self, owners):
         """
-        Permutazione che porta gli elemetni hydro in testa, mantenendo
+        Permutazione che porta gli elementi hydro in testa, mantenendo
         l'ordine relativo degli altri.
         """
         hydro_names = {
@@ -3546,7 +3562,7 @@ class Transformation:
         # Salviamo su disco
         path = workdir / f"Block_{stage_idx}.nc4"
 
-        sn.to_netcdf(path)
+        sn.to_netcdf(path, force=True)
 
         return path
 
@@ -4248,7 +4264,7 @@ class Transformation:
         # l'invocazione diretta di sddp_solver.
         sddp_block_path = Path(self.workdir) / f"SDDPBlock_{self.name}.nc4"
         sddp_block_path.parent.mkdir(parents=True, exist_ok=True)
-        master.to_netcdf(sddp_block_path)
+        master.to_netcdf(sddp_block_path, force=True)
 
         # Restituisce il master (SMSNetwork), come fanno gli altri convert_*
         return master

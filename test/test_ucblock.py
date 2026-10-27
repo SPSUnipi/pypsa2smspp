@@ -109,5 +109,69 @@ def test_ucblock(test_case_xlsx):
     run_ucblock(test_case_xlsx)
 
 
+def storage_network(component):
+    """
+    One bus with a load of 50 over 24 hours, a generator at 10 and a storage
+    half full at 5, cheaper than the generator: PyPSA empties the storage,
+    paying 5 * 500 + 10 * 700 = 9500.
+    """
+    import pandas as pd
+    import pypsa
+
+    n = pypsa.Network()
+    n.set_snapshots(pd.RangeIndex(24))
+    n.add("Bus", "bus")
+    n.add("Load", "load", bus="bus", p_set=50.0)
+    n.add("Generator", "gen", bus="bus", p_nom=100.0, marginal_cost=10.0)
+    if component == "Store":
+        n.add("Store", "store", bus="bus", e_nom=1000.0, e_initial=500.0,
+              e_cyclic=False, marginal_cost=5.0)
+    else:
+        n.add("StorageUnit", "battery", bus="bus", p_nom=100.0, max_hours=10.0,
+              state_of_charge_initial=500.0, cyclic_state_of_charge=False,
+              marginal_cost=5.0)
+    return n
+
+
+def storage_transformation(name):
+    return Transformation(
+        capacity_expansion_ucblock=True,
+        workdir=OUT_TEST,
+        name=name,
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        configfile="auto",
+        pysmspp_options={},
+    )
+
+
+def test_store_marginal_cost():
+    """
+    The marginal cost of a Store is paid on the energy it delivers, as in
+    PyPSA, and not earned.
+    """
+    network = storage_network("Store")
+    network.optimize(solver_name="highs")
+    assert float(network.objective) == pytest.approx(9500.0, rel=1e-6)
+
+    transformation = storage_transformation("store_marginal_cost")
+    transformation.run(network, verbose=False)
+    assert float(transformation.result.objective_value) == \
+        pytest.approx(9500.0, rel=1e-6)
+
+
+def test_storage_unit_marginal_cost_refused():
+    """
+    A StorageUnit that can store and has a marginal cost is refused, since
+    PyPSA charges that cost on the dispatch only.
+    """
+    network = storage_network("StorageUnit")
+    transformation = storage_transformation("storage_unit_marginal_cost")
+    with pytest.raises(ValueError, match="marginal cost"):
+        transformation.run(network, verbose=False)
+
+
 if __name__ == "__main__":
     run_ucblock(test_cases["xlsx_paths"][13])
