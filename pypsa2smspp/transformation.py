@@ -363,10 +363,6 @@ class Transformation:
         self.tssb_data = None
         self.design_variables = []
         self.stochastic_parameters = dict(stochastic_parameters or {})
-        # Default per la frazione di MaxVolumetric usata come V0 in SDDP.
-        # Se l'utente passa "initial_state_fraction" in stochastic_parameters,
-        # prepare_sddp_interface lo sovrascrive
-        self.sddp_initial_state_fraction = 0.5
         self.unitblock_design_data = []
 
         self.sddp_data = None
@@ -3457,7 +3453,7 @@ class Transformation:
 
             if hydro_mask.any():
                 # Frazione letta da self (default 0.5 se non passata dall'utente)
-                fraction = getattr(self, "sddp_initial_state_fraction", 0.5)
+                fraction = self.config.sddp_initial_state_fraction
 
                 # Itera sulle storage unit idro dello stage (rete deterministica,
                 # quindi Index semplice, non MultiIndex)
@@ -3649,10 +3645,12 @@ class Transformation:
         # Normalizziamo subito i parametri
         sddp_parameters = mu.normalize_sddp_parameters(self.stochastic_parameters)
 
-        # Propaga la frazione validata sull'istanza, così _generate_stage_ucblock può leggerla
-        self.sddp_initial_state_fraction = float(
-            sddp_parameters["initial_state_fraction"]
-        )
+        # Override la config solo se l'utente ha passato un valore esplicito.
+        # Altrimenti usa il default da TransformationConfig.
+        if "initial_state_fraction" in self.stochastic_parameters:
+            self.config.sddp_initial_state_fraction = float(
+                sddp_parameters["initial_state_fraction"]
+            )
 
         # Otteniamo i nomi degli stadi
         stage_names = mu.get_sddp_stage_names(n, sddp_parameters)

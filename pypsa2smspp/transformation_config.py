@@ -239,4 +239,6 @@ class TransformationConfig:
         }
         
         self.max_hours_stores = 1
-
+        # SDDP: frazione di MaxVolumetric usata come volume iniziale (V0) nei
+        # Block_i.nc4 quando cyclic_state_of_charge=True.
+        self.sddp_initial_state_fraction = 0.5
