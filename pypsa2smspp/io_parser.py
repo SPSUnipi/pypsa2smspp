@@ -150,22 +150,36 @@ def split_merged_dcnetworkblocks(unitblocks, delimiter="__", reuse_index_for_fir
             continue
         name_ch, name_dis = parts[0].strip(), parts[1].strip()
 
+        # the flows are on the block (deterministic) or on each of its
+        # scenarios (stochastic)
         flow = blk.get("FlowValue", None)
-        if flow is None:
+        scenarios = blk.get("scenarios", None)
+        if flow is None and not scenarios:
             logger(f"[split] Block '{k}' has no FlowValue; skipping.")
             continue
-
-        flow_charge = np.maximum(flow, 0.0)
-        flow_dis    = np.maximum(-flow, 0.0)
 
         base_charge = dict(blk)
         base_dis    = dict(blk)
 
         base_charge["name"] = name_ch
-        base_charge["FlowValue"] = flow_charge
-
         base_dis["name"] = name_dis
-        base_dis["FlowValue"] = flow_dis
+
+        if flow is not None:
+            base_charge["FlowValue"] = np.maximum(flow, 0.0)
+            base_dis["FlowValue"] = np.maximum(-flow, 0.0)
+
+        if scenarios:
+            base_charge["scenarios"] = {}
+            base_dis["scenarios"] = {}
+            for scen, data in scenarios.items():
+                data_charge = dict(data)
+                data_dis = dict(data)
+                scen_flow = data.get("FlowValue", None)
+                if scen_flow is not None:
+                    data_charge["FlowValue"] = np.maximum(scen_flow, 0.0)
+                    data_dis["FlowValue"] = np.maximum(-scen_flow, 0.0)
+                base_charge["scenarios"][scen] = data_charge
+                base_dis["scenarios"][scen] = data_dis
 
         if reuse_index_for_first:
             idx_first = int(k.split("_")[-1])
