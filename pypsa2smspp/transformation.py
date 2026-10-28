@@ -595,6 +595,9 @@ class Transformation:
         
     
         n = prep["n"]
+        # the network the UnitBlocks are built from, which the data of the
+        # scenarios is evaluated on [see build_tssb_dss()]
+        self.n_preprocessed = n
 
         stores_df = prep["stores_df"]
         links_after = prep["links_after"]
@@ -2787,6 +2790,7 @@ class Transformation:
                         transformation_config=self.config,
                         smspp_parameter=spec.get("smspp_parameter", None),
                         weights=bool(spec.get("weights", False)),
+                        static_reference=getattr(self, "n_preprocessed", None),
                     )
                 )
                 continue

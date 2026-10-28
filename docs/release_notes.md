@@ -19,6 +19,7 @@
 * Expand an extendable StorageUnit in the UCBlock: its capacity is the design Variable of the BatteryUnitBlock, which sizes power and energy together, with `capital_cost` as investment cost and `p_nom_min` and `p_nom_max` as bounds, and is read back as `p_nom`, together with `p` and `state_of_charge` [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Count `fom_cost` with `capital_cost`, as PyPSA does in its objective [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Read back the solution of a BatteryUnitBlock of a stochastic network into its StorageUnit, whose name the index of the storage units holds together with the scenario, rather than into a Store, which stopped the inverse transformation [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Compute the stochastic data of a UnitBlock (e.g., the MaxPower of an intermittent unit) on the network the UnitBlocks are built from, the scenario giving only the stochastic field: the data of the scenarios missed the preprocessing (fom_cost folded into capital_cost, capacities fixed), and could be on another scale than that of the UnitBlock [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)

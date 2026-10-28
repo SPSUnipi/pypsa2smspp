@@ -169,3 +169,61 @@ def test_stochastic_storage_unit_is_a_storage_unit():
         n, {"block": "BatteryUnitBlock", "name": "su"}) == "StorageUnit"
     assert component_definition(
         n, {"block": "BatteryUnitBlock", "name": "store"}) == "Store"
+
+
+def test_stochastic_maxpower_is_that_of_the_unitblocks():
+    """The MaxPower of the scenarios is computed as that of the UnitBlocks,
+    on the network they are built from: an extendable generator whose
+    fom_cost is all its cost has a design Variable once fom_cost is folded
+    into capital_cost, hence a MaxPower per unit of capacity in every
+    scenario, and a generator that is not extendable one in MW."""
+    n = pypsa.Network()
+    n.set_snapshots(range(4))
+    n.add("Bus", ["a", "b"])
+    n.add("Carrier", ["wind", "solar", "gas"])
+    n.add("Load", "load", bus="b", p_set=[10.0, 30.0, 20.0, 40.0])
+    n.add("Generator", "gas", bus="a", carrier="gas", p_nom=100.0,
+          marginal_cost=50.0)
+    n.add("Link", "line", bus0="a", bus1="b", p_nom=100.0, p_min_pu=-1)
+    n.add("Generator", "wind", bus="a", carrier="wind", p_nom=5.0,
+          p_nom_extendable=True, p_nom_max=20.0, capital_cost=0.0,
+          fom_cost=2.0, p_max_pu=[0.5, 0.6, 0.7, 0.8])
+    n.add("Generator", "solar", bus="b", carrier="solar", p_nom=10.0,
+          p_max_pu=[0.1, 0.2, 0.3, 0.4])
+    n.set_scenarios({"low": 0.5, "high": 0.5})
+    p_max_pu = n.c.generators.dynamic.p_max_pu
+    p_max_pu[("high", "wind")] = [0.9, 0.8, 0.7, 0.6]
+    p_max_pu[("high", "solar")] = [0.4, 0.3, 0.2, 0.1]
+
+    transformation = Transformation(
+        name="stochastic_maxpower",
+        configfile="TSSBlock/TSSBSCfg.txt",
+        capacity_expansion_ucblock=True,
+        workdir=str(OUT_TEST / "tssb" / "stochastic_maxpower"),
+        stochastic_parameters={"stochastic_type": "tssb",
+                               "parameters": ["demand", "renewable_maxpower"]},
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+    )
+    transformation.create_model(n, verbose=False)
+
+    parts = transformation.tssb_data["discrete_scenario_set"]["parts"]
+    offset = 0
+    for part in parts:
+        if part["parameter"] == "renewable_maxpower":
+            break
+        offset += part["scenario_size"]
+    order = part["asset_order"]
+    scenarios = transformation.tssb_data["discrete_scenario_set"]["scenarios"]
+    values = {sc: dict(zip(order, np.split(
+        scenarios[i][offset:offset + part["scenario_size"]], len(order))))
+        for i, sc in enumerate(["low", "high"])}
+
+    # the first scenario is the one the UnitBlocks are built from
+    for block in transformation.unitblocks.values():
+        if block["name"] in order:
+            maxpower = np.ravel(block["variables"]["MaxPower"]["value"])
+            assert np.allclose(values["low"][block["name"]], maxpower)
+    # per unit of capacity for the extendable one, in MW for the other
+    assert np.allclose(values["high"]["wind"], [0.9, 0.8, 0.7, 0.6])
+    assert np.allclose(values["high"]["solar"], [4.0, 3.0, 2.0, 1.0])
