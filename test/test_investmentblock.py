@@ -172,10 +172,7 @@ def run_investment_block(xlsx_path: Path) -> None:
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
 def test_investment(test_case_xlsx):
     name_l = test_case_xlsx.name.lower()
-    # a modular asset is extendable, and the InvestmentBlock writes it with
-    # an integer design, the number of its modules
-    if ("ml" in name_l or "sector" in name_l
-            or ("ext" not in name_l and not name_l.startswith("mod_"))):
+    if "ml" in name_l or "sector" in name_l or "ext" not in name_l:
         pytest.skip("Skipping case for investment block")
 
     run_investment_block(test_case_xlsx)
