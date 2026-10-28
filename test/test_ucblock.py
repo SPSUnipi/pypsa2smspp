@@ -59,7 +59,7 @@ def run_ucblock(xlsx_path: Path) -> None:
 
     # ---- (1) PyPSA optimization (reference) ----
     solver_name = getattr(parser, "solver_name", "highs")
-    network.optimize(solver_name=solver_name, include_objective_constant=True)
+    network.optimize(solver_name=solver_name)
 
     # Export LP for debugging (best effort)
     try:
