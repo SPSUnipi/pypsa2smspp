@@ -20,9 +20,11 @@ import pandas as pd
 import pypsa
 import pytest
 
+import pysmspp
+
 from conftest import OUT_TEST
 
-from pypsa2smspp.network_correction import clean_dispatch_setpoints
+from pypsa2smspp.network_correction import add_slack_unit, clean_dispatch_setpoints
 from pypsa2smspp.stochastic_utils import normalize_scenario_tree
 from pypsa2smspp.transformation import Transformation
 
@@ -32,6 +34,10 @@ FIXTURE = HERE / "networks" / "pypsa_stoch_load.nc"
 
 STOCHASTIC_PARAMETERS = ["demand", "renewable_maxpower"]
 MSSB_CONFIGFILE = "TSSBlock/TSSBSCfg.txt"
+
+# the BundleSolver of an InvestmentBlock over a TSSB or an MSSB, whose inner
+# stochastic Block is solved whole at every evaluation (pySMSpp #116)
+INVESTMENT_OUTSIDE_CONFIGFILE = "TSSBlock/TSSBSCfg-IB.txt"
 
 # the outer stage: how available the renewable is in a climate year
 CLIMATE = {"dry": (0.70, 0.3), "normal": (1.00, 0.4), "wet": (1.30, 0.3)}
@@ -372,3 +378,65 @@ def test_mssb_matches_the_flat_optimum():
     # the objective is read back from the log of the solver, which prints it
     # with six digits
     assert obtained == pytest.approx(expected, rel=1e-5)
+
+
+@pytest.mark.parametrize("stochastic_type", ["tssb", "mssb"])
+def test_investment_outside_matches_the_flat_optimum(stochastic_type):
+    """
+    The investment stated once, in an InvestmentBlock over the TSSB or the
+    MSSB, is the same problem as the flat network, and its solution is read
+    back: the objective is the optimum of PyPSA and the design is one for all
+    the scenarios.
+    """
+    configs = Path(pysmspp.__file__).parent / "data" / "configs"
+    if not (configs / INVESTMENT_OUTSIDE_CONFIGFILE).exists():
+        pytest.skip("this pySMSpp has no configuration for an InvestmentBlock "
+                    "over a stochastic Block")
+
+    n, tree = build_two_level_network()
+    # a slack keeps every scenario feasible at whatever design the bundle
+    # tries, as the load shedding of the PyPSA-Eur networks does
+    n = add_slack_unit(n)
+
+    reference = n.copy()
+    clean_dispatch_setpoints(reference)
+    reference.optimize(solver_name="highs")
+    expected = float(reference.objective + reference.objective_constant)
+
+    stochastic = {
+        "stochastic_type": stochastic_type,
+        "parameters": STOCHASTIC_PARAMETERS,
+        "investment_outside": True,
+    }
+    if stochastic_type == "mssb":
+        stochastic["tree"] = tree
+
+    name = f"{stochastic_type}_investment_outside_optimum"
+    workdir = OUT_TEST / "mssb" / name
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    transformation = Transformation(
+        name=name,
+        configfile=INVESTMENT_OUTSIDE_CONFIGFILE,
+        enable_thermal_units=False,
+        capacity_expansion_ucblock=False,
+        workdir=str(workdir),
+        stochastic_parameters=stochastic,
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        pysmspp_options={"B": "InnerBCfg.txt"},
+    )
+    transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
+    # the configuration asks the bundle for a relative accuracy of 1e-6
+    assert obtained == pytest.approx(expected, rel=1e-5)
+
+    # the design is that of the InvestmentBlock in every scenario
+    solar = n.generators.loc[
+        n.generators.index.get_level_values(-1) == "solar", "p_nom_opt"]
+    assert np.all(np.isfinite(solar.values))
+    assert np.allclose(solar.values, solar.values[0])
+
