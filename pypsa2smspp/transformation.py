@@ -51,6 +51,7 @@ from pypsa2smspp.utils import (
     explode_multilinks_into_branches,
     add_sectorcoupled_parameters,
     apply_expansion_overrides,
+    apply_investment_module_overrides,
     build_dc_index,
     get_param_as_dense,
     pollutant_budget_data,
@@ -152,7 +153,7 @@ class Transformation:
         """
         Parameters
         ----------
-        merge_links : bool | str | Sequence[str], default True
+        merge_links : bool | str | Sequence[str], default False
             Controls whether store-related charge/discharge link pairs are merged into a single
             merged link representation (useful to match PyPSA-Eur modelling conventions).
 
@@ -466,6 +467,10 @@ class Transformation:
             dataframes needed during iteration.
         """
     
+        # the per-unit reactances of the lines, which their susceptances
+        # in Kirchhoff's voltage law come from, as PyPSA computes them
+        n.calculate_dependent_values()
+
         n, fixed_investment_generators = preprocess_zero_capital_cost_extendable_generators(
             n,
             fixed_capacity=1e9,
@@ -474,12 +479,24 @@ class Transformation:
             return_fixed_count=True,
         )
 
+        # the links that the merge absorbs keep their extendability (in
+        # PyPSA-Eur the battery discharger has no capital cost, and fixing it
+        # would make the pair no longer mergeable)
+        _, links_merge_probe, _ = build_store_and_merged_links(
+            n,
+            merge_links=self.merge_links,
+            logger=lambda msg: None,
+            merge_selector=getattr(self, "merge_selector", None),
+        )
+        links_absorbed = n.links.index.difference(links_merge_probe.index)
+
         n, fixed_investment_lines_links = preprocess_zero_capital_cost_extendable_lines_links(
             n,
             fixed_capacity=1e9,
             update_bounds=True,
             logger=logger,
             return_fixed_count=True,
+            exclude=links_absorbed,
         )
 
     
@@ -561,6 +578,7 @@ class Transformation:
         self._dc_names = list(self._dc_index["physical"]["names"])
         self._dc_types = list(self._dc_index["physical"]["types"])
     
+        self._investment_modules = False
         if self.capacity_expansion_ucblock:
             apply_expansion_overrides(
                 self.config.IntermittentUnitBlock_parameters,
@@ -569,6 +587,15 @@ class Transformation:
                 self.config.BatteryUnitBlock_inverse,
                 self.config.InvestmentBlock_parameters,
             )
+        elif self._has_investment_modules(n):
+            # the InvestmentBlock writes the modular extendable assets as
+            # modules too, with an integer design
+            apply_investment_module_overrides(
+                self.config.IntermittentUnitBlock_parameters,
+                self.config.IntermittentUnitBlock_inverse,
+                self.config.InvestmentBlock_parameters,
+            )
+            self._investment_modules = True
     
         return {
             "n": n,
@@ -653,6 +680,17 @@ class Transformation:
     
             elif components_type == "storage_units":
                 get_bus_idx(n, components_df, components_df.bus, "bus_idx")
+                # a battery pays its marginal cost on the dispatch only, which
+                # a price on the net injection gives only if it never draws
+                battery = ~components_df.carrier.isin(["hydro", "PHS"])
+                drawing = (n.get_switchable_as_dense("StorageUnit", "p_min_pu") < 0).any().reindex(components_df.index, fill_value=False)
+                priced = (n.get_switchable_as_dense("StorageUnit", "marginal_cost") != 0).any().reindex(components_df.index, fill_value=False)
+                for name in components_df.index[battery & drawing & priced]:
+                    logger.warning(
+                        f"StorageUnit {name} can draw and has a marginal cost: "
+                        f"it is written as a price on the net injection, "
+                        f"which the unit also earns when it draws."
+                    )
                 for name, bus, carrier in zip(components_df.index,
                                               components_df["bus_idx"].values,
                                               components_df["carrier"]):
@@ -793,6 +831,12 @@ class Transformation:
         # rename for compatibility with InvestmentBlock expected names
         aliases = get_nominal_aliases(components_type, nominal_attrs)
         df_alias = components_df.rename(columns=aliases)
+
+        # the size of a module where the asset is a modular IntermittentUnitBlock,
+        # 0 elsewhere [see apply_investment_module_overrides()]
+        if getattr(self, "_investment_modules", False):
+            df_alias["p_nom_mod"] = self._intermittent_module_size(
+                components_df, components_type)
     
         # store temporary dimension info
         if "Fake_dimension" not in self.dimensions:
@@ -833,6 +877,37 @@ class Transformation:
     
         return df_alias
     
+    def _intermittent_module_size(self, components_df, components_type):
+        """The size of the module of each modular IntermittentUnitBlock.
+
+        For each row of components_df, the p_nom_mod of an extendable
+        generator that becomes an IntermittentUnitBlock, 0 for any other
+        asset, whose design stays a capacity.
+        """
+        size = np.zeros(len(components_df))
+        if (components_type != "Generator"
+                or "p_nom_mod" not in components_df.columns):
+            return size
+
+        for k, (_, row) in enumerate(components_df.iterrows()):
+            attr_name = get_attr_name(
+                components_type,
+                row.get("carrier"),
+                enable_thermal_units=self.enable_thermal_units,
+                intermittent_carriers=self.intermittent_carriers,
+                default_intermittent=renewable_carriers,
+                nuclear_carriers=list(self.nuclear_units),
+            )
+            if (attr_name == "IntermittentUnitBlock_parameters"
+                    and bool(row.get("p_nom_extendable", False))):
+                size[k] = max(float(row["p_nom_mod"]), 0.0)
+        return size
+
+    def _has_investment_modules(self, n):
+        """True if n has a modular extendable IntermittentUnitBlock."""
+        return bool(np.any(
+            self._intermittent_module_size(n.generators, "Generator") > 0))
+
     ### 5 ###
     def add_UnitBlock(self, attr_name, components_df, components_t, components_type, n, component=None, index=None):
         """
@@ -1105,6 +1180,11 @@ class Transformation:
                 ScenarioSolution_0
                 ScenarioSolution_1
                 ...
+        or, with the investment outside, one level deeper:
+            Solution_0                  (the InvestmentBlock, DesignVariables)
+                InnerSolution
+                    ScenarioSolution_0
+                    ...
     
         Variables are stored in:
             self.unitblocks[matching_key]["scenarios"][scenario_name][var_name]
@@ -1119,7 +1199,8 @@ class Transformation:
                 f"and problem_structure['number_scenarios'] ({expected_n_scenarios})."
             )
     
-        solution_0 = solution.blocks["Solution_0"]
+        solution_0, design_vars = self._split_investment_outside(
+            solution.blocks["Solution_0"])
         solution_data["TSSB"] = solution_0
     
         # Keep a scenario-wise container for parsed network data
@@ -1148,10 +1229,55 @@ class Transformation:
                 solution_data=solution_data,
             )
     
+        self._assign_investment_outside_design(design_vars)
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
     
     
+    def _split_investment_outside(self, solution_0):
+        """
+        The solution of the stochastic Block, and the design of the
+        InvestmentBlock above it if the investment is outside.
+
+        With "investment_outside" Solution_0 is the solution of the
+        InvestmentBlock, whose DesignVariables are the investment, and the one
+        of the stochastic Block is its InnerSolution; otherwise Solution_0 is
+        that of the stochastic Block, and the design (None) is read in the
+        scenarios.
+        """
+        if not self.problem_structure.get("investment_outside", False):
+            return solution_0, None
+
+        if "InnerSolution" not in solution_0.blocks:
+            raise KeyError(
+                "InnerSolution not found in Solution_0: with "
+                "'investment_outside' Solution_0 is the solution of the "
+                "InvestmentBlock and that of the stochastic Block is inside it."
+            )
+        return (solution_0.blocks["InnerSolution"],
+                solution_0.variables["DesignVariables"].data)
+
+    def _assign_investment_outside_design(self, design_vars):
+        """
+        Give every scenario of an asset the design of the InvestmentBlock.
+
+        The investment outside is one for all the scenarios, and a scenario
+        is read back as the asset with its own values on top [see
+        block_to_dataarrays_stochastic()]: the design goes both on the asset
+        and in each of its scenarios, where it replaces whatever the
+        scenario carries (e.g., the nominal capacity of a line).
+        """
+        if design_vars is None:
+            return
+
+        block_names = self.investmentblock.get("Blocks", [])
+        assign_design_variables_to_unitblocks(self.unitblocks, block_names,
+                                              design_vars)
+        for name, value in zip(block_names, design_vars):
+            for scenario in self.unitblocks[name].get("scenarios", {}).values():
+                scenario["DesignVariable"] = value
+
+
     def _parse_multistage_solution_to_unitblocks(self, solution, n, solution_data):
         """
         Parse the solution of a MultiStageStochasticBlock.
@@ -1172,7 +1298,8 @@ class Transformation:
         num_units = self.dimensions["UCBlock"]["NumberUnits"]
         groups = self.problem_structure["scenario_tree"]["groups"]
 
-        solution_0 = solution.blocks["Solution_0"]
+        solution_0, design_vars = self._split_investment_outside(
+            solution.blocks["Solution_0"])
         solution_data["MSSB"] = solution_0
 
         self.networkblock.setdefault("Scenarios", {})
@@ -1213,6 +1340,7 @@ class Transformation:
                     solution_data=solution_data,
                 )
 
+        self._assign_investment_outside_design(design_vars)
         split_merged_dcnetworkblocks(self.unitblocks)
         return solution_data
 
@@ -2498,6 +2626,11 @@ class Transformation:
                     f"Please provide self.configfile explicitly."
                 )
             template = default_template_map[block_type]
+            # modules make the design integer, which the BundleSolver of the
+            # InvestmentBlock has to be told to keep integer
+            if (block_type == "InvestmentBlock"
+                    and getattr(self, "_investment_modules", False)):
+                template = "InvestmentBlock/BSPar-int.txt"
             configfile = pysmspp.SMSConfig(template=str(template))
         else:
             if isinstance(cfg, pysmspp.SMSConfig):
@@ -2574,8 +2707,11 @@ class Transformation:
         """
     
         # ---- Basic type checks ----
-        if not isinstance(self.merge_links, bool):
-            raise TypeError("merge_links must be a boolean.")
+        if not (isinstance(self.merge_links, (bool, str))
+                or (isinstance(self.merge_links, Sequence)
+                    and all(isinstance(m, str) for m in self.merge_links))):
+            raise TypeError("merge_links must be a boolean, a string or a "
+                            "sequence of strings.")
         if not isinstance(self.capacity_expansion_ucblock, bool):
             raise TypeError("capacity_expansion_ucblock must be a boolean.")
     
