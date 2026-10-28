@@ -153,3 +153,19 @@ def test_tssb_paths_only_to_design_variables():
     # one without has none at all
     assert sum(v == "x_battery" for _, v in names) == 1
     assert not any(v == "x_converter" for _, v in names)
+
+
+def test_stochastic_storage_unit_is_a_storage_unit():
+    """The inverse of a BatteryUnitBlock of a stochastic network goes to its
+    StorageUnit, whose name is in the index of the storage units together
+    with the scenario."""
+    from pypsa2smspp.inverse import component_definition
+
+    n = storage_network()
+    n.add("Store", "store", bus="a", e_nom=10.0)
+    n.set_scenarios({"low": 0.5, "high": 0.5})
+
+    assert component_definition(
+        n, {"block": "BatteryUnitBlock", "name": "su"}) == "StorageUnit"
+    assert component_definition(
+        n, {"block": "BatteryUnitBlock", "name": "store"}) == "Store"

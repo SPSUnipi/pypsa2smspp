@@ -39,7 +39,12 @@ def component_definition(n, unit_block: dict) -> str:
         case "HydroUnitBlock":
             return "StorageUnit"
         case "BatteryUnitBlock":
-            return "StorageUnit" if unit_block['name'] in n.storage_units.index else "Store"
+            # the names of the storage units, which a stochastic network
+            # indexes by scenario as well
+            names = n.storage_units.index
+            if isinstance(names, pd.MultiIndex):
+                names = names.get_level_values("name")
+            return "StorageUnit" if unit_block['name'] in names else "Store"
         case "DCNetworkBlock_lines":
             return "Line"
         case "DCNetworkBlock_links":

@@ -17,6 +17,7 @@
 * Fix an extendable link, line or generator whose capacity costs nothing at its finite maximum (`p_nom_max`, `s_nom_max`), which is where its optimum is, rather than at 1e9: links with a finite maximum became unbounded interconnections [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Expand an extendable StorageUnit in the UCBlock: its capacity is the design Variable of the BatteryUnitBlock, which sizes power and energy together, with `capital_cost` as investment cost and `p_nom_min` and `p_nom_max` as bounds, and is read back as `p_nom`, together with `p` and `state_of_charge` [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Count `fom_cost` with `capital_cost`, as PyPSA does in its objective [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Read back the solution of a BatteryUnitBlock of a stochastic network into its StorageUnit, whose name the index of the storage units holds together with the scenario, rather than into a Store, which stopped the inverse transformation [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
