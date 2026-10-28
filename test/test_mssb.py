@@ -428,7 +428,15 @@ def test_investment_outside_matches_the_flat_optimum(stochastic_type):
         fp_solution="smspp_{name}_solution.nc",
         pysmspp_options={"B": "InnerBCfg.txt"},
     )
-    transformation.run(n, verbose=False)
+    try:
+        transformation.run(n, verbose=False)
+    except ValueError as e:
+        # the configuration names a Solver that this build of SMS++ has not
+        # (it asks for GUROBI, which the build of conda-forge leaves out)
+        if "not present in Solver factory" in str(e):
+            pytest.skip("this SMS++ has not the Solver of "
+                        + INVESTMENT_OUTSIDE_CONFIGFILE)
+        raise
     obtained = float(transformation.result.objective_value)
 
     # the configuration asks the bundle for a relative accuracy of 1e-6
