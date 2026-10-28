@@ -8,17 +8,18 @@
 * Emit a MultiStageStochasticBlock from a two-level scenario tree
 * State the investment once, outside the scenarios, in an InvestmentBlock wrapping the stochastic Block (`investment_outside`)
 * Translate the global constraints on the dispatch into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
+* Write a modular extendable asset (`p_nom_mod`) of an IntermittentUnitBlock with an integer design, the number of its modules, also in an InvestmentBlock (`Integer`), which is then solved by the BundleSolver of `InvestmentBlock/BSPar-int.txt` [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Translate the thermal generators of chosen carriers into NuclearUnitBlocks (`nuclear_units`, off by default), with rules read from `data/nuclear_rules.yaml` or from a file of the user [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 
 ### Minor Changes and Bug Fixes
 
+* Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 * Name in the paths of a stochastic Block only the design Variable that the units have, those whose investment cost is not zero, and none of a hydro unit: a path to a Variable that is not there stopped the solver [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Fix an extendable link, line or generator whose capacity costs nothing at its finite maximum (`p_nom_max`, `s_nom_max`), which is where its optimum is, rather than at 1e9: links with a finite maximum became unbounded interconnections [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Expand an extendable StorageUnit in the UCBlock: its capacity is the design Variable of the BatteryUnitBlock, which sizes power and energy together, with `capital_cost` as investment cost and `p_nom_min` and `p_nom_max` as bounds, and is read back as `p_nom`, together with `p` and `state_of_charge` [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Count `fom_cost` with `capital_cost`, as PyPSA does in its objective [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Read back the solution of a BatteryUnitBlock of a stochastic network into its StorageUnit, whose name the index of the storage units holds together with the scenario, rather than into a Store, which stopped the inverse transformation [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
-
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
@@ -32,6 +33,10 @@
 * Read the solution back with a recent xarray [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Forbid the switches that a start-up or shut-down limit below the minimum power makes unreachable [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
 * Keep the index name of the generators split into modules by `split_traditional_generators_into_modules` [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
+* Write the susceptance of the lines, `1/x_pu_eff`, which was 0 and turned the AC network into a transport model without Kirchhoff's voltage law [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
+* Merge the battery charger and discharger of PyPSA-Eur with `merge_links`, which the fixed capacity given to the discharger (it has no capital cost) prevented, accept a preset or a list of presets as `merge_links`, and read the merged links back in the stochastic case [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
+* Read back the solution of the investment stated outside the scenarios (`investment_outside`), an InvestmentBlock over a TSSB or an MSSB [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
+* Write the marginal cost of a Store or a StorageUnit as `Cost = -marginal_cost`, `Cost` being a price on the net injection: `abs(marginal_cost)` reversed it for a positive marginal cost [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Charge a start-up once, whatever the weighting of the snapshot, as PyPSA does: it used to be multiplied by it, while PyPSA weights the cost of the energy and not the unit commitment terms
 
 
