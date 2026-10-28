@@ -82,11 +82,7 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
             "InitialStorage": lambda cyclic_state_of_charge, state_of_charge_initial: -1 if cyclic_state_of_charge.values else state_of_charge_initial,
-            # "Cost" is a price on the net injection p^ac, paid for the energy
-            # drawn and earned for the energy delivered (- Cost p^ac in the
-            # objective), PyPSA's marginal cost is on the dispatch only: they
-            # agree when the unit never draws [see Transformation]
-            "Cost": lambda marginal_cost: -marginal_cost,
+            "Cost": lambda marginal_cost: abs(marginal_cost),
             # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
             # "ConverterInvestmentCost": 0.0,
             # "BatteryMaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item(),
@@ -110,9 +106,7 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours).iloc[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
-            # PyPSA's marginal_cost * p on the net power of the Store is
-            # - Cost p^ac, "Cost" being a price on the net injection
-            "Cost": lambda marginal_cost: -marginal_cost,
+            "Cost": lambda marginal_cost: abs(marginal_cost),
             }
 
         self.Lines_parameters = {
@@ -120,14 +114,7 @@ class TransformationConfig:
             "EndLine": lambda end_line_idx: end_line_idx.values,
             "MinPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: - (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
-            # the AC lines obey Kirchhoff's voltage law as in PyPSA, whose
-            # flows are f = ( theta_0 - theta_1 ) / x_pu_eff; a line with no
-            # reactance is a transport one
-            "LineSusceptance": lambda x_pu_eff: np.where(
-                np.asarray(x_pu_eff, dtype=float) > 0,
-                1.0 / np.where(np.asarray(x_pu_eff, dtype=float) > 0,
-                               np.asarray(x_pu_eff, dtype=float), 1.0),
-                0.0),
+            "LineSusceptance": lambda s_nom: np.zeros_like(s_nom),
             "Efficiency": lambda s_nom: np.ones_like(s_nom),
             "NetworkCost": lambda s_nom: np.zeros_like(s_nom),
             }
