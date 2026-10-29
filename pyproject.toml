@@ -72,6 +72,8 @@ version_scheme = "no-guess-dev"
 filterwarnings = [
     "error::DeprecationWarning", # Raise all DeprecationWarnings as errors
     "error::FutureWarning",      # Raise all FutureWarnings as errors
+    # raised by linopy inside PyPSA, about its semantics to come (v1)
+    "ignore::linopy.config.LinopySemanticsWarning",
 ]
 
 # Coverage settings
