@@ -13,6 +13,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 * Name in the paths of a stochastic Block only the design Variable that the units have, those whose investment cost is not zero, and none of a hydro unit: a path to a Variable that is not there stopped the solver [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Fix an extendable link, line or generator whose capacity costs nothing at its finite maximum (`p_nom_max`, `s_nom_max`), which is where its optimum is, rather than at 1e9: links with a finite maximum became unbounded interconnections [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
