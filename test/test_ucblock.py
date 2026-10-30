@@ -110,6 +110,41 @@ def test_ucblock(test_case_xlsx):
     run_ucblock(test_case_xlsx)
 
 
+def storage_unit_network():
+    """
+    One bus with a load of 50 over 24 hours, a generator at 10 and a
+    StorageUnit half full that can store and has a marginal cost of 5.
+    """
+    import pandas as pd
+    import pypsa
+
+    n = pypsa.Network()
+    n.set_snapshots(pd.RangeIndex(24))
+    n.add("Bus", "bus")
+    n.add("Load", "load", bus="bus", p_set=50.0)
+    n.add("Generator", "gen", bus="bus", p_nom=100.0, marginal_cost=10.0)
+    n.add("StorageUnit", "battery", bus="bus", p_nom=100.0, max_hours=10.0,
+          state_of_charge_initial=500.0, cyclic_state_of_charge=False,
+          marginal_cost=5.0)
+    return n
+
+
+def test_storage_unit_marginal_cost_refused():
+    """
+    A StorageUnit that can store and has a marginal cost is refused, since
+    PyPSA charges that cost on the dispatch only.
+    """
+    network = storage_unit_network()
+    transformation = Transformation(
+        capacity_expansion_ucblock=True,
+        workdir=OUT_TEST,
+        name="storage_unit_marginal_cost",
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        configfile="auto",
+    )
+    with pytest.raises(ValueError, match="marginal cost"):
+        transformation.run(network, verbose=False)
 
 @pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
 def test_free_capacity_with_minimum_output_is_refused(dynamic):
