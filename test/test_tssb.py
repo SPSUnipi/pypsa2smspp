@@ -20,9 +20,10 @@ from conftest import (
     REL_TOL,
     ABS_TOL,
     OUT_TEST,
+    REL_TOL,
+    ABS_TOL,
 )
 
-import math
 from network_definition import NetworkDefinition
 
 from pypsa2smspp.transformation import Transformation
@@ -117,6 +118,7 @@ def _ensure_objectives_csv() -> None:
                 "network_path",
                 "stochastic_parameters",
                 "objective_smspp",
+                "objective_pypsa",
             ]
         )
 
@@ -128,6 +130,7 @@ def _append_objective_row(
     network_path: Path,
     stochastic_parameters: Sequence[str],
     obj_smspp: float,
+    obj_pypsa: float,
 ) -> None:
     """
     Append one TSSB objective row to the objectives CSV report.
@@ -142,6 +145,7 @@ def _append_objective_row(
                 str(network_path),
                 "+".join(stochastic_parameters),
                 obj_smspp,
+                obj_pypsa,
             ]
         )
 
@@ -220,8 +224,9 @@ def run_tssb_block(
     TSSB regression test:
     - build a PyPSA network from Excel;
     - apply stochastic data;
+    - solve the stochastic network with PyPSA (reference);
     - run the SMS++ TSSB pipeline;
-    - save the SMS++ objective to CSV.
+    - compare the objectives, and save both to CSV.
     """
     parameter_tag = _parameter_tag(stochastic_parameters)
     case_name = f"{xlsx_path.stem}__{parameter_tag}"
@@ -252,6 +257,23 @@ def run_tssb_block(
         stochastic_parameters=parser.stochastic_parameters,
     )
 
+    # the expected cost over the scenarios, the capacities being the same in
+    # all of them, which is the problem the TSSB solves
+    network = n.copy()
+    # PyPSA before 1.3 (which needs pandas 3, not allowed here) fails on
+    # the ramp limits of a network with scenarios; the start-up and shut-down
+    # ones bind only committable units, hence they are dropped from the
+    # others, which leaves the model as it is
+    for c in (network.generators, network.links):
+        if "committable" not in c.columns:
+            continue
+        free = ~c["committable"].astype(bool)
+        for attr in ("ramp_limit_start_up", "ramp_limit_shut_down"):
+            if attr in c.columns:
+                c.loc[free, attr] = float("nan")
+    network.optimize(solver_name="highs", include_objective_constant=True)
+    obj_pypsa = float(network.objective + network.objective_constant)
+
     transformation = Transformation(
         name=case_name,
         configfile=TSSB_CONFIGFILE,
@@ -277,10 +299,11 @@ def run_tssb_block(
         network_path=xlsx_path,
         stochastic_parameters=parser.stochastic_parameters,
         obj_smspp=obj_smspp,
+        obj_pypsa=obj_pypsa,
     )
 
     assert transformation.result is not None
-    assert math.isfinite(obj_smspp)
+    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
 
     try:
         n.export_to_netcdf(str(network_nc))
