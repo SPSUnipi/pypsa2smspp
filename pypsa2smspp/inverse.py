@@ -39,7 +39,12 @@ def component_definition(n, unit_block: dict) -> str:
         case "HydroUnitBlock":
             return "StorageUnit"
         case "BatteryUnitBlock":
-            return "StorageUnit" if unit_block['name'] in n.storage_units.index else "Store"
+            # the names of the storage units, which a stochastic network
+            # indexes by scenario as well
+            names = n.storage_units.index
+            if isinstance(names, pd.MultiIndex):
+                names = names.get_level_values("name")
+            return "StorageUnit" if unit_block['name'] in names else "Store"
         case "DCNetworkBlock_lines":
             return "Line"
         case "DCNetworkBlock_links":
@@ -188,7 +193,11 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_na
     """
     Transforms a unit block into a dictionary of DataArrays.
     """
-    attr_name = f"{unit_block['block']}_inverse"
+    # a component may have an inverse of its own, its names for the same data
+    # being those of another component (a StorageUnit in a BatteryUnitBlock)
+    attr_name = f"{unit_block['block']}_{component}_inverse"
+    if not hasattr(config, attr_name):
+        attr_name = f"{unit_block['block']}_inverse"
     converted_dict = {}
     normalized_keys = {normalize_key(k): k for k in unit_block.keys()}
 
