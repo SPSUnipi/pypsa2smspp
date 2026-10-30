@@ -10,9 +10,11 @@
 * Translate the global constraints on the dispatch into UCBlock pollutant budgets [PR #58](https://github.com/SPSUnipi/pypsa2smspp/pull/58)
 * Write a modular extendable asset (`p_nom_mod`) of an IntermittentUnitBlock with an integer design, the number of its modules, also in an InvestmentBlock (`Integer`), which is then solved by the BundleSolver of `InvestmentBlock/BSPar-int.txt` [PR #62](https://github.com/SPSUnipi/pypsa2smspp/pull/62)
 * Translate the thermal generators of chosen carriers into NuclearUnitBlocks (`nuclear_units`, off by default), with rules read from `data/nuclear_rules.yaml` or from a file of the user [PR #59](https://github.com/SPSUnipi/pypsa2smspp/pull/59)
+* Write the hydro units inside a HydroSystemUnitBlock, with the empty future cost of their water, as the UCBlock of a stage of an SDDPBlock wants them (`hydro_system`, off by default) [PR #71](https://github.com/SPSUnipi/pypsa2smspp/pull/71)
 
 ### Minor Changes and Bug Fixes
 
+* Write `MaxVolumetric` and `MinVolumetric` of a hydro unit as `[NumberReservoirs][TimeHorizon]`, the order of `HydroUnitBlock`; they were transposed, which SMS++ corrected only with a single reservoir [PR #71](https://github.com/SPSUnipi/pypsa2smspp/pull/71)
 * Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 * Fix the paths of a stochastic Block, which now name only the design Variables the units have [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
