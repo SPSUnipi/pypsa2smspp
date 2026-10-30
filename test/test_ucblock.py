@@ -22,6 +22,7 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+from pypsa2smspp.utils import preprocess_zero_capital_cost_extendable_generators
 
 
 # the rules of a nuclear unit switched off, the modulation ramps being the full
@@ -116,6 +117,30 @@ def run_ucblock(xlsx_path: Path, multi_carrier: bool = False) -> None:
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
 def test_ucblock(test_case_xlsx, multi_carrier):
     run_ucblock(test_case_xlsx, multi_carrier)
+
+
+
+@pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
+def test_free_capacity_with_minimum_output_is_refused(dynamic):
+    """
+    An extendable generator whose capacity costs nothing and whose output has
+    a positive minimum is forced to produce more the more capacity it has:
+    its best capacity is not known in advance, and fixing it at its maximum
+    would force that output, hence it is refused, whether the minimum is
+    static or in time.
+    """
+    import pypsa
+
+    n = pypsa.Network()
+    n.set_snapshots(range(2))
+    n.add("Bus", "bus")
+    n.add("Load", "load", bus="bus", p_set=[10.0, 20.0])
+    n.add("Generator", "forced", bus="bus", p_nom_extendable=True,
+          p_nom_max=50.0, capital_cost=0.0,
+          p_min_pu=[0.0, 0.5] if dynamic else 0.5)
+
+    with pytest.raises(ValueError, match="forced"):
+        preprocess_zero_capital_cost_extendable_generators(n)
 
 
 if __name__ == "__main__":

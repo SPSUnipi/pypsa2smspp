@@ -801,6 +801,99 @@ def get_attr_name(
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
 # ------------------------ Pre-processing functions --------------------------------
 
+def fold_fom_cost_into_capital_cost(n):
+    """
+    Adds fom_cost to capital_cost, and sets fom_cost to 0, on every component
+    that has both.
+
+    PyPSA puts ( capital_cost + fom_cost ) times the capacity of an extendable
+    asset in its objective, the part of the existing capacity in
+    objective_constant, while the investment cost of a design Variable of
+    SMS++ is a single datum: folding the two makes it the cost PyPSA has.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network, modified in place.
+
+    Returns
+    -------
+    pypsa.Network
+        The same network.
+    """
+    for comp in ("generators", "storage_units", "stores", "lines", "links"):
+        df = getattr(n, comp)
+        if df.empty or "fom_cost" not in df.columns or \
+                "capital_cost" not in df.columns:
+            continue
+        fom = df["fom_cost"].fillna(0.0).astype(float)
+        if not fom.any():
+            continue
+        df["capital_cost"] = df["capital_cost"].fillna(0.0).astype(float) + fom
+        df["fom_cost"] = 0.0
+    return n
+
+
+def free_capacity(df, nom, fixed_capacity, dynamic_min_pu=None):
+    """
+    The capacity at which an extendable asset with zero capital cost is fixed.
+
+    The capacity costs nothing, hence the optimum takes as much of it as it
+    may: the maximum ``<nom>_max`` when it is finite, and ``fixed_capacity``
+    when it is not, which stands for a capacity with no bound, any value
+    larger than what is used giving the same optimum.
+
+    This holds only when more capacity forces nothing: with a positive
+    minimum output or flow (``p_min_pu`` above 0, static or in time) more
+    capacity forces more of it, the best capacity depends on the rest of the
+    network, and fixing it at its maximum, or at ``fixed_capacity``, would
+    force that much output. Such an asset needs a design Variable with no
+    cost, which a UnitBlock does not have (it has one only when its
+    investment cost is not zero), hence it is refused.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The static data of the assets.
+    nom : str
+        The nominal attribute, ``p_nom`` or ``s_nom``.
+    fixed_capacity : float
+        The capacity of an asset with no finite maximum.
+    dynamic_min_pu : pandas.DataFrame, optional
+        The time series of the minimum output or flow per unit of capacity,
+        one column per asset, e.g., ``n.generators_t.p_min_pu``.
+
+    Returns
+    -------
+    pandas.Series
+        The capacity of each asset.
+
+    Raises
+    ------
+    ValueError
+        If an asset has a positive minimum output or flow.
+    """
+    most = (df[f"{nom}_max"].astype(float) if f"{nom}_max" in df.columns
+            else pd.Series(np.inf, index=df.index))
+    least = (df[f"{nom}_min"].astype(float) if f"{nom}_min" in df.columns
+             else pd.Series(0.0, index=df.index))
+    min_pu = nom.replace("_nom", "_min_pu")
+    forced = (df[min_pu].astype(float) > 0 if min_pu in df.columns
+              else pd.Series(False, index=df.index))
+    if dynamic_min_pu is not None and not dynamic_min_pu.empty:
+        cols = df.index.intersection(dynamic_min_pu.columns)
+        forced.loc[cols] |= (dynamic_min_pu[cols] > 0).any(axis=0)
+    if forced.any():
+        raise ValueError(
+            "free_capacity: the extendable assets "
+            f"{sorted(df.index[forced])} have zero capital_cost and a "
+            f"positive {min_pu}, which forces their output to grow with "
+            "their capacity: their best capacity is not known in advance, "
+            "and it cannot be a design Variable with no cost; give them a "
+            f"capital_cost, or a fixed {nom}")
+    return most.where(np.isfinite(most), fixed_capacity).clip(lower=least)
+
+
 def preprocess_zero_capital_cost_extendable_generators(
     n,
     fixed_capacity: float = 1e8,
@@ -815,16 +908,18 @@ def preprocess_zero_capital_cost_extendable_generators(
     - p_nom_extendable == True
     - capital_cost == 0
 
-    are converted to non-extendable generators with a large fixed capacity.
+    are converted to non-extendable generators, at the capacity that
+    free_capacity() gives: p_nom_max when finite, fixed_capacity otherwise.
 
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to preprocess.
-    fixed_capacity : float, default 1e6
-        Capacity assigned to matching generators.
+    fixed_capacity : float, default 1e8
+        Capacity assigned to matching generators with no finite p_nom_max.
     update_bounds : bool, default True
-        If True, also set p_nom_min and p_nom_max to fixed_capacity when present.
+        If True, also set p_nom_min and p_nom_max to the capacity when
+        present.
     logger : callable, default print
         Logging function.
     return_fixed_count : bool, default False
@@ -860,14 +955,18 @@ def preprocess_zero_capital_cost_extendable_generators(
     if fixed_count == 0:
         return (n, 0) if return_fixed_count else n
 
+    # a capacity that costs nothing is best at its largest: at p_nom_max when
+    # this is finite, and at fixed_capacity otherwise
+    capacity = free_capacity(n.generators.loc[matched], "p_nom",
+                             fixed_capacity, n.generators_t.p_min_pu)
     n.generators.loc[matched, "p_nom_extendable"] = False
-    n.generators.loc[matched, "p_nom"] = fixed_capacity
+    n.generators.loc[matched, "p_nom"] = capacity
 
     if update_bounds:
         if "p_nom_min" in n.generators.columns:
-            n.generators.loc[matched, "p_nom_min"] = fixed_capacity
+            n.generators.loc[matched, "p_nom_min"] = capacity
         if "p_nom_max" in n.generators.columns:
-            n.generators.loc[matched, "p_nom_max"] = fixed_capacity
+            n.generators.loc[matched, "p_nom_max"] = capacity
 
     # logger(
     #     f"Preprocessed {len(matched)} extendable generators with zero capital_cost: "
@@ -892,20 +991,23 @@ def preprocess_zero_capital_cost_extendable_lines_links(
     - ``<nom>_extendable == True``
     - ``capital_cost == 0``
 
-    are converted to non-extendable branches with a large fixed capacity, the
-    same treatment applied to zero-capital-cost generators. A branch that can be
-    expanded at no cost and with no finite bound is otherwise unbounded: it maps
-    to a design variable with zero cost and infinite upper bound, which is
-    ill-posed (nothing keeps its capacity finite).
+    are converted to non-extendable branches, the same treatment applied to
+    zero-capital-cost generators: a capacity that costs nothing is best at its
+    largest, so the branch is fixed at ``<nom>_max`` when this is finite, and
+    at a large fixed capacity when it is not [see free_capacity()]. A branch
+    that can be expanded at no cost and with no finite bound is otherwise
+    unbounded: it maps to a design variable with zero cost and infinite upper
+    bound, which is ill-posed (nothing keeps its capacity finite).
 
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to preprocess.
     fixed_capacity : float, default 1e9
-        Capacity assigned to matching lines/links.
+        Capacity assigned to matching lines/links with no finite
+        ``<nom>_max``.
     update_bounds : bool, default True
-        If True, also set ``<nom>_min`` and ``<nom>_max`` to fixed_capacity
+        If True, also set ``<nom>_min`` and ``<nom>_max`` to the capacity
         when present.
     logger : callable, default print
         Logging function.
@@ -952,14 +1054,17 @@ def preprocess_zero_capital_cost_extendable_lines_links(
             continue
         fixed_count += len(matched)
 
+        dynamic = (n.links_t.p_min_pu if comp == "links" else None)
+        capacity = free_capacity(df.loc[matched], nom, fixed_capacity,
+                                 dynamic)
         df.loc[matched, ext] = False
-        df.loc[matched, nom] = fixed_capacity
+        df.loc[matched, nom] = capacity
 
         if update_bounds:
             if f"{nom}_min" in df.columns:
-                df.loc[matched, f"{nom}_min"] = fixed_capacity
+                df.loc[matched, f"{nom}_min"] = capacity
             if f"{nom}_max" in df.columns:
-                df.loc[matched, f"{nom}_max"] = fixed_capacity
+                df.loc[matched, f"{nom}_max"] = capacity
 
     return (n, fixed_count) if return_fixed_count else n
 
@@ -1722,7 +1827,7 @@ def apply_investment_module_overrides(IntermittentUnitBlock_parameters,
                 inverse(designvariable) * module_size(p_nom_mod))
 
 
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None, BatteryUnitBlock_parameters=None, BatteryUnitBlock_StorageUnit_inverse=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
     Keys are only added if missing, so it remains idempotent.
@@ -1827,11 +1932,33 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
         b["ConverterMinCapacityDesign"] = _conv_min_cap_design
 
     
+    # --- BatteryUnitBlock of a StorageUnit ---
+    # p_nom sizes power and energy together, and so does x_battery, which
+    # multiplies the data per MW; with no design and no ConverterMaxPower of
+    # its own the converter follows it
+    su = BatteryUnitBlock_parameters
+    if su is not None:
+        if "BatteryInvestmentCost" not in su:
+            su["BatteryInvestmentCost"] = lambda capital_cost, p_nom_extendable: first_scalar(capital_cost) if bool(first_scalar(p_nom_extendable)) else 0.0
+
+        if "BatteryMaxCapacityDesign" not in su:
+            # an uncapped p_nom_max stays infinite, see _max_cap_design above
+            su["BatteryMaxCapacityDesign"] = lambda p_nom, p_nom_extendable, p_nom_max: first_scalar(p_nom_max) if bool(first_scalar(p_nom_extendable)) else first_scalar(p_nom)
+
+        if "BatteryMinCapacityDesign" not in su:
+            su["BatteryMinCapacityDesign"] = lambda p_nom, p_nom_extendable, p_nom_min: first_scalar(p_nom_min) if bool(first_scalar(p_nom_extendable)) else first_scalar(p_nom)
+
     # --- IntermittentUnitBlock_inverse ---
     IntermittentUnitBlock_inverse["p_nom"] = (
         lambda intermittentdesign, p_nom_mod:
             intermittentdesign * module_size(p_nom_mod)
     )
+
+    # --- BatteryUnitBlock_StorageUnit_inverse ---
+    if BatteryUnitBlock_StorageUnit_inverse is not None:
+        BatteryUnitBlock_StorageUnit_inverse["p_nom"] = (
+            lambda batterydesign: batterydesign
+        )
 
     # --- BatteryUnitBlock_inverse ---
     BatteryUnitBlock_inverse["e_nom"] = (

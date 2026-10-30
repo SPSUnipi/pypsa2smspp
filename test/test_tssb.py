@@ -116,6 +116,7 @@ def _ensure_objectives_csv() -> None:
                 "network_path",
                 "stochastic_parameters",
                 "objective_smspp",
+                "objective_pypsa",
             ]
         )
 
@@ -127,6 +128,7 @@ def _append_objective_row(
     network_path: Path,
     stochastic_parameters: Sequence[str],
     obj_smspp: float,
+    obj_pypsa: float,
 ) -> None:
     """
     Append one TSSB objective row to the objectives CSV report.
@@ -141,6 +143,7 @@ def _append_objective_row(
                 str(network_path),
                 "+".join(stochastic_parameters),
                 obj_smspp,
+                obj_pypsa,
             ]
         )
 
@@ -209,8 +212,9 @@ def run_tssb_block(
     TSSB regression test:
     - build a PyPSA network from Excel;
     - apply stochastic data;
+    - solve the stochastic network with PyPSA (reference);
     - run the SMS++ TSSB pipeline;
-    - save the SMS++ objective to CSV.
+    - compare the objectives, and save both to CSV.
     """
     parameter_tag = _parameter_tag(stochastic_parameters)
     case_name = f"{xlsx_path.stem}__{parameter_tag}" + (
@@ -243,7 +247,30 @@ def run_tssb_block(
         stochastic_parameters=parser.stochastic_parameters,
     )
 
+    # with a committable component PyPSA builds no stochastic network, and
+    # the reference is the sum of the scenarios [see
+    # scenario_reference_objective()], else the stochastic network itself
     obj_reference = scenario_reference_objective(n.copy())
+    committable = any("committable" in c.columns
+                      and bool(c["committable"].any())
+                      for c in (n.generators, n.links))
+    if obj_reference is None and not committable:
+        # the expected cost over the scenarios, the capacities being the same
+        # in all of them, which is the problem the TSSB solves
+        network = n.copy()
+        # PyPSA before 1.3 (which needs pandas 3, not allowed here) fails on
+        # the ramp limits of a network with scenarios; the start-up and
+        # shut-down ones bind only committable units, hence they are dropped
+        # from the others, which leaves the model as it is
+        for c in (network.generators, network.links):
+            if "committable" not in c.columns:
+                continue
+            free = ~c["committable"].astype(bool)
+            for attr in ("ramp_limit_start_up", "ramp_limit_shut_down"):
+                if attr in c.columns:
+                    c.loc[free, attr] = float("nan")
+        network.optimize(solver_name="highs", include_objective_constant=True)
+        obj_reference = float(network.objective + network.objective_constant)
 
     transformation = Transformation(
         name=case_name,
@@ -274,6 +301,8 @@ def run_tssb_block(
         network_path=xlsx_path,
         stochastic_parameters=parser.stochastic_parameters,
         obj_smspp=obj_smspp,
+        obj_pypsa=(float("nan") if obj_reference is None
+                   else obj_reference),
     )
 
     assert transformation.result is not None

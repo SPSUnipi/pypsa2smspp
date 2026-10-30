@@ -15,6 +15,13 @@
 
 * Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
+* Fix the paths of a stochastic Block, which now name only the design Variables the units have [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Fix zero-cost extendable assets at their finite maximum instead of 1e9, and refuse those with a positive minimum output [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Expand an extendable StorageUnit in the UCBlock [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Count `fom_cost` with `capital_cost`, as PyPSA does [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Read back the BatteryUnitBlock of a stochastic StorageUnit into the StorageUnit [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Compute the stochastic data of a UnitBlock on the preprocessed network [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
+* Compare the objective of the TSSB tests with the stochastic optimum of PyPSA [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
 * Build the model of a network and read its solution back faster [PR #64](https://github.com/SPSUnipi/pypsa2smspp/pull/64)
 * Fix x_network here-and-now path to index design position, not line id [PR #48](https://github.com/SPSUnipi/pypsa2smspp/pull/48)
 * Drop p_set for dispatchable components [PR #52] (https://github.com/SPSUnipi/pypsa2smspp/pull/52)
