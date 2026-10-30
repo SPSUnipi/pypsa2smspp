@@ -10,6 +10,9 @@ import pypsa
 import pysmspp
 import pytest
 
+if hasattr(pypsa.options.api, "legacy_string_dtype"):
+    pypsa.options.api.legacy_string_dtype = False
+
 REL_TOL = 1e-3   # relative tolerance for objective comparison. TODO: tighten tolerance
 ABS_TOL = 1e-4   # absolute tolerance for objective comparison
 
