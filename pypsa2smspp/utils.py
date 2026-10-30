@@ -2489,20 +2489,58 @@ def carrier_unit_links(n, links, bus_node):
         if len(set(carriers)) != len(carriers):
             raise ValueError(
                 f"carrier_unit_links: {name} has two ports on the same "
-                "carrier, while a generator has one node on each carrier.")
+                "carrier, while a generator has one node on each carrier "
+                "(with enable_conversion_units it is a ConversionUnitBlock, "
+                "one generator per port).")
         delays = [c for c in links.columns if c.startswith("delay")]
         if any(float(links.at[name, c] or 0) != 0 for c in delays):
             raise ValueError(
                 f"carrier_unit_links: {name} delays its output, which the "
-                "unit it becomes cannot do (a committable link can, as a "
-                "ConversionUnitBlock).")
+                "unit it becomes cannot do (with enable_conversion_units it "
+                "is a ConversionUnitBlock, which can).")
         names.append(name)
+    return pd.Index(names, dtype=links.index.dtype)
+
+
+def conversion_carrier_links(n, links, bus_node):
+    """
+    The links among `links` whose ports are on more than one carrier and that
+    a unit with one generator cannot express [see carrier_unit_links()],
+    because two of their ports are on the same carrier (say, a pump that
+    draws water and electricity and delivers water, or a compressor of a gas
+    pipeline) or because they delay an output; each of them becomes a
+    ConversionUnitBlock, whose generators are its ports, each on its own
+    node of its carrier [see conversion_unit_variables()].
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network.
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines.
+    bus_node : pd.Series
+        The pair (carrier, node) of each bus [see bus_carriers()].
+
+    Returns
+    -------
+    pd.Index
+        The names of the links that are ConversionUnitBlocks.
+    """
+    names = []
+    delays = [c for c in links.columns if c.startswith("delay")]
+    for name in links.index:
+        carriers = [bus_node[bus][0] for bus, _ in link_ports(n, name)]
+        if len(set(carriers)) == 1:
+            continue
+        if len(set(carriers)) != len(carriers) or any(
+                float(links.at[name, c] or 0) != 0 for c in delays):
+            names.append(name)
     return pd.Index(names, dtype=links.index.dtype)
 
 
 def conversion_unit_variables(n, name, scaled=False):
     """
-    Computes the ConversionUnitBlock of a committable link of PyPSA.
+    Computes the ConversionUnitBlock of a link of PyPSA, committable or not.
 
     The link has one commitment and a power p0 drawn from bus0, and it injects
     efficiency_k * p0 into each bus k >= 1. The unit has one generator per
@@ -2516,6 +2554,13 @@ def conversion_unit_variables(n, name, scaled=False):
     the rows. The costs of PyPSA are on p0, hence on the input generator with
     the opposite sign, weighted by the snapshot weighting as the energy is;
     the costs of a start-up and of a shut-down are paid once.
+
+    A link that is not committable (one between carriers that a unit with
+    one generator cannot express, see conversion_carrier_links()) is a unit
+    on throughout the horizon, as PyPSA holds its p_min_pu at every
+    snapshot: it is on before the horizon for one instant with a minimum up
+    time of T + 1, and it has none of the costs of the commitment (start-up,
+    shut-down, stand-by), which PyPSA only charges to a committable link.
 
     An efficiency that changes over time gives an OperatingMatrix indexed
     over the instants. An output k with a delay (delay, delay2, ... in the
@@ -2602,6 +2647,13 @@ def conversion_unit_variables(n, name, scaled=False):
     extendable = bool(link["p_nom_extendable"])
     module = static("p_nom_mod", 0.0)
     design = extendable and not scaled
+    committable = bool(link.get("committable", False))
+    if module > 0 and not committable:
+        raise ValueError(
+            f"{name} is a modular link that is not committable, whose "
+            "modules PyPSA does not commit, while a ConversionUnitBlock "
+            "commits them."
+        )
 
     # the delays of the outputs, in instants
     ports = conversion_unit_ports(n, name)
@@ -2728,13 +2780,14 @@ def conversion_unit_variables(n, name, scaled=False):
     quadratic[:, 0] = dense("marginal_cost_quadratic", weights=True)
     if np.any(quadratic):
         variables["QuadTerm"] = per_generator(quadratic)
-    stand_by = dense("stand_by_cost", weights=True) / per_mw
-    if np.any(stand_by):
-        variables["ConstTerm"] = per_instant(stand_by)
-    for key, attr in (("StartUpCost", "start_up_cost"),
-                      ("ShutDownCost", "shut_down_cost")):
-        if static(attr, 0.0):
-            variables[key] = scalar(static(attr) / per_mw, "float")
+    if committable:
+        stand_by = dense("stand_by_cost", weights=True) / per_mw
+        if np.any(stand_by):
+            variables["ConstTerm"] = per_instant(stand_by)
+        for key, attr in (("StartUpCost", "start_up_cost"),
+                          ("ShutDownCost", "shut_down_cost")):
+            if static(attr, 0.0):
+                variables[key] = scalar(static(attr) / per_mw, "float")
 
     # the commitment before the horizon and the minimum up and down times
     # a unit off before the horizon for down_time_before snapshots; PyPSA
@@ -2745,9 +2798,14 @@ def conversion_unit_variables(n, name, scaled=False):
     min_down = max(int(static("min_down_time", 0)), 1)
     init_up_down = up_before if up_before > 0 else \
         - (down_before if down_before > 0 else min_down)
+    min_up = int(static("min_up_time", 0))
+    if not committable:
+        # on throughout: on before the horizon, and not yet allowed to stop
+        init_up_down, min_up, min_down = 1, T + 1, 0
     variables["InitUpDownTime"] = scalar(init_up_down, "int")
-    variables["MinUpTime"] = scalar(int(static("min_up_time", 0)), "uint")
-    variables["MinDownTime"] = scalar(int(static("min_down_time", 0)), "uint")
+    variables["MinUpTime"] = scalar(min_up, "uint")
+    variables["MinDownTime"] = scalar(
+        int(static("min_down_time", 0)) if committable else 0, "uint")
 
     if modules > 1 or (module > 0 and design):
         variables["Modules"] = scalar(modules, "uint")

@@ -9,6 +9,13 @@ with a design, a DesignNetworkBlock of that carrier in the UCBlock form and
 an asset of the InvestmentBlock in the other, while the electrolyser, the
 fuel cell and the gas turbine are units with an output on each carrier of
 their buses; both forms are held to the optimum of PyPSA.
+
+It also has a network with a pump, a link that draws water from one node
+and electricity and delivers the water to another node of the same carrier,
+which a unit with one generator cannot express, since a generator has one
+node on each carrier: it is a ConversionUnitBlock, one generator per port,
+held to the optimum of PyPSA with and without a minimum flow, which keeps
+the unit on throughout the horizon.
 """
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ from conftest import (
     OUT_TEST,
     REL_TOL,
     skip_carrier_form,
+    solver_reads_conversion_unit,
 )
 
 from pypsa2smspp.transformation import Transformation
@@ -93,3 +101,66 @@ def test_carrier_design_line(ucblock):
     # the capacity of the pipeline read back is the one PyPSA builds
     assert n.links.at["pipeline", "p_nom_opt"] == pytest.approx(
         reference.links.at["pipeline", "p_nom_opt"], rel=1e-4, abs=1e-3)
+
+
+def build_pump_network(p_min_pu: float) -> pypsa.Network:
+    """The water of the source A pumped to the users at B by a pump that
+    draws 0.3 MWh of electricity per unit of water, the electricity from a
+    generator dearer at the second snapshot, a tank at B taking what the
+    users do not; with p_min_pu the pump has a minimum flow at every
+    snapshot, which binds when the users take nothing, so that a unit that
+    could stop would cost less."""
+    n = pypsa.Network()
+    n.set_snapshots(range(T))
+    for carrier in ("AC", "water"):
+        n.add("Carrier", carrier)
+    n.add("Bus", "el", carrier="AC")
+    n.add("Bus", "water A", carrier="water")
+    n.add("Bus", "water B", carrier="water")
+    n.add("Generator", "plant", bus="el", p_nom=200,
+          marginal_cost=pd.Series([10.0, 30.0, 10.0, 10.0], n.snapshots))
+    n.add("Load", "load", bus="el", p_set=pd.Series(LOAD, n.snapshots))
+    n.add("Generator", "source", bus="water A", p_nom=200,
+          marginal_cost=1.0)
+    n.add("Load", "users", bus="water B",
+          p_set=pd.Series([30.0, 0.0, 50.0, 20.0], n.snapshots))
+    n.add("Store", "tank", bus="water B", e_nom=100)
+    n.add("Link", "pump", bus0="water A", bus1="water B", bus2="el",
+          efficiency=1.0, efficiency2=-0.3, p_nom=60, p_min_pu=p_min_pu)
+    return n
+
+
+@pytest.mark.parametrize("p_min_pu", [0.0, 0.2], ids=["free", "min flow"])
+def test_pump_between_two_nodes_of_a_carrier(p_min_pu):
+    n = build_pump_network(p_min_pu)
+    skip_carrier_form(n, True)
+    if not solver_reads_conversion_unit():
+        pytest.skip("the SMS++ solver does not read a ConversionUnitBlock")
+
+    reference = n.copy()
+    reference.optimize(solver_name="highs")
+    expected = float(reference.objective
+                     + getattr(reference, "objective_constant", 0.0))
+
+    name = "carrier_pump_" + ("min_flow" if p_min_pu else "free")
+    transformation = Transformation(
+        enable_conversion_units=True,
+        multi_carrier=True,
+        workdir=OUT_TEST,
+        name=name,
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        configfile="auto",
+        pysmspp_options={},
+    )
+    n = transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
+    assert obtained == pytest.approx(expected, rel=REL_TOL, abs=ABS_TOL)
+    # the pump is a ConversionUnitBlock with a generator per port
+    pump = [u for u in transformation.unitblocks.values()
+            if u["name"] == "pump"]
+    assert len(pump) == 1 and pump[0]["block"] == "ConversionUnitBlock"
+    assert pump[0]["dimensions"]["NumberGenerators"] == 3

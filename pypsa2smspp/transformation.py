@@ -44,6 +44,7 @@ from pypsa2smspp.utils import (
     conversion_unit_variables,
     bus_carriers,
     carrier_unit_links,
+    conversion_carrier_links,
     link_ports,
     forbid_unreachable_switches,
     free_initial_ramp,
@@ -225,7 +226,9 @@ class Transformation:
               - Ignored when `enable_thermal_units=False`.
 
         enable_conversion_units : bool, default False
-            Controls whether the committable links become ConversionUnitBlocks.
+            Controls whether the committable links become ConversionUnitBlocks
+            (and, with `multi_carrier`, the links between carriers that a
+            unit with one generator cannot express, see below).
 
             Behaviour:
               - False: every link is a (hyper)arc of the network, whose
@@ -259,15 +262,18 @@ class Transformation:
                 carrier is an IntermittentUnitBlock whose power is p0, with
                 an output on the carrier of each port (efficiency -1 on bus0
                 and efficiency, efficiency2, ... on bus1, bus2, ...), or a
-                ConversionUnitBlock if it is committable and
-                `enable_conversion_units` is True, whose generators have
-                each its output on the carrier of its bus; any other unit
-                has its output on the carrier of its bus. The demand of the
-                loads is that of the nodes of their carriers.
+                ConversionUnitBlock if `enable_conversion_units` is True and
+                it is committable, has two ports on the same carrier (a
+                pump, a compressor) or delays its output, whose generators
+                have each its output on the carrier of its bus and its own
+                node there (a link that is not committable being a unit on
+                throughout the horizon); any other unit has its output on the
+                carrier of its bus. The demand of the loads is that of the
+                nodes of their carriers.
 
             Notes:
-              - A link with two ports on the same carrier, or that delays
-                its output and is not a ConversionUnitBlock, is refused, as
+              - Without `enable_conversion_units`, a link with two ports on
+                the same carrier, or that delays its output, is refused, as
                 is the merge of the links (`merge_links`).
               - The lines and links of a carrier other than the electricity
                 can be neither extendable nor hyperarcs.
@@ -554,10 +560,15 @@ class Transformation:
         )
         links_absorbed = n.links.index.difference(links_merge_probe.index)
         # a committable link that is a ConversionUnitBlock keeps its design,
-        # as it is that of the unit
+        # as it is that of the unit, and so does a link between carriers
+        # that is one [see conversion_carrier_links()]
         if self.enable_conversion_units:
             links_absorbed = links_absorbed.union(
                 conversion_links(links_merge_probe))
+            if self.multi_carrier:
+                links_absorbed = links_absorbed.union(
+                    conversion_carrier_links(n, links_merge_probe,
+                                             bus_carriers(n)[1]))
 
         n, fixed_investment_lines_links = preprocess_zero_capital_cost_extendable_lines_links(
             n,
@@ -595,6 +606,13 @@ class Transformation:
         if self.multi_carrier:
             self._carriers, self._bus_node = bus_carriers(n)
             self._line_layout_cache = None
+            # those that a unit with one generator cannot express are
+            # ConversionUnitBlocks, one generator per port
+            if self.enable_conversion_units:
+                more = conversion_carrier_links(n, links_merged_df,
+                                                self._bus_node)
+                self._conversion_links = self._conversion_links.union(more)
+                links_merged_df = links_merged_df.drop(more)
             self._carrier_links = carrier_unit_links(n, links_merged_df,
                                                      self._bus_node)
             links_merged_df = links_merged_df.drop(self._carrier_links)
@@ -925,7 +943,9 @@ class Transformation:
     def _add_conversion_units(self, n, generator_node, generator_owner,
                               investment_meta, unitblock_index):
         """
-        Adds a ConversionUnitBlock for each committable link, with the
+        Adds a ConversionUnitBlock for each committable link (and, in the
+        carrier form, for each link between carriers that a unit with one
+        generator cannot express, see conversion_carrier_links()), with the
         variables of conversion_unit_variables(), and its generators to the
         nodes and owners of the generators of the UCBlock; an extendable
         one (in the InvestmentBlock form) is an asset of the InvestmentBlock,
