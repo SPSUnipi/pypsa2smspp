@@ -5,11 +5,15 @@ import pytest
 
 from conftest import (
     create_test_config,
+    modular_conversion_reference,
     safe_remove,
     test_cases,
     REL_TOL,
     ABS_TOL,
     OUT_TEST,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
 from network_definition import NetworkDefinition
@@ -88,7 +92,7 @@ def _append_objective_row(
         )
 
 
-def run_investment_block(xlsx_path: Path) -> None:
+def run_investment_block(xlsx_path: Path, multi_carrier: bool = False) -> None:
     """
     InvestmentBlock regression test:
     - build network from Excel
@@ -97,7 +101,7 @@ def run_investment_block(xlsx_path: Path) -> None:
     - compare objectives
     - save PyPSA/SMS++ objectives to CSV
     """
-    case_name = xlsx_path.stem
+    case_name = xlsx_path.stem + ("_carriers" if multi_carrier else "")
 
     # Artifacts (optional)
     network_nc = OUT_TEST / f"network_{case_name}.nc"
@@ -111,6 +115,7 @@ def run_investment_block(xlsx_path: Path) -> None:
     nd = NetworkDefinition(parser)
 
     n = nd.n
+    skip_carrier_form(n, multi_carrier)
     n = clean_ciclicity_storage(n)
     if "sector" not in xlsx_path.name:
         n = add_slack_unit(n)
@@ -119,8 +124,20 @@ def run_investment_block(xlsx_path: Path) -> None:
     network = n.copy()
 
     # ---- (1) PyPSA optimization (reference) ----
+    # the InvestmentFunction solves the continuous relaxation of the
+    # UCBlock (intRelaxIntVars in InvestmentBlock/BSCfg.txt of pySMSpp),
+    # hence the commitment of a committable component is relaxed in PyPSA too
+    committable = bool(network.generators.committable.any()
+                       or network.links.committable.any())
     solver_name = getattr(parser, "solver_name", "highs")
-    network.optimize(solver_name=solver_name, include_objective_constant=True)
+    # PyPSA does not relax the commitment of a modular link, whose reference
+    # is then made of the networks with a given number of modules [see
+    # modular_conversion_reference()]
+    obj_modular = modular_conversion_reference(network, solver_name)
+    if obj_modular is None:
+        network.optimize(solver_name=solver_name,
+                         linearized_unit_commitment=committable,
+                         include_objective_constant=True)
 
     # Export LP for debugging (best effort)
     try:
@@ -128,14 +145,21 @@ def run_investment_block(xlsx_path: Path) -> None:
     except Exception:
         pass
 
-    try:
-        obj_pypsa = float(network.objective + network.objective_constant)
-    except Exception:
-        obj_pypsa = float(network.objective)
+    if obj_modular is not None:
+        obj_pypsa = obj_modular
+    else:
+        try:
+            obj_pypsa = float(network.objective + network.objective_constant)
+        except Exception:
+            obj_pypsa = float(network.objective)
 
     # ---- (2) SMS++ pipeline (ONE CALL) ----
     transformation = Transformation(
         capacity_expansion_ucblock=False,  # InvestmentBlock
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(n.links.committable.any()),
+        # the buses of each carrier in a carrier of the UCBlock
+        multi_carrier=multi_carrier,
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
@@ -169,16 +193,23 @@ def run_investment_block(xlsx_path: Path) -> None:
         pass
 
 
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_investment(test_case_xlsx):
+def test_investment(test_case_xlsx, multi_carrier):
     name_l = test_case_xlsx.name.lower()
     # a modular asset is extendable, and the InvestmentBlock writes it with
     # an integer design, the number of its modules
     if ("ml" in name_l or "sector" in name_l
             or ("ext" not in name_l and not name_l.startswith("mod_"))):
         pytest.skip("Skipping case for investment block")
+    # an extendable committable link with ramps is a unit of one MW scaled by
+    # the design, whose relaxation is not the big-M one of PyPSA, and one on
+    # before the horizon at p_init has a power per MW of a design not known:
+    # both are checked in the UCBlock form [see test_ucblock]
+    if name_l.endswith(("_ramp.xlsx", "_ramp_on.xlsx")):
+        pytest.skip("Skipping case for investment block")
 
-    run_investment_block(test_case_xlsx)
+    run_investment_block(test_case_xlsx, multi_carrier)
 
 
 if __name__ == "__main__":
