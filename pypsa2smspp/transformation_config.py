@@ -75,7 +75,9 @@ class TransformationConfig:
             "StoringBatteryRho": lambda efficiency_store, snapshots_weighting: snapshots_weighting.iloc[0] * efficiency_store.iloc[0],
             "Demand": 0.0,
             "MinStorage": 0.0,
-            "MaxStorage": lambda p_nom, p_max_pu, max_hours: p_nom * p_max_pu * max_hours,
+            # per MW of p_nom when extendable, as MaxPower and MinPower, the
+            # design (or the scale) giving power and energy together
+            "MaxStorage": lambda p_nom, p_max_pu, max_hours, p_nom_extendable: (p_nom * p_max_pu * max_hours).where(~p_nom_extendable, p_max_pu * max_hours),
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
@@ -212,6 +214,12 @@ class TransformationConfig:
             }
         
         # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
+        # a StorageUnit has its own names for what a Store calls e_nom and e
+        self.BatteryUnitBlock_StorageUnit_inverse = {
+            "p": lambda activepower: activepower,
+            "state_of_charge": lambda storagelevel: storagelevel,
+            }
+
         self.BatteryUnitBlock_inverse = {
             "e_nom": lambda designvariable: designvariable,
             # "p_dispatch": lambda activepower: np.maximum(activepower, 0),

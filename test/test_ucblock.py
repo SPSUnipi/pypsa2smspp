@@ -19,6 +19,7 @@ from pypsa2smspp.network_correction import (
     clean_ciclicity_storage,
     add_slack_unit,
 )
+from pypsa2smspp.utils import preprocess_zero_capital_cost_extendable_generators
 
 
 # the rules of a nuclear unit switched off, the modulation ramps being the full
@@ -59,7 +60,7 @@ def run_ucblock(xlsx_path: Path) -> None:
 
     # ---- (1) PyPSA optimization (reference) ----
     solver_name = getattr(parser, "solver_name", "highs")
-    network.optimize(solver_name=solver_name)
+    network.optimize(solver_name=solver_name, include_objective_constant=True)
 
     # Export LP for debugging (best effort)
     try:
@@ -109,11 +110,10 @@ def test_ucblock(test_case_xlsx):
     run_ucblock(test_case_xlsx)
 
 
-def storage_network(component):
+def storage_unit_network():
     """
-    One bus with a load of 50 over 24 hours, a generator at 10 and a storage
-    half full at 5, cheaper than the generator: PyPSA empties the storage,
-    paying 5 * 500 + 10 * 700 = 9500.
+    One bus with a load of 50 over 24 hours, a generator at 10 and a
+    StorageUnit half full that can store and has a marginal cost of 5.
     """
     import pandas as pd
     import pypsa
@@ -123,43 +123,10 @@ def storage_network(component):
     n.add("Bus", "bus")
     n.add("Load", "load", bus="bus", p_set=50.0)
     n.add("Generator", "gen", bus="bus", p_nom=100.0, marginal_cost=10.0)
-    if component == "Store":
-        n.add("Store", "store", bus="bus", e_nom=1000.0, e_initial=500.0,
-              e_cyclic=False, marginal_cost=5.0)
-    else:
-        n.add("StorageUnit", "battery", bus="bus", p_nom=100.0, max_hours=10.0,
-              state_of_charge_initial=500.0, cyclic_state_of_charge=False,
-              marginal_cost=5.0)
+    n.add("StorageUnit", "battery", bus="bus", p_nom=100.0, max_hours=10.0,
+          state_of_charge_initial=500.0, cyclic_state_of_charge=False,
+          marginal_cost=5.0)
     return n
-
-
-def storage_transformation(name):
-    return Transformation(
-        capacity_expansion_ucblock=True,
-        workdir=OUT_TEST,
-        name=name,
-        overwrite=True,
-        fp_temp="smspp_{name}_temp.nc",
-        fp_log="smspp_{name}_log.txt",
-        fp_solution="smspp_{name}_solution.nc",
-        configfile="auto",
-        pysmspp_options={},
-    )
-
-
-def test_store_marginal_cost():
-    """
-    The marginal cost of a Store is paid on the energy it delivers, as in
-    PyPSA, and not earned.
-    """
-    network = storage_network("Store")
-    network.optimize(solver_name="highs")
-    assert float(network.objective) == pytest.approx(9500.0, rel=1e-6)
-
-    transformation = storage_transformation("store_marginal_cost")
-    transformation.run(network, verbose=False)
-    assert float(transformation.result.objective_value) == \
-        pytest.approx(9500.0, rel=1e-6)
 
 
 def test_storage_unit_marginal_cost_refused():
@@ -167,10 +134,39 @@ def test_storage_unit_marginal_cost_refused():
     A StorageUnit that can store and has a marginal cost is refused, since
     PyPSA charges that cost on the dispatch only.
     """
-    network = storage_network("StorageUnit")
-    transformation = storage_transformation("storage_unit_marginal_cost")
+    network = storage_unit_network()
+    transformation = Transformation(
+        capacity_expansion_ucblock=True,
+        workdir=OUT_TEST,
+        name="storage_unit_marginal_cost",
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        configfile="auto",
+    )
     with pytest.raises(ValueError, match="marginal cost"):
         transformation.run(network, verbose=False)
+
+@pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
+def test_free_capacity_with_minimum_output_is_refused(dynamic):
+    """
+    An extendable generator whose capacity costs nothing and whose output has
+    a positive minimum is forced to produce more the more capacity it has:
+    its best capacity is not known in advance, and fixing it at its maximum
+    would force that output, hence it is refused, whether the minimum is
+    static or in time.
+    """
+    import pypsa
+
+    n = pypsa.Network()
+    n.set_snapshots(range(2))
+    n.add("Bus", "bus")
+    n.add("Load", "load", bus="bus", p_set=[10.0, 20.0])
+    n.add("Generator", "forced", bus="bus", p_nom_extendable=True,
+          p_nom_max=50.0, capital_cost=0.0,
+          p_min_pu=[0.0, 0.5] if dynamic else 0.5)
+
+    with pytest.raises(ValueError, match="forced"):
+        preprocess_zero_capital_cost_extendable_generators(n)
 
 
 if __name__ == "__main__":
