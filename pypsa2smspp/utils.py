@@ -834,16 +834,22 @@ def fold_fom_cost_into_capital_cost(n):
     return n
 
 
-def free_capacity(df, nom, fixed_capacity):
+def free_capacity(df, nom, fixed_capacity, dynamic_min_pu=None):
     """
     The capacity at which an extendable asset with zero capital cost is fixed.
 
     The capacity costs nothing, hence the optimum takes as much of it as it
     may: the maximum ``<nom>_max`` when it is finite, and ``fixed_capacity``
-    when it is not. An asset with a positive minimum output or flow
-    (``p_min_pu`` or ``s_min_pu`` above 0), for which more capacity forces
-    more of it and may cost, is not taken at its maximum either, but at
-    ``fixed_capacity`` as before.
+    when it is not, which stands for a capacity with no bound, any value
+    larger than what is used giving the same optimum.
+
+    This holds only when more capacity forces nothing: with a positive
+    minimum output or flow (``p_min_pu`` above 0, static or in time) more
+    capacity forces more of it, the best capacity depends on the rest of the
+    network, and fixing it at its maximum, or at ``fixed_capacity``, would
+    force that much output. Such an asset needs a design Variable with no
+    cost, which a UnitBlock does not have (it has one only when its
+    investment cost is not zero), hence it is refused.
 
     Parameters
     ----------
@@ -853,11 +859,19 @@ def free_capacity(df, nom, fixed_capacity):
         The nominal attribute, ``p_nom`` or ``s_nom``.
     fixed_capacity : float
         The capacity of an asset with no finite maximum.
+    dynamic_min_pu : pandas.DataFrame, optional
+        The time series of the minimum output or flow per unit of capacity,
+        one column per asset, e.g., ``n.generators_t.p_min_pu``.
 
     Returns
     -------
     pandas.Series
         The capacity of each asset.
+
+    Raises
+    ------
+    ValueError
+        If an asset has a positive minimum output or flow.
     """
     most = (df[f"{nom}_max"].astype(float) if f"{nom}_max" in df.columns
             else pd.Series(np.inf, index=df.index))
@@ -866,8 +880,18 @@ def free_capacity(df, nom, fixed_capacity):
     min_pu = nom.replace("_nom", "_min_pu")
     forced = (df[min_pu].astype(float) > 0 if min_pu in df.columns
               else pd.Series(False, index=df.index))
-    use_max = np.isfinite(most) & ~forced
-    return most.where(use_max, fixed_capacity).clip(lower=least)
+    if dynamic_min_pu is not None and not dynamic_min_pu.empty:
+        cols = df.index.intersection(dynamic_min_pu.columns)
+        forced.loc[cols] |= (dynamic_min_pu[cols] > 0).any(axis=0)
+    if forced.any():
+        raise ValueError(
+            "free_capacity: the extendable assets "
+            f"{sorted(df.index[forced])} have zero capital_cost and a "
+            f"positive {min_pu}, which forces their output to grow with "
+            "their capacity: their best capacity is not known in advance, "
+            "and it cannot be a design Variable with no cost; give them a "
+            f"capital_cost, or a fixed {nom}")
+    return most.where(np.isfinite(most), fixed_capacity).clip(lower=least)
 
 
 def preprocess_zero_capital_cost_extendable_generators(
@@ -891,10 +915,11 @@ def preprocess_zero_capital_cost_extendable_generators(
     ----------
     n : pypsa.Network
         The PyPSA network to preprocess.
-    fixed_capacity : float, default 1e6
-        Capacity assigned to matching generators.
+    fixed_capacity : float, default 1e8
+        Capacity assigned to matching generators with no finite p_nom_max.
     update_bounds : bool, default True
-        If True, also set p_nom_min and p_nom_max to fixed_capacity when present.
+        If True, also set p_nom_min and p_nom_max to the capacity when
+        present.
     logger : callable, default print
         Logging function.
     return_fixed_count : bool, default False
@@ -931,10 +956,9 @@ def preprocess_zero_capital_cost_extendable_generators(
         return (n, 0) if return_fixed_count else n
 
     # a capacity that costs nothing is best at its largest: at p_nom_max when
-    # this is finite, unless a minimum output makes capacity cost something,
-    # and at fixed_capacity otherwise
+    # this is finite, and at fixed_capacity otherwise
     capacity = free_capacity(n.generators.loc[matched], "p_nom",
-                             fixed_capacity)
+                             fixed_capacity, n.generators_t.p_min_pu)
     n.generators.loc[matched, "p_nom_extendable"] = False
     n.generators.loc[matched, "p_nom"] = capacity
 
@@ -980,9 +1004,10 @@ def preprocess_zero_capital_cost_extendable_lines_links(
     n : pypsa.Network
         The PyPSA network to preprocess.
     fixed_capacity : float, default 1e9
-        Capacity assigned to matching lines/links.
+        Capacity assigned to matching lines/links with no finite
+        ``<nom>_max``.
     update_bounds : bool, default True
-        If True, also set ``<nom>_min`` and ``<nom>_max`` to fixed_capacity
+        If True, also set ``<nom>_min`` and ``<nom>_max`` to the capacity
         when present.
     logger : callable, default print
         Logging function.
@@ -1029,7 +1054,9 @@ def preprocess_zero_capital_cost_extendable_lines_links(
             continue
         fixed_count += len(matched)
 
-        capacity = free_capacity(df.loc[matched], nom, fixed_capacity)
+        dynamic = (n.links_t.p_min_pu if comp == "links" else None)
+        capacity = free_capacity(df.loc[matched], nom, fixed_capacity,
+                                 dynamic)
         df.loc[matched, ext] = False
         df.loc[matched, nom] = capacity
 

@@ -2,8 +2,8 @@ name: pysmspp-docs
 channels:
 - conda-forge
 dependencies:
-- python>=3.10
+- python=3.12
 - smspp-project>=0.5.1
 - pip
 - pip:
-  - -e ..[dev,docs]
+  - -e ..[docs]
