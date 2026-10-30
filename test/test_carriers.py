@@ -77,7 +77,7 @@ def test_carrier_design_line(ucblock):
     skip_carrier_form(n, True)
 
     reference = n.copy()
-    reference.optimize(solver_name="highs")
+    reference.optimize(solver_name="highs", include_objective_constant=True)
     expected = float(reference.objective
                      + getattr(reference, "objective_constant", 0.0))
 
@@ -138,7 +138,7 @@ def test_pump_between_two_nodes_of_a_carrier(p_min_pu):
         pytest.skip("the SMS++ solver does not read a ConversionUnitBlock")
 
     reference = n.copy()
-    reference.optimize(solver_name="highs")
+    reference.optimize(solver_name="highs", include_objective_constant=True)
     expected = float(reference.objective
                      + getattr(reference, "objective_constant", 0.0))
 

@@ -423,7 +423,7 @@ def test_mssb_matches_the_flat_optimum():
     # a finite p_set on a dispatchable component is enforced as a fixed
     # dispatch, which would freeze it and inflate the reference
     clean_dispatch_setpoints(reference)
-    reference.optimize(solver_name="highs")
+    reference.optimize(solver_name="highs", include_objective_constant=True)
     expected = float(reference.objective + reference.objective_constant)
 
     transformation = _transformation(tree, "mssb_optimum")
@@ -559,7 +559,8 @@ def _leaves_objective(n: pypsa.Network, solar=None) -> float:
         leaf = n.get_scenario(scenario)
         if solar is not None:
             leaf.generators.loc["solar", ["p_nom_min", "p_nom_max"]] = solar
-        leaf.optimize(solver_name="highs", linearized_unit_commitment=True)
+        leaf.optimize(solver_name="highs", linearized_unit_commitment=True,
+                      include_objective_constant=True)
         objective += float(probability) * float(
             leaf.objective + getattr(leaf, "objective_constant", 0.0))
     return objective

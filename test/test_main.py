@@ -149,7 +149,7 @@ def run_single_case(xlsx_path: Path) -> dict:
         network = n.copy()
 
         t0 = time.perf_counter()
-        network.optimize(solver_name="gurobi")
+        network.optimize(solver_name="gurobi", include_objective_constant=True)
         summary["PyPSA_opt_s"] = round(time.perf_counter() - t0, 6)
 
         try:

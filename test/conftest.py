@@ -396,7 +396,8 @@ def scenario_reference_objective(n: pypsa.Network) -> float | None:
     objective = 0.0
     for scenario, probability in n.scenario_weightings["weight"].items():
         deterministic = n.get_scenario(scenario)
-        deterministic.optimize(solver_name="highs")
+        deterministic.optimize(solver_name="highs",
+                               include_objective_constant=True)
         objective += float(probability) * float(
             deterministic.objective
             + getattr(deterministic, "objective_constant", 0.0))
@@ -443,7 +444,8 @@ def modular_conversion_reference(n: pypsa.Network,
             [0.0, False, k * size]
         for cost in ("start_up_cost", "shut_down_cost", "stand_by_cost"):
             m.links.loc[name, cost] = k * float(links.at[name, cost])
-        m.optimize(solver_name=solver_name, linearized_unit_commitment=True)
+        m.optimize(solver_name=solver_name, linearized_unit_commitment=True,
+                   include_objective_constant=True)
         if m.objective is None:
             continue
         value = float(m.objective + getattr(m, "objective_constant", 0.0)) \

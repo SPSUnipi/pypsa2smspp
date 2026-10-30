@@ -136,7 +136,8 @@ def run_investment_block(xlsx_path: Path, multi_carrier: bool = False) -> None:
     obj_modular = modular_conversion_reference(network, solver_name)
     if obj_modular is None:
         network.optimize(solver_name=solver_name,
-                         linearized_unit_commitment=committable)
+                         linearized_unit_commitment=committable,
+                         include_objective_constant=True)
 
     # Export LP for debugging (best effort)
     try:
