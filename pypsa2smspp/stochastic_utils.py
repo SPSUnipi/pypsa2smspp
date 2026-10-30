@@ -856,12 +856,19 @@ def evaluate_unitblock_parameter_timeseries(
     unitblock_type: str,
     smspp_parameter: str | None,
     weights: bool = False,
+    static_reference=None,
 ) -> pd.DataFrame:
     """
     Evaluate the actual SMS++ UnitBlock parameter for one scenario.
 
     If smspp_parameter is provided, the corresponding TransformationConfig rule
     is used. Otherwise, the raw PyPSA field is returned.
+
+    The arguments of the rule other than the stochastic field are read from
+    static_reference, if given: the network the UnitBlocks were built from,
+    after the preprocessing that the scenario network has not been through
+    (capacities fixed, fom_cost folded into capital_cost), which a parameter
+    of the first stage has the same in every scenario.
 
     The returned object is always a snapshot x asset DataFrame.
     """
@@ -895,8 +902,11 @@ def evaluate_unitblock_parameter_timeseries(
         kwargs = {}
 
         for arg_name in argument_names:
+            source = n_s
+            if static_reference is not None and arg_name != field:
+                source = static_reference
             arg_values = get_param_as_dense(
-                n_s,
+                source,
                 component=pypsa_component,
                 field=arg_name,
                 weights=weights,
@@ -1013,6 +1023,7 @@ def build_dss_unitblock_timeseries_parameter(
     transformation_config=None,
     smspp_parameter: str | None = None,
     weights: bool = False,
+    static_reference=None,
 ) -> Dict[str, Any]:
     """
     Build DSS data for a dense UnitBlock time series parameter.
@@ -1065,6 +1076,7 @@ def build_dss_unitblock_timeseries_parameter(
             unitblock_type=unitblock_type,
             smspp_parameter=smspp_parameter,
             weights=weights,
+            static_reference=static_reference,
         )
 
         if asset_order is None:
