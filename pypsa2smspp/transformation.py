@@ -2753,11 +2753,19 @@ class Transformation:
             ucblock.add_dimension("NumberCarriers", len(self._carriers))
             ucblock.add_variable("CarrierName", "str", ("NumberCarriers",),
                                  np.array(self._carriers, dtype=object))
+            # the nodes of the generators carrier by carrier, -1 where a
+            # generator has none: those of the electricity in the UCBlock,
+            # those of each other carrier in its group, omitted for a
+            # carrier of one node, where every generator is
+            nodes = self._generator_carrier_nodes()
             ucblock.add_variable(
-                "GeneratorNode", "int",
-                ("NumberElectricalGenerators", "NumberCarriers"),
-                self._generator_carrier_nodes())
+                "GeneratorNode", "int", ("NumberElectricalGenerators",),
+                nodes[:, 0])
             for c, carrier_block in carrier_blocks.items():
+                if int(carrier_block.dimensions["NumberNodes"].value) > 1:
+                    carrier_block.add_variable(
+                        "GeneratorNode", "int",
+                        ("NumberElectricalGenerators",), nodes[:, c])
                 ucblock.add_block(f"Carrier_{c}", block=carrier_block)
 
         # -----------------
@@ -2954,8 +2962,8 @@ class Transformation:
 
     def _generator_carrier_nodes(self):
         """
-        GeneratorNode with the carriers: the node of each generator on each
-        carrier, -1 where it has none.
+        The node of each generator on each carrier, -1 where it has none,
+        [generators, carriers]: column c is GeneratorNode of the carrier c.
         """
         ports = self._generator_ports()
         table = -np.ones((len(ports), len(self._carriers)), dtype=int)

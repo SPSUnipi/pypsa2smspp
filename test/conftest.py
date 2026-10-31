@@ -181,9 +181,10 @@ def solver_reads_carriers():
     """
     True if the smspp_ucblock_solver on PATH loads a UCBlock with more than
     one energy carrier, which is in SMS++ since UCBlock 0.8 (the format of
-    Transformation(multi_carrier=True)); the check loads, without solving
-    it, a UCBlock with the electricity and the heat, one node each, and a
-    unit with its output on the heat.
+    Transformation(multi_carrier=True)), with the nodes of the generators
+    given carrier by carrier; the check loads, without solving it, a
+    UCBlock with the electricity, of one node, and the heat, of two nodes
+    joined by a line, and a unit with its output on the heat.
     """
     probe = OUT_TEST / "carriers_probe.nc4"
     with netCDF4.Dataset(probe, "w") as nc:
@@ -197,11 +198,20 @@ def solver_reads_carriers():
         uc.createVariable("ActivePowerDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 0.0
         uc.createVariable("CarrierName", str, ("NumberCarriers",))[:] = \
             np.array(["electricity", "heat"], dtype=object)
+        # the nodes of the generator carrier by carrier: none on the
+        # electricity, the node 0 of the heat, which has two nodes and a line
         uc.createVariable("GeneratorNode", "i4",
-                          ("NumberElectricalGenerators", "NumberCarriers"))[:] = [[-1, 0]]
+                          ("NumberElectricalGenerators",))[:] = [-1]
         heat = uc.createGroup("Carrier_1")
-        heat.createDimension("NumberNodes", 1)
-        heat.createVariable("EnergyDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = 1.0
+        heat.createDimension("NumberNodes", 2)
+        heat.createDimension("NumberLines", 1)
+        heat.createVariable("StartLine", "u4", ("NumberLines",))[:] = [0]
+        heat.createVariable("EndLine", "u4", ("NumberLines",))[:] = [1]
+        heat.createVariable("MaxPowerFlow", "f8", ("NumberLines",))[:] = [10.0]
+        heat.createVariable("MinPowerFlow", "f8", ("NumberLines",))[:] = [-10.0]
+        heat.createVariable("EnergyDemand", "f8", ("NumberNodes", "TimeHorizon"))[:] = [[1.0], [0.0]]
+        heat.createVariable("GeneratorNode", "i4",
+                            ("NumberElectricalGenerators",))[:] = [0]
         unit = uc.createGroup("UnitBlock_0")
         unit.setncattr("type", "IntermittentUnitBlock")
         unit.createVariable("MaxPower", "f8")[...] = 10.0
