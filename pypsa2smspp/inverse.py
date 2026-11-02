@@ -55,7 +55,8 @@ def component_definition(n, unit_block: dict) -> str:
             raise ValueError(f"Unknown unit block type: {block}")
 
 
-def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_name=None):
+def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_name=None,
+                      row=None):
     """
     Evaluates a callable inverse function by extracting arguments from unit block
     or network static dataframe.
@@ -63,6 +64,9 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_
     Supports both deterministic and stochastic cases:
     - deterministic df index: Index(name)
     - stochastic df index: MultiIndex(scenario, name)
+
+    The row of the component may be given as `row` (a Series, or a mapping
+    from the columns to the values), so that it is not looked for again.
 
     Special handling is included for Link/DCNetworkBlock inverse variables p1..pn:
     if the function requests `efficiency` and the reconstructed variable is `p{k}`,
@@ -78,7 +82,9 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_
     unit_name = unit_block["name"]
 
     # Resolve correct row from dataframe
-    if isinstance(df.index, pd.MultiIndex):
+    if row is not None:
+        pass
+    elif isinstance(df.index, pd.MultiIndex):
         if scenario_name is None:
             raise KeyError(
                 f"DataFrame has MultiIndex but no scenario_name was provided "
@@ -117,7 +123,7 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_
             k = int(key[1:])
             eff_col = "efficiency" if k == 1 else f"efficiency{k}"
 
-            if eff_col not in row.index:
+            if eff_col not in row:
                 raise KeyError(
                     f"Column '{eff_col}' not found for component '{unit_name}' "
                     f"while reconstructing '{key}'."
@@ -127,7 +133,7 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_
             continue
 
         # Standard dataframe lookup
-        if param_norm in row.index:
+        if param_norm in row:
             args.append(row[param_norm])
         else:
             raise KeyError(
@@ -189,21 +195,28 @@ def dataarray_components(n, value, component, unit_block, key):
 
 
 
+def inverse_functions(unit_block, component, config):
+    """
+    The inverse functions of a unit block for a component, None if there are
+    none: a component may have an inverse of its own, its names for the same
+    data being those of another component (a StorageUnit in a
+    BatteryUnitBlock).
+    """
+    attr_name = f"{unit_block['block']}_{component}_inverse"
+    if not hasattr(config, attr_name):
+        attr_name = f"{unit_block['block']}_inverse"
+    return getattr(config, attr_name, None)
+
+
 def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_name=None) -> dict:
     """
     Transforms a unit block into a dictionary of DataArrays.
     """
-    # a component may have an inverse of its own, its names for the same data
-    # being those of another component (a StorageUnit in a BatteryUnitBlock)
-    attr_name = f"{unit_block['block']}_{component}_inverse"
-    if not hasattr(config, attr_name):
-        attr_name = f"{unit_block['block']}_inverse"
     converted_dict = {}
     normalized_keys = {normalize_key(k): k for k in unit_block.keys()}
 
-    if hasattr(config, attr_name):
-        unitblock_parameters = getattr(config, attr_name)
-    else:
+    unitblock_parameters = inverse_functions(unit_block, component, config)
+    if unitblock_parameters is None:
         print(f"Block {unit_block['block']} not yet implemented")
         return {}
 
@@ -277,6 +290,12 @@ def block_to_dataarrays_stochastic(
     if not scenario_names:
         return {}
 
+    if block_to_dataarrays_func is block_to_dataarrays:
+        stacked = stacked_block_to_dataarrays(n, unit_block, component, config,
+                                              scenario_names)
+        if stacked is not None:
+            return stacked
+
     per_variable = {}
 
     for scenario_name in scenario_names:
@@ -311,6 +330,83 @@ def block_to_dataarrays_stochastic(
             merged[var_name] = (stacked if stacked is not None
                                 else xr.concat(da_list, dim="scenario"))
 
+    return merged
+
+
+def scenario_rows(df, unit_name, scenario_names):
+    """
+    The row of the component unit_name in the static dataframe df for each
+    scenario, as a mapping from the columns to the values, all of them taken
+    from df at once; None if a scenario has no row.
+    """
+    if not isinstance(df.index, pd.MultiIndex):
+        if unit_name not in df.index:
+            return None
+        row = df.loc[unit_name]
+        return {s: row for s in scenario_names}
+
+    try:
+        sub = df.xs(unit_name, level=df.index.nlevels - 1)
+    except KeyError:
+        return None
+    rows = sub.to_dict("index")
+    if any(s not in rows for s in scenario_names):
+        return None
+    return rows
+
+
+def stacked_block_to_dataarrays(n, unit_block, component, config, scenario_names):
+    """
+    What block_to_dataarrays_stochastic() builds with block_to_dataarrays(),
+    built with one DataArray per variable: the values of each scenario are
+    computed by the same inverse functions and stacked along 'scenario' with
+    numpy, instead of making a DataArray for each scenario and concatenating
+    them. None if this cannot be done (a scenario without values or without a
+    row in the network, a variable whose values change shape from a scenario
+    to another), so that the caller goes scenario by scenario.
+    """
+    funcs = inverse_functions(unit_block, component, config)
+    if funcs is None:
+        return None
+    funcs = {k: f for k, f in funcs.items() if callable(f)}
+
+    scenarios = unit_block.get("scenarios", {})
+    if any(not scenarios.get(s) for s in scenario_names):
+        return None
+
+    df = getattr(n, config.component_mapping[component])
+    rows = scenario_rows(df, unit_block["name"], scenario_names)
+    if rows is None:
+        return None
+
+    base = {k: v for k, v in unit_block.items() if k != "scenarios"}
+    values = {}
+    layout = {}
+    for scenario_name in scenario_names:
+        temp_block = dict(base)
+        temp_block.update(scenarios[scenario_name])
+        normalized_keys = {normalize_key(k): k for k in temp_block}
+        for key, func in funcs.items():
+            value = evaluate_function(func, normalized_keys, temp_block, df,
+                                      key=key, scenario_name=scenario_name,
+                                      row=rows[scenario_name])
+            if (isinstance(value, np.ndarray) and value.ndim == 2
+                    and all(dim > 1 for dim in value.shape)):
+                value = value.sum(axis=0)
+            value, dims, coords, var_name = dataarray_components(
+                n, value, component, temp_block, key)
+            if var_name not in layout:
+                layout[var_name] = (dims, coords, value.shape)
+            elif layout[var_name][0] != dims or layout[var_name][2] != value.shape:
+                return None
+            values.setdefault(var_name, []).append(value)
+
+    merged = {}
+    for var_name, vals in values.items():
+        dims, coords, _ = layout[var_name]
+        merged[var_name] = xr.DataArray(
+            np.stack(vals), dims=["scenario"] + dims,
+            coords={"scenario": list(scenario_names), **coords}, name=var_name)
     return merged
 
 
