@@ -15,8 +15,13 @@ from conftest import (
     OUT_TEST,
     REL_TOL,
     ABS_TOL,
+    scenario_reference_objective,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
+import math
 from network_definition import NetworkDefinition
 
 from pypsa2smspp.transformation import Transformation
@@ -201,6 +206,7 @@ def apply_tssb_stochastic_data(
 def run_tssb_block(
     xlsx_path: Path,
     stochastic_parameters: Sequence[str],
+    multi_carrier: bool = False,
 ) -> None:
     """
     TSSB regression test:
@@ -211,7 +217,8 @@ def run_tssb_block(
     - compare the objectives, and save both to CSV.
     """
     parameter_tag = _parameter_tag(stochastic_parameters)
-    case_name = f"{xlsx_path.stem}__{parameter_tag}"
+    case_name = f"{xlsx_path.stem}__{parameter_tag}" + (
+        "_carriers" if multi_carrier else "")
 
     workdir = OUT_TEST / "tssb" / case_name
     workdir.mkdir(parents=True, exist_ok=True)
@@ -228,6 +235,7 @@ def run_tssb_block(
 
     nd = NetworkDefinition(parser)
     n = nd.n
+    skip_carrier_form(n, multi_carrier)
 
     n = clean_ciclicity_storage(n)
 
@@ -239,27 +247,39 @@ def run_tssb_block(
         stochastic_parameters=parser.stochastic_parameters,
     )
 
-    # the expected cost over the scenarios, the capacities being the same in
-    # all of them, which is the problem the TSSB solves
-    network = n.copy()
-    # PyPSA before 1.3 (which needs pandas 3, not allowed here) fails on
-    # the ramp limits of a network with scenarios; the start-up and shut-down
-    # ones bind only committable units, hence they are dropped from the
-    # others, which leaves the model as it is
-    for c in (network.generators, network.links):
-        if "committable" not in c.columns:
-            continue
-        free = ~c["committable"].astype(bool)
-        for attr in ("ramp_limit_start_up", "ramp_limit_shut_down"):
-            if attr in c.columns:
-                c.loc[free, attr] = float("nan")
-    network.optimize(solver_name="highs", include_objective_constant=True)
-    obj_pypsa = float(network.objective + network.objective_constant)
+    # with a committable component PyPSA builds no stochastic network, and
+    # the reference is the sum of the scenarios [see
+    # scenario_reference_objective()], else the stochastic network itself
+    obj_reference = scenario_reference_objective(n.copy())
+    committable = any("committable" in c.columns
+                      and bool(c["committable"].any())
+                      for c in (n.generators, n.links))
+    if obj_reference is None and not committable:
+        # the expected cost over the scenarios, the capacities being the same
+        # in all of them, which is the problem the TSSB solves
+        network = n.copy()
+        # PyPSA before 1.3 (which needs pandas 3, not allowed here) fails on
+        # the ramp limits of a network with scenarios; the start-up and
+        # shut-down ones bind only committable units, hence they are dropped
+        # from the others, which leaves the model as it is
+        for c in (network.generators, network.links):
+            if "committable" not in c.columns:
+                continue
+            free = ~c["committable"].astype(bool)
+            for attr in ("ramp_limit_start_up", "ramp_limit_shut_down"):
+                if attr in c.columns:
+                    c.loc[free, attr] = float("nan")
+        network.optimize(solver_name="highs", include_objective_constant=True)
+        obj_reference = float(network.objective + network.objective_constant)
 
     transformation = Transformation(
         name=case_name,
         configfile=TSSB_CONFIGFILE,
         enable_thermal_units=False,
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(n.links.committable.any()),
+        # the buses of each carrier in a carrier of the UCBlock
+        multi_carrier=multi_carrier,
         workdir=workdir,
         stochastic_parameters={
             "stochastic_type": "tssb",
@@ -281,11 +301,15 @@ def run_tssb_block(
         network_path=xlsx_path,
         stochastic_parameters=parser.stochastic_parameters,
         obj_smspp=obj_smspp,
-        obj_pypsa=obj_pypsa,
+        obj_pypsa=(float("nan") if obj_reference is None
+                   else obj_reference),
     )
 
     assert transformation.result is not None
-    assert obj_smspp == pytest.approx(obj_pypsa, rel=REL_TOL, abs=ABS_TOL)
+    assert math.isfinite(obj_smspp)
+    if obj_reference is not None:
+        assert obj_smspp == pytest.approx(obj_reference, rel=REL_TOL,
+                                          abs=ABS_TOL)
 
     try:
         n.export_to_netcdf(str(network_nc))
@@ -303,13 +327,15 @@ def run_tssb_block(
     STOCHASTIC_PARAMETER_CASES,
     ids=STOCHASTIC_PARAMETER_IDS,
 )
-def test_tssb(xlsx_path, stochastic_parameters):
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
+def test_tssb(xlsx_path, stochastic_parameters, multi_carrier):
     if not tssb_test_cases["xlsx_paths"]:
         pytest.skip("No TSSB Excel test cases found")
 
     run_tssb_block(
         xlsx_path=xlsx_path,
         stochastic_parameters=stochastic_parameters,
+        multi_carrier=multi_carrier,
     )
 
 
