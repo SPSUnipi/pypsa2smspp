@@ -2251,7 +2251,27 @@ def resolve_param_value(
         arg = dense[[component]]
     elif param in components_df.index or param in components_df.columns:
         if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
-            arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
+            # a datum with no time dimension, such as the cost of the flow on
+            # a line, holds one value for the whole horizon: a cost that
+            # varies over the snapshots, or snapshot weightings that do,
+            # would be written as the cost of the first snapshot
+            names = components_df.index if isinstance(
+                components_df, pd.DataFrame) else [components_df.name]
+            series = components_t.get(param) if hasattr(
+                components_t, 'get') else None
+            if series is not None and not series.empty and \
+                    series.columns.intersection(names).size:
+                raise ValueError(
+                    f"{components_type} {param} varies over the snapshots, "
+                    f"while {key} has one value for the whole horizon")
+            weighting = n.snapshot_weightings['objective'].loc[n.snapshots]
+            cost = pd.Series(components_df.get(param)).fillna(0)
+            if weighting.nunique() > 1 and (cost != 0).any():
+                raise ValueError(
+                    f"{components_type} {param} is not 0 while the snapshot "
+                    f"weightings are not uniform, and {key} has one value "
+                    "for the whole horizon")
+            arg = components_df.get(param) * weighting.iloc[0]
         else:
             arg = components_df.get(param)
     elif param in components_t.keys():
