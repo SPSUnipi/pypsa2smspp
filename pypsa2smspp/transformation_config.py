@@ -13,6 +13,7 @@ class TransformationConfig:
         Lines_parameters (dict): Parameters for lines in the network.
         Links_parameters (dict): Parameters for links in the network.
         HydroUnitBlock_parameters (dict): Parameters for hydro units.
+        HydroSystemUnitBlock_parameters (dict): Future cost of the water of the hydro units.
         max_hours_stores_parameters (double): Maximum hours of storage capacity.
     """
     def __init__(self, *args, **kwargs):
@@ -147,7 +148,7 @@ class TransformationConfig:
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "StartArc": lambda p_nom: np.array([0, 0, 0]),
             "EndArc": lambda p_nom: np.array([1, 1, 1]),
-            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
+            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours).values.transpose(),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow, snapshots_weighting: (inflow.values * snapshots_weighting.values).transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
@@ -181,6 +182,14 @@ class TransformationConfig:
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
         
+        # the future cost of the water of the HydroSystemUnitBlock [see
+        # hydro_system in Transformation], a PolyhedralFunction with no row:
+        # the scalars written in its group, by default the bound 0, so that
+        # it adds nothing to the cost (with no bound it would be -inf)
+        self.HydroSystemUnitBlock_parameters = {
+            "PolyFunction_lb": 0.0,
+        }
+
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
