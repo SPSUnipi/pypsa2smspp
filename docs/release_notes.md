@@ -13,6 +13,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Pay the marginal cost of a Store on the energy it delivers, as PyPSA does: it was earned, the `Cost` of a `BatteryUnitBlock` being a price on the net injection; a StorageUnit that can store and has a marginal cost is refused, since PyPSA charges that cost on the dispatch only [PR #72](https://github.com/SPSUnipi/pypsa2smspp/pull/72)
 * Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
 * Drop `design_cost_outside`: a unit has its design Variable only when its investment cost is not zero, so stating the cost outside the units took the Variable away with it [PR #65](https://github.com/SPSUnipi/pypsa2smspp/pull/65)
 * Fix the paths of a stochastic Block, which now name only the design Variables the units have [PR #73](https://github.com/SPSUnipi/pypsa2smspp/pull/73)
