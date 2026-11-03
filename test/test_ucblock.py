@@ -9,6 +9,9 @@ from conftest import (
     REL_TOL,
     ABS_TOL,
     OUT_TEST,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
 )
 
 from network_definition import NetworkDefinition
@@ -29,15 +32,16 @@ NON_BINDING_NUCLEAR_RULES.update(modulation_ramp_fraction=1.0,
                                  modulation_time=2.0)
 
 
-def run_ucblock(xlsx_path: Path) -> None:
+def run_ucblock(xlsx_path: Path, multi_carrier: bool = False) -> None:
     """
     UCBlock regression test:
     - build network from Excel
     - solve reference with PyPSA
-    - run full SMS++ pipeline in one call (no YAML)
+    - run full SMS++ pipeline in one call (no YAML), with the buses of each
+      carrier in a carrier of the UCBlock if multi_carrier
     - compare objectives
     """
-    case_name = xlsx_path.stem
+    case_name = xlsx_path.stem + ("_carriers" if multi_carrier else "")
 
     # Artifacts (optional)
     network_nc = OUT_TEST / f"network_{case_name}.nc"
@@ -51,6 +55,7 @@ def run_ucblock(xlsx_path: Path) -> None:
     nd = NetworkDefinition(parser)
 
     n = nd.n
+    skip_carrier_form(n, multi_carrier)
     n = clean_ciclicity_storage(n)
     if "sector" not in xlsx_path.name:
         n = add_slack_unit(n)
@@ -82,6 +87,9 @@ def run_ucblock(xlsx_path: Path) -> None:
         # so that the optimum is the one of PyPSA
         nuclear_units=({"nuclear": NON_BINDING_NUCLEAR_RULES}
                        if "nuclear" in set(network.generators.carrier) else None),
+        # a committable link is a ConversionUnitBlock
+        enable_conversion_units=bool(network.links.committable.any()),
+        multi_carrier=multi_carrier,
         workdir=OUT_TEST,
         name=case_name,
         overwrite=True,
@@ -105,11 +113,47 @@ def run_ucblock(xlsx_path: Path) -> None:
         pass
 
 
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_ucblock(test_case_xlsx):
-    run_ucblock(test_case_xlsx)
+def test_ucblock(test_case_xlsx, multi_carrier):
+    run_ucblock(test_case_xlsx, multi_carrier)
 
 
+def storage_unit_network():
+    """
+    One bus with a load of 50 over 24 hours, a generator at 10 and a
+    StorageUnit half full that can store and has a marginal cost of 5.
+    """
+    import pandas as pd
+    import pypsa
+
+    n = pypsa.Network()
+    n.set_snapshots(pd.RangeIndex(24))
+    n.add("Bus", "bus")
+    n.add("Load", "load", bus="bus", p_set=50.0)
+    n.add("Generator", "gen", bus="bus", p_nom=100.0, marginal_cost=10.0)
+    n.add("StorageUnit", "battery", bus="bus", p_nom=100.0, max_hours=10.0,
+          state_of_charge_initial=500.0, cyclic_state_of_charge=False,
+          marginal_cost=5.0)
+    return n
+
+
+def test_storage_unit_marginal_cost_refused():
+    """
+    A StorageUnit that can store and has a marginal cost is refused, since
+    PyPSA charges that cost on the dispatch only.
+    """
+    network = storage_unit_network()
+    transformation = Transformation(
+        capacity_expansion_ucblock=True,
+        workdir=OUT_TEST,
+        name="storage_unit_marginal_cost",
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        configfile="auto",
+    )
+    with pytest.raises(ValueError, match="marginal cost"):
+        transformation.run(network, verbose=False)
 
 @pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
 def test_free_capacity_with_minimum_output_is_refused(dynamic):
@@ -132,6 +176,42 @@ def test_free_capacity_with_minimum_output_is_refused(dynamic):
 
     with pytest.raises(ValueError, match="forced"):
         preprocess_zero_capital_cost_extendable_generators(n)
+
+
+def test_network_cost_not_one_value_is_refused() -> None:
+    """
+    The cost of the flow on a link is one value for the whole horizon in
+    SMS++, the marginal cost times the weighting of the snapshots (the case
+    2n_1c_1g_1lcost.xlsx checks it against PyPSA): a marginal cost that varies
+    over the snapshots, or weightings that do, are refused instead of written
+    as those of the first snapshot.
+    """
+    import pypsa
+    from pypsa2smspp.utils import resolve_param_value
+
+    def network():
+        n = pypsa.Network()
+        n.set_snapshots(range(3))
+        n.add("Bus", ["a", "b"])
+        n.add("Link", "ab", bus0="a", bus1="b", p_nom=10, marginal_cost=2.0)
+        return n
+
+    sizes = {"Links": {"Size": {"NetworkCost": "[Li]"}}}
+
+    def cost(n):
+        return resolve_param_value("marginal_cost", sizes, "Links_parameters",
+                                   "NetworkCost", n.links, n.links_t, n,
+                                   "Link", None)
+
+    n = network()
+    n.snapshot_weightings.loc[:, "objective"] = [1.0, 2.0, 3.0]
+    with pytest.raises(ValueError):
+        cost(n)
+
+    n = network()
+    n.links_t.marginal_cost["ab"] = [1.0, 2.0, 3.0]
+    with pytest.raises(ValueError):
+        cost(n)
 
 
 if __name__ == "__main__":

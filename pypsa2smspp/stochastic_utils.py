@@ -953,9 +953,44 @@ def evaluate_unitblock_parameter_timeseries(
 # Discrete Scenario Set
 # =============================================================================
 
-def build_dss_demand(n) -> Dict[str, Any]:
+def bus_demand_by_scenario(n, scenario_names):
+    """
+    The demand of each bus in each scenario of a stochastic network, as
+    get_bus_demand_matrix() gives it on n.get_scenario(scenario), read from n
+    with one dense table of the loads instead of a copy of the network per
+    scenario; None if the loads are not indexed by scenario and name.
+    """
+    loads = n.loads
+    if loads.empty or not isinstance(loads.index, pd.MultiIndex):
+        return None
+    dense = n.get_switchable_as_dense("Load", "p_set")
+    if not isinstance(dense.columns, pd.MultiIndex):
+        return None
+
+    buses = n.buses.index
+    demand = {}
+    for scenario_name in scenario_names:
+        bus = loads.xs(scenario_name, level=0)["bus"]
+        bus_names = (n.buses.xs(scenario_name, level=0).index
+                     if isinstance(buses, pd.MultiIndex) else buses)
+        demand_by_bus = dense[scenario_name].T.groupby(bus).sum()
+        demand_by_bus = demand_by_bus.reindex(index=bus_names, fill_value=0.0)
+        demand_by_bus = demand_by_bus.reindex(columns=n.snapshots, fill_value=0.0)
+        demand[scenario_name] = demand_by_bus.fillna(0.0)
+    return demand
+
+
+def build_dss_demand(n, bus_order=None) -> Dict[str, Any]:
     """
     Build DSS data for stochastic demand.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The stochastic network.
+    bus_order : list or None, default None
+        The order of the buses in the flattening, that of n.buses if None
+        (with the carriers, that of their nodes in UCBlock::set_energy_demand).
 
     Returns
     -------
@@ -976,17 +1011,21 @@ def build_dss_demand(n) -> Dict[str, Any]:
         raise ValueError("DSS demand extraction requested on a deterministic network.")
 
     scenarios = []
-    bus_order = None
     snapshot_order = None
 
+    demand = bus_demand_by_scenario(n, scenario_names)
     for scenario_name in scenario_names:
-        n_s = n.get_scenario(scenario_name)
-        demand_by_bus = get_bus_demand_matrix(n_s)
-
-        if bus_order is None:
-            bus_order = list(demand_by_bus.index)
-            snapshot_order = list(demand_by_bus.columns)
+        if demand is not None:
+            demand_by_bus = demand[scenario_name]
         else:
+            demand_by_bus = get_bus_demand_matrix(n.get_scenario(scenario_name))
+
+        if snapshot_order is None:
+            if bus_order is None:
+                bus_order = list(demand_by_bus.index)
+            snapshot_order = list(demand_by_bus.columns)
+        if list(demand_by_bus.index) != list(bus_order) or \
+                list(demand_by_bus.columns) != list(snapshot_order):
             demand_by_bus = demand_by_bus.reindex(
                 index=bus_order,
                 columns=snapshot_order,
@@ -1310,16 +1349,18 @@ def build_stochastic_mapping_demand(
     set_from_start,
     set_from_end,
     scenario_size,
+    function_name="UCBlock::set_active_power_demand",
 ):
     """
     Build the stochastic data mapping for demand.
 
     The scenario slice [set_from_start, set_from_end) is passed to
-    UCBlock::set_active_power_demand through a Range/Range mapping.
+    `function_name` (UCBlock::set_active_power_demand, or with the carriers
+    UCBlock::set_energy_demand) through a Range/Range mapping.
     """
     return {
         "target": "demand",
-        "function_name": "UCBlock::set_active_power_demand",
+        "function_name": function_name,
         "caller": "B",
         "data_type": "D",
         "set_size": [0, 0],

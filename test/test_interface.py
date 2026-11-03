@@ -124,3 +124,4 @@ def test_merge_battery_with_free_discharger() -> None:
                                                logger=lambda msg: None)
     assert list(links.index) == ["IT0 0 battery charger__IT0 0 battery discharger"]
     assert links["capital_cost"].iloc[0] == 100.0
+
