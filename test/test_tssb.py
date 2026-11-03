@@ -462,7 +462,7 @@ def run_tssb_hydro(xlsx_path: Path, hydro_system: bool):
     n = apply_tssb_stochastic_data(n, stochastic_parameters)
 
     reference = n.copy()
-    reference.optimize(solver_name="highs")
+    reference.optimize(solver_name="highs", include_objective_constant=True)
     obj_pypsa = float(reference.objective
                       + getattr(reference, "objective_constant", 0.0))
 
