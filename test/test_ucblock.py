@@ -169,5 +169,41 @@ def test_free_capacity_with_minimum_output_is_refused(dynamic):
         preprocess_zero_capital_cost_extendable_generators(n)
 
 
+def test_network_cost_not_one_value_is_refused() -> None:
+    """
+    The cost of the flow on a link is one value for the whole horizon in
+    SMS++, the marginal cost times the weighting of the snapshots (the case
+    2n_1c_1g_1lcost.xlsx checks it against PyPSA): a marginal cost that varies
+    over the snapshots, or weightings that do, are refused instead of written
+    as those of the first snapshot.
+    """
+    import pypsa
+    from pypsa2smspp.utils import resolve_param_value
+
+    def network():
+        n = pypsa.Network()
+        n.set_snapshots(range(3))
+        n.add("Bus", ["a", "b"])
+        n.add("Link", "ab", bus0="a", bus1="b", p_nom=10, marginal_cost=2.0)
+        return n
+
+    sizes = {"Links": {"Size": {"NetworkCost": "[Li]"}}}
+
+    def cost(n):
+        return resolve_param_value("marginal_cost", sizes, "Links_parameters",
+                                   "NetworkCost", n.links, n.links_t, n,
+                                   "Link", None)
+
+    n = network()
+    n.snapshot_weightings.loc[:, "objective"] = [1.0, 2.0, 3.0]
+    with pytest.raises(ValueError):
+        cost(n)
+
+    n = network()
+    n.links_t.marginal_cost["ab"] = [1.0, 2.0, 3.0]
+    with pytest.raises(ValueError):
+        cost(n)
+
+
 if __name__ == "__main__":
     run_ucblock(test_cases["xlsx_paths"][13])
