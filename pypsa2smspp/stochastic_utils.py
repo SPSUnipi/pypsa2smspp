@@ -980,9 +980,17 @@ def bus_demand_by_scenario(n, scenario_names):
     return demand
 
 
-def build_dss_demand(n) -> Dict[str, Any]:
+def build_dss_demand(n, bus_order=None) -> Dict[str, Any]:
     """
     Build DSS data for stochastic demand.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The stochastic network.
+    bus_order : list or None, default None
+        The order of the buses in the flattening, that of n.buses if None
+        (with the carriers, that of their nodes in UCBlock::set_energy_demand).
 
     Returns
     -------
@@ -1003,7 +1011,6 @@ def build_dss_demand(n) -> Dict[str, Any]:
         raise ValueError("DSS demand extraction requested on a deterministic network.")
 
     scenarios = []
-    bus_order = None
     snapshot_order = None
 
     demand = bus_demand_by_scenario(n, scenario_names)
@@ -1013,10 +1020,12 @@ def build_dss_demand(n) -> Dict[str, Any]:
         else:
             demand_by_bus = get_bus_demand_matrix(n.get_scenario(scenario_name))
 
-        if bus_order is None:
-            bus_order = list(demand_by_bus.index)
+        if snapshot_order is None:
+            if bus_order is None:
+                bus_order = list(demand_by_bus.index)
             snapshot_order = list(demand_by_bus.columns)
-        else:
+        if list(demand_by_bus.index) != list(bus_order) or \
+                list(demand_by_bus.columns) != list(snapshot_order):
             demand_by_bus = demand_by_bus.reindex(
                 index=bus_order,
                 columns=snapshot_order,
@@ -1340,16 +1349,18 @@ def build_stochastic_mapping_demand(
     set_from_start,
     set_from_end,
     scenario_size,
+    function_name="UCBlock::set_active_power_demand",
 ):
     """
     Build the stochastic data mapping for demand.
 
     The scenario slice [set_from_start, set_from_end) is passed to
-    UCBlock::set_active_power_demand through a Range/Range mapping.
+    `function_name` (UCBlock::set_active_power_demand, or with the carriers
+    UCBlock::set_energy_demand) through a Range/Range mapping.
     """
     return {
         "target": "demand",
-        "function_name": "UCBlock::set_active_power_demand",
+        "function_name": function_name,
         "caller": "B",
         "data_type": "D",
         "set_size": [0, 0],

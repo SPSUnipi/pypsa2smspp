@@ -22,7 +22,15 @@ import pytest
 
 import pysmspp
 
-from conftest import OUT_TEST
+from conftest import (
+    OUT_TEST,
+    scenario_reference_objective,
+    solver_reads_conversion_unit,
+    solver_solves_no_line_network,
+    BUS_FORMS,
+    BUS_FORM_IDS,
+    skip_carrier_form,
+)
 
 from pypsa2smspp.network_correction import add_slack_unit, clean_dispatch_setpoints
 from pypsa2smspp.stochastic_utils import normalize_scenario_tree
@@ -113,11 +121,54 @@ def _solar_profile(snapshots) -> pd.Series:
     )
 
 
-def build_two_level_network() -> tuple[pypsa.Network, dict]:
+def _add_conversion_unit(n: pypsa.Network, solar_extendable: bool = False,
+                         heater: bool = True) -> None:
     """
-    Build the flat network of the leaves, and the tree they are the leaves of.
+    Add a gas node with its supply, a heat node with its demand and a boiler,
+    and a committable back-pressure CHP between them, a ConversionUnitBlock,
+    and, if heater, a resistive heater from the electric to the heat node,
+    which is a line of the network (without it the nodes are joined by the
+    CHP only); nothing is extendable, so that nothing is here-and-now, but
+    the solar generator if solar_extendable.
+    """
+    # the fixed capacities cover the demand, so that the slack is idle
+    n.generators["p_nom_extendable"] = False
+    n.generators.loc[n.generators.carrier == "diesel", "p_nom"] = 30000.0
+    n.generators.loc["solar", "p_nom"] = 2000.0
+    if solar_extendable:
+        n.generators.loc["solar", ["p_nom", "p_nom_extendable"]] = [0.0, True]
+
+    bus = n.buses.index[0]
+    n.add("Bus", "gas")
+    n.add("Bus", "heat")
+    n.add("Generator", "gas supply", bus="gas", p_nom=1e5, marginal_cost=20.0)
+    n.add("Generator", "boiler", bus="heat", p_nom=1e4, marginal_cost=60.0)
+    # a heat demand below the minimum heat of the CHP for six hours out of
+    # twelve, so that the CHP shuts down and starts up again
+    n.add("Load", "heat demand", bus="heat",
+          p_set=np.where(np.arange(len(n.snapshots)) % 12 < 6, 1500.0, 300.0))
+    n.add("Link", "CHP", bus0="gas", bus1=bus, bus2="heat", efficiency=0.4,
+          efficiency2=0.5, p_nom=5000.0, p_min_pu=0.3, committable=True,
+          marginal_cost=2.0, start_up_cost=5000.0, stand_by_cost=1000.0,
+          min_up_time=3, min_down_time=2)
+    if heater:
+        n.add("Link", "resistive heater", bus0=bus, bus1="heat",
+              efficiency=0.95, p_nom=500.0, marginal_cost=0.5)
+
+
+def build_two_level_network(conversion_unit: bool = False,
+                            solar_extendable: bool = False,
+                            heater: bool = True
+                            ) -> tuple[pypsa.Network, dict]:
+    """
+    Build the flat network of the leaves, and the tree they are the leaves of;
+    with conversion_unit, the network has a committable CHP and nothing
+    extendable but, if solar_extendable, the solar generator, and a heater
+    if heater [see _add_conversion_unit()].
     """
     n, base_load = _deterministic_base()
+    if conversion_unit:
+        _add_conversion_unit(n, solar_extendable, heater)
     base_pmaxpu = _solar_profile(n.snapshots)
     load_name = n.loads.index[0]
 
@@ -155,7 +206,9 @@ def build_two_level_network() -> tuple[pypsa.Network, dict]:
     return n, {"groups": groups}
 
 
-def _transformation(tree: dict, name: str) -> Transformation:
+def _transformation(tree: dict, name: str,
+                    enable_conversion_units: bool = False,
+                    multi_carrier: bool = False) -> Transformation:
     workdir = OUT_TEST / "mssb" / name
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -163,6 +216,8 @@ def _transformation(tree: dict, name: str) -> Transformation:
         name=name,
         configfile=MSSB_CONFIGFILE,
         enable_thermal_units=False,
+        enable_conversion_units=enable_conversion_units,
+        multi_carrier=multi_carrier,
         workdir=str(workdir),
         stochastic_parameters={
             "stochastic_type": "mssb",
@@ -380,6 +435,49 @@ def test_mssb_matches_the_flat_optimum():
     assert obtained == pytest.approx(expected, rel=1e-5)
 
 
+@pytest.mark.skipif(
+    shutil.which("mssb_solver") is None,
+    reason="the SMS++ mssb_solver tool is not on PATH",
+)
+@pytest.mark.parametrize("heater", [True, False],
+                         ids=["heater", "no_line"])
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
+@pytest.mark.skipif(
+    not solver_reads_conversion_unit(),
+    reason="the SMS++ solver does not know the ConversionUnitBlock",
+)
+def test_mssb_with_a_conversion_unit_matches_the_leaves(heater,
+                                                        multi_carrier):
+    """
+    With a committable CHP, a ConversionUnitBlock, and nothing extendable,
+    the leaves are independent, and the optimum of the multi-stage block is
+    that of the leaves solved by PyPSA one by one, weighted by their
+    probabilities (PyPSA does not build the model of a stochastic network
+    with a committable component). Without the heater, the network has no
+    line, which the DCNetworkBlock solves since UCBlock 4892479b.
+    """
+    if not heater and not solver_solves_no_line_network():
+        pytest.skip("the SMS++ solver does not solve a network with no line")
+
+    n, tree = build_two_level_network(conversion_unit=True, heater=heater)
+    skip_carrier_form(n, multi_carrier)
+    # nothing is extendable: a slack covers what the fixed capacities do not
+    n = add_slack_unit(n)
+
+    reference = n.copy()
+    clean_dispatch_setpoints(reference)
+    expected = scenario_reference_objective(reference)
+
+    transformation = _transformation(
+        tree, "mssb_conversion_unit" + ("" if heater else "_no_line")
+        + ("_carriers" if multi_carrier else ""),
+        enable_conversion_units=True, multi_carrier=multi_carrier)
+    transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
+    assert obtained == pytest.approx(expected, rel=1e-5)
+
+
 @pytest.mark.parametrize("stochastic_type", ["tssb", "mssb"])
 def test_investment_outside_matches_the_flat_optimum(stochastic_type):
     """
@@ -448,3 +546,97 @@ def test_investment_outside_matches_the_flat_optimum(stochastic_type):
     assert np.all(np.isfinite(solar.values))
     assert np.allclose(solar.values, solar.values[0])
 
+
+
+def _leaves_objective(n: pypsa.Network, solar=None) -> float:
+    """
+    The sum of the optima of the leaves of n, solved by PyPSA one by one with
+    the commitment relaxed, weighted by their probabilities; with solar, the
+    capacity of the solar generator is fixed to it in every leaf.
+    """
+    objective = 0.0
+    for scenario, probability in n.scenario_weightings["weight"].items():
+        leaf = n.get_scenario(scenario)
+        if solar is not None:
+            leaf.generators.loc["solar", ["p_nom_min", "p_nom_max"]] = solar
+        leaf.optimize(solver_name="highs", linearized_unit_commitment=True,
+                      include_objective_constant=True)
+        objective += float(probability) * float(
+            leaf.objective + getattr(leaf, "objective_constant", 0.0))
+    return objective
+
+
+@pytest.mark.skipif(
+    not solver_reads_conversion_unit(),
+    reason="the SMS++ solver does not know the ConversionUnitBlock",
+)
+@pytest.mark.parametrize("stochastic_type", ["tssb", "mssb"])
+@pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
+def test_investment_outside_with_a_conversion_unit(stochastic_type,
+                                                   multi_carrier):
+    """
+    The investment in the solar generator stated once, in an InvestmentBlock
+    over the TSSB or the MSSB, with a committable CHP, a ConversionUnitBlock,
+    in every leaf. PyPSA does not build the model of a stochastic network
+    with a committable component, hence there is no flat optimum: the
+    objective is checked against the value of the design it comes with, the
+    leaves being solved by PyPSA one by one at that design, and against the
+    wait-and-see value, a lower bound. The InvestmentFunction solves the
+    continuous relaxation of the UCBlock (intRelaxIntVars in
+    InvestmentBlock/BSCfg.txt of pySMSpp), and so the commitment is relaxed
+    in PyPSA too.
+    """
+    configs = Path(pysmspp.__file__).parent / "data" / "configs"
+    if not (configs / INVESTMENT_OUTSIDE_CONFIGFILE).exists():
+        pytest.skip("this pySMSpp has no configuration for an InvestmentBlock "
+                    "over a stochastic Block")
+
+    n, tree = build_two_level_network(conversion_unit=True,
+                                      solar_extendable=True)
+    skip_carrier_form(n, multi_carrier)
+    n = add_slack_unit(n)
+
+    reference = n.copy()
+    clean_dispatch_setpoints(reference)
+    wait_and_see = _leaves_objective(reference)
+
+    stochastic = {
+        "stochastic_type": stochastic_type,
+        "parameters": STOCHASTIC_PARAMETERS,
+        "investment_outside": True,
+    }
+    if stochastic_type == "mssb":
+        stochastic["tree"] = tree
+
+    name = f"{stochastic_type}_investment_outside_conversion_unit" + (
+        "_carriers" if multi_carrier else "")
+    workdir = OUT_TEST / "mssb" / name
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    transformation = Transformation(
+        name=name,
+        configfile=INVESTMENT_OUTSIDE_CONFIGFILE,
+        enable_thermal_units=False,
+        enable_conversion_units=True,
+        multi_carrier=multi_carrier,
+        capacity_expansion_ucblock=False,
+        workdir=str(workdir),
+        stochastic_parameters=stochastic,
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        pysmspp_options={"B": "InnerBCfg.txt"},
+    )
+    transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
+    solar = n.generators.loc[
+        n.generators.index.get_level_values(-1) == "solar", "p_nom_opt"]
+    assert np.allclose(solar.values, solar.values[0])
+
+    at_design = _leaves_objective(reference, float(solar.values[0]))
+
+    # the configuration asks the bundle for a relative accuracy of 1e-6
+    assert obtained == pytest.approx(at_design, rel=1e-5)
+    assert obtained >= wait_and_see * (1 - 1e-5)
