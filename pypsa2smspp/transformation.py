@@ -35,6 +35,9 @@ from pypsa2smspp.utils import (
     networkblock_dimensions,
     investmentblock_dimensions,
     hydroblock_dimensions,
+    add_unit_block,
+    hydro_system_unit_solutions,
+    hydro_system_mapping_paths,
     get_attr_name,
     process_dcnetworkblock,
     get_block_name,
@@ -140,6 +143,7 @@ class Transformation:
         enable_thermal_units: bool = False,
         intermittent_carriers: Optional[Union[str, Sequence[str]]] = None,
         nuclear_units: Optional[Mapping[str, Union[bool, Mapping[str, Any], str, Path]]] = None,
+        hydro_system: bool = False,
         enable_conversion_units: bool = False,
         multi_carrier: bool = False,
 
@@ -225,6 +229,31 @@ class Transformation:
 
             Notes:
               - Ignored when `enable_thermal_units=False`.
+
+        hydro_system : bool, default False
+            If True, the hydro StorageUnits (carrier hydro or PHS), instead
+            of being HydroUnitBlocks of the UCBlock, are the HydroUnitBlock_j
+            of a single HydroSystemUnitBlock, which also holds the future
+            cost of the water left in all the reservoirs at the end of the
+            horizon (a PolyhedralFunctionBlock with one active Variable per
+            reservoir and no cut). This is the form of the UCBlock of each
+            stage of an SDDPBlock, whose cuts are rows of that function.
+
+            Notes:
+              - The function written has no row and the data of
+                `TransformationConfig.HydroSystemUnitBlock_parameters`, by
+                default the bound 0: it adds nothing to the cost.
+              - A MILPSolver needs the "linearized" PolyhedralFunctionBlock,
+                which the InnerBCfg.txt of smspp_ucblock_solver asks for: to
+                solve the UCBlock directly, the `configfile` has to be in a
+                directory holding it, as the installed ucblock_solver/config.
+              - The hydro StorageUnits have to come after the other
+                StorageUnits, so that the generators of the
+                HydroSystemUnitBlock keep their place, and they cannot be
+                extendable.
+              - The DataMappings of a stochastic parameter of a hydro unit
+                (e.g., `hydro_inflow`) reach its HydroUnitBlock inside the
+                HydroSystemUnitBlock.
 
         enable_conversion_units : bool, default False
             Controls whether the committable links become ConversionUnitBlocks
@@ -352,6 +381,8 @@ class Transformation:
                     )
                 merged.update(rules)
             self.nuclear_units[str(carrier).strip().lower()] = merged
+
+        self.hydro_system = bool(hydro_system)
 
         self.workdir = Path(workdir)
         self.name = str(name)
@@ -1661,6 +1692,9 @@ class Transformation:
         solution_data : dict or None, optional
             Optional dictionary used for inspection/debugging.
         """
+        if self.hydro_system:
+            solution_block = hydro_system_unit_solutions(
+                solution_block, self.unitblocks, num_units)
         for i in range(num_units):
             block_key = f"UnitBlock_{i}"
     
@@ -2868,9 +2902,9 @@ class Transformation:
                 self._add_unit_outputs(unit_block_obj, ub_name, unit_block)
 
             # Attach to UCBlock
-            master.blocks[name_id].add_block(
-                unit_block["enumerate"],
-                block=unit_block_obj,
+            add_unit_block(
+                master.blocks[name_id], unit_block, unit_block_obj,
+                self.hydro_system, self.config.HydroSystemUnitBlock_parameters,
             )
     
         # -----------------
@@ -3915,6 +3949,9 @@ class Transformation:
                 "No stochastic data mappings were built for the TSSB StochasticBlock."
             )
 
+        if self.hydro_system:
+            data_mappings = hydro_system_mapping_paths(data_mappings,
+                                                       self.unitblocks)
         stochastic_block = build_tssb_stochastic_block_data(data_mappings)
 
         self.dimensions["tssb"]["sb"] = {
