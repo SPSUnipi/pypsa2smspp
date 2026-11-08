@@ -17,11 +17,13 @@ They are typically imported and used within the Transformation class.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import re
 from pypsa2smspp import logger
+from pysmspp import Block
 from typing import Optional, Sequence, Union
 
 
@@ -251,6 +253,35 @@ def get_nominal_aliases(component_type, nominal_attrs):
         base + "_min": "p_nom_min",
         base + "_max": "p_nom_max",
     }
+
+
+def module_size(p_nom_mod):
+    """The size of a module of an extendable asset, 1 if it is not modular.
+
+    PyPSA writes the capacity of a modular asset as an integer number of
+    modules of size p_nom_mod; the design of the unit that translates it
+    counts modules too, so its maximum power and its investment cost are
+    those of a module, and its capacity is the design times this size.
+    """
+    value = first_scalar(p_nom_mod)
+    return value if value > 0 else 1.0
+
+
+def module_factor(p_nom_extendable, p_nom_mod):
+    """The size of a module where the asset is extendable and modular, 1 elsewhere.
+
+    It works element by element, the arguments being scalars, 1-length
+    containers or frames aligned with the value it multiplies.
+    """
+    extendable = np.asarray(p_nom_extendable, dtype=bool)
+    size = np.asarray(p_nom_mod, dtype=float)
+    factor = np.where(extendable & (size > 0), size, 1.0)
+    return float(factor.ravel()[0]) if factor.size == 1 else factor
+
+
+def is_modular(p_nom_mod):
+    """True if the asset is built in modules of size p_nom_mod."""
+    return first_scalar(p_nom_mod) > 0
 
 
 def first_scalar(x):
@@ -631,6 +662,197 @@ def hydroblock_dimensions():
     dimensions["TotalNumberPieces"] = 3
     return dimensions
 
+
+def add_unit_block(ucblock, unit_block, block, hydro_system=False,
+                   future_cost=None):
+    """
+    Attach the Block of a unit to the UCBlock, as its UnitBlock_i.
+
+    With hydro_system the HydroUnitBlocks are instead the HydroUnitBlock_j of
+    a single HydroSystemUnitBlock, which is the UnitBlock_i of the first of
+    them. Since the generators of the HydroSystemUnitBlock are those of its
+    HydroUnitBlocks, in their order, the hydro units have to be the last ones
+    for the generators to keep their place [GeneratorNode]. Its
+    PolyhedralFunctionBlock, the future cost of the water, has one active
+    Variable per reservoir, no row, and the scalars in future_cost.
+
+    Parameters
+    ----------
+    ucblock : pysmspp.Block
+        The UCBlock, whose NumberUnits is set to the UnitBlocks it holds.
+    unit_block : dict
+        The unit, an entry of Transformation.unitblocks.
+    block : pysmspp.Block
+        The Block of the unit.
+    hydro_system : bool, default False
+        Whether the HydroUnitBlocks go in a HydroSystemUnitBlock.
+    future_cost : dict, optional
+        The scalar variables of the PolyhedralFunctionBlock, by name.
+    """
+    if not hydro_system:
+        ucblock.add_block(unit_block["enumerate"], block=block)
+        return
+
+    units = [key for key in ucblock.blocks if key.startswith("UnitBlock_")]
+    system = ucblock.blocks[units[-1]] if units else None
+    if system is not None and system.block_type != "HydroSystemUnitBlock":
+        system = None
+
+    if unit_block["block"] != "HydroUnitBlock":
+        if system is not None:
+            raise ValueError(
+                f"{unit_block['name']} comes after the hydro units, which "
+                "hydro_system wants to be the last units: put the hydro "
+                "StorageUnits after the other ones."
+            )
+        ucblock.add_block(unit_block["enumerate"], block=block)
+        return
+
+    if np.any(unit_block.get("Extendable", False)):
+        raise ValueError(
+            f"{unit_block['name']} is an extendable hydro unit, which "
+            "hydro_system does not support."
+        )
+
+    if system is None:
+        system = Block().from_kwargs(block_type="HydroSystemUnitBlock")
+        system.add_dimension("NumberHydroUnits", 0)
+        polyhedral = Block().from_kwargs(block_type="PolyhedralFunctionBlock")
+        polyhedral.add_dimension("PolyFunction_NumVar", 0)
+        for name, value in (future_cost or {}).items():
+            polyhedral.add_variable(name, "float", (), value)
+        system.add_block("PolyhedralFunctionBlock", block=polyhedral)
+        ucblock.add_block(unit_block["enumerate"], block=system)
+        units.append(unit_block["enumerate"])
+
+    # the HydroUnitBlocks are listed before the PolyhedralFunctionBlock
+    polyhedral = system.blocks.pop("PolyhedralFunctionBlock")
+    j = system.dimensions["NumberHydroUnits"].value
+    system.add_block(f"HydroUnitBlock_{j}", block=block)
+    system.blocks["PolyhedralFunctionBlock"] = polyhedral
+
+    system.add_dimension("NumberHydroUnits", j + 1, force=True)
+    polyhedral.add_dimension(
+        "PolyFunction_NumVar",
+        polyhedral.dimensions["PolyFunction_NumVar"].value
+        + unit_block["dimensions"]["NumberReservoirs"],
+        force=True,
+    )
+    ucblock.add_dimension("NumberUnits", len(units), force=True)
+
+
+def hydro_system_unit_solutions(solution_block, unitblocks, num_units):
+    """
+    The Solutions of the units of a UCBlock whose HydroUnitBlocks are in a
+    HydroSystemUnitBlock [see add_unit_block()], as UnitBlock_i in the order
+    of the units of Transformation.unitblocks: the Solution of the j-th
+    HydroUnitBlock is its HydroSystemUnitSolution_j, with the rows of the
+    ActivePower of the HydroSystemUnitBlock that are of its generators.
+
+    Parameters
+    ----------
+    solution_block : pysmspp.Block
+        The Solution of the UCBlock.
+    unitblocks : dict
+        Transformation.unitblocks.
+    num_units : int
+        The number of units in unitblocks.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        An object whose blocks are the Solutions of the units, by UnitBlock_i;
+        a missing one is left out.
+    """
+    kinds = {unit["enumerate"]: unit["block"] for unit in unitblocks.values()
+             if "enumerate" in unit}
+    blocks = {}
+    system = None
+    hydro_index = 0
+    generator_index = 0
+    unit_index = 0
+    for i in range(num_units):
+        key = f"UnitBlock_{i}"
+        if kinds.get(key) == "HydroUnitBlock":
+            if system is None:
+                system = solution_block.blocks.get(f"UnitBlock_{unit_index}")
+                unit_index += 1
+            solution = (None if system is None else system.blocks.get(
+                f"HydroSystemUnitSolution_{hydro_index}"))
+            hydro_index += 1
+            if solution is not None:
+                variables = dict(solution.variables)
+                flow = variables.get("VolumetricFlow")
+                power = system.variables.get("ActivePower")
+                if flow is not None and power is not None:
+                    number_generators = np.shape(flow.data)[0]
+                    variables.setdefault("ActivePower", SimpleNamespace(
+                        data=np.asarray(power.data)[
+                            generator_index:generator_index + number_generators]))
+                    generator_index += number_generators
+                solution = SimpleNamespace(variables=variables,
+                                           blocks=solution.blocks)
+        else:
+            solution = solution_block.blocks.get(f"UnitBlock_{unit_index}")
+            unit_index += 1
+        if solution is not None:
+            blocks[key] = solution
+    return SimpleNamespace(blocks=blocks)
+
+
+def hydro_system_mapping_paths(data_mappings, unitblocks):
+    """
+    The data mappings of a StochasticBlock whose UCBlock has its
+    HydroUnitBlocks in a HydroSystemUnitBlock [see add_unit_block()]: a path
+    B(i) to the i-th unit, when this is the j-th HydroUnitBlock, becomes
+    B(h) B(j) to the HydroUnitBlock_j inside the HydroSystemUnitBlock, which
+    is the UnitBlock_h (its PolyhedralFunctionBlock being its last sub-Block,
+    the HydroUnitBlock_j is its j-th one). The paths to the other units do
+    not change, the hydro units being the last ones.
+
+    Parameters
+    ----------
+    data_mappings : list of dict
+        The data mappings, each with its "abstract_paths" whose group
+        indices start from the UCBlock.
+    unitblocks : dict
+        Transformation.unitblocks.
+
+    Returns
+    -------
+    list of dict
+        The data mappings, the ones to a hydro unit with their paths changed.
+    """
+    hydro = sorted(int(unit["enumerate"].split("_")[-1])
+                   for unit in unitblocks.values()
+                   if unit.get("block") == "HydroUnitBlock"
+                   and "enumerate" in unit)
+    if not hydro:
+        return data_mappings
+    position = {index: j for j, index in enumerate(hydro)}
+    system = hydro[0]
+
+    mappings = []
+    for mapping in data_mappings:
+        paths = []
+        for path in mapping.get("abstract_paths") or []:
+            groups = list(path.get("group_indices", []))
+            if (path.get("node_types", "").startswith("B") and groups
+                    and int(groups[0]) in position):
+                path = {
+                    "node_types": "B" + path["node_types"],
+                    "group_indices": [str(system),
+                                      str(position[int(groups[0])])]
+                                     + groups[1:],
+                    "element_indices": [None] + list(path["element_indices"]),
+                    "range_indices": [None] + list(path["range_indices"]),
+                }
+            paths.append(path)
+        if "abstract_paths" in mapping and mapping["abstract_paths"] is not None:
+            mapping = dict(mapping, abstract_paths=paths)
+        mappings.append(mapping)
+    return mappings
+
 # -------------------------------- Correction --------------------------------------
 
 def correct_dimensions(
@@ -772,6 +994,99 @@ def get_attr_name(
     raise ValueError(f"Component type {component_type} with carrier {carrier} not recognized.")
 # ------------------------ Pre-processing functions --------------------------------
 
+def fold_fom_cost_into_capital_cost(n):
+    """
+    Adds fom_cost to capital_cost, and sets fom_cost to 0, on every component
+    that has both.
+
+    PyPSA puts ( capital_cost + fom_cost ) times the capacity of an extendable
+    asset in its objective, the part of the existing capacity in
+    objective_constant, while the investment cost of a design Variable of
+    SMS++ is a single datum: folding the two makes it the cost PyPSA has.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network, modified in place.
+
+    Returns
+    -------
+    pypsa.Network
+        The same network.
+    """
+    for comp in ("generators", "storage_units", "stores", "lines", "links"):
+        df = getattr(n, comp)
+        if df.empty or "fom_cost" not in df.columns or \
+                "capital_cost" not in df.columns:
+            continue
+        fom = df["fom_cost"].fillna(0.0).astype(float)
+        if not fom.any():
+            continue
+        df["capital_cost"] = df["capital_cost"].fillna(0.0).astype(float) + fom
+        df["fom_cost"] = 0.0
+    return n
+
+
+def free_capacity(df, nom, fixed_capacity, dynamic_min_pu=None):
+    """
+    The capacity at which an extendable asset with zero capital cost is fixed.
+
+    The capacity costs nothing, hence the optimum takes as much of it as it
+    may: the maximum ``<nom>_max`` when it is finite, and ``fixed_capacity``
+    when it is not, which stands for a capacity with no bound, any value
+    larger than what is used giving the same optimum.
+
+    This holds only when more capacity forces nothing: with a positive
+    minimum output or flow (``p_min_pu`` above 0, static or in time) more
+    capacity forces more of it, the best capacity depends on the rest of the
+    network, and fixing it at its maximum, or at ``fixed_capacity``, would
+    force that much output. Such an asset needs a design Variable with no
+    cost, which a UnitBlock does not have (it has one only when its
+    investment cost is not zero), hence it is refused.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The static data of the assets.
+    nom : str
+        The nominal attribute, ``p_nom`` or ``s_nom``.
+    fixed_capacity : float
+        The capacity of an asset with no finite maximum.
+    dynamic_min_pu : pandas.DataFrame, optional
+        The time series of the minimum output or flow per unit of capacity,
+        one column per asset, e.g., ``n.generators_t.p_min_pu``.
+
+    Returns
+    -------
+    pandas.Series
+        The capacity of each asset.
+
+    Raises
+    ------
+    ValueError
+        If an asset has a positive minimum output or flow.
+    """
+    most = (df[f"{nom}_max"].astype(float) if f"{nom}_max" in df.columns
+            else pd.Series(np.inf, index=df.index))
+    least = (df[f"{nom}_min"].astype(float) if f"{nom}_min" in df.columns
+             else pd.Series(0.0, index=df.index))
+    min_pu = nom.replace("_nom", "_min_pu")
+    forced = (df[min_pu].astype(float) > 0 if min_pu in df.columns
+              else pd.Series(False, index=df.index))
+    if dynamic_min_pu is not None and not dynamic_min_pu.empty:
+        cols = df.index.intersection(dynamic_min_pu.columns)
+        forced.loc[cols] |= (dynamic_min_pu[cols] > 0).any(axis=0)
+    if forced.any():
+        raise ValueError(
+            "free_capacity: the extendable assets "
+            f"{sorted(df.index[forced])} have zero capital_cost and a "
+            f"positive {min_pu}, which forces their output to grow with "
+            "their capacity: their best capacity is not known in advance, "
+            "and it cannot be a design Variable with no cost; give them a "
+            f"capital_cost, or a fixed {nom}")
+    return most.where(np.isfinite(most), fixed_capacity).clip(lower=least)
+
+
 def preprocess_zero_capital_cost_extendable_generators(
     n,
     fixed_capacity: float = 1e8,
@@ -786,16 +1101,18 @@ def preprocess_zero_capital_cost_extendable_generators(
     - p_nom_extendable == True
     - capital_cost == 0
 
-    are converted to non-extendable generators with a large fixed capacity.
+    are converted to non-extendable generators, at the capacity that
+    free_capacity() gives: p_nom_max when finite, fixed_capacity otherwise.
 
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to preprocess.
-    fixed_capacity : float, default 1e6
-        Capacity assigned to matching generators.
+    fixed_capacity : float, default 1e8
+        Capacity assigned to matching generators with no finite p_nom_max.
     update_bounds : bool, default True
-        If True, also set p_nom_min and p_nom_max to fixed_capacity when present.
+        If True, also set p_nom_min and p_nom_max to the capacity when
+        present.
     logger : callable, default print
         Logging function.
     return_fixed_count : bool, default False
@@ -831,14 +1148,18 @@ def preprocess_zero_capital_cost_extendable_generators(
     if fixed_count == 0:
         return (n, 0) if return_fixed_count else n
 
+    # a capacity that costs nothing is best at its largest: at p_nom_max when
+    # this is finite, and at fixed_capacity otherwise
+    capacity = free_capacity(n.generators.loc[matched], "p_nom",
+                             fixed_capacity, n.generators_t.p_min_pu)
     n.generators.loc[matched, "p_nom_extendable"] = False
-    n.generators.loc[matched, "p_nom"] = fixed_capacity
+    n.generators.loc[matched, "p_nom"] = capacity
 
     if update_bounds:
         if "p_nom_min" in n.generators.columns:
-            n.generators.loc[matched, "p_nom_min"] = fixed_capacity
+            n.generators.loc[matched, "p_nom_min"] = capacity
         if "p_nom_max" in n.generators.columns:
-            n.generators.loc[matched, "p_nom_max"] = fixed_capacity
+            n.generators.loc[matched, "p_nom_max"] = capacity
 
     # logger(
     #     f"Preprocessed {len(matched)} extendable generators with zero capital_cost: "
@@ -853,6 +1174,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
     update_bounds: bool = True,
     logger=print,
     return_fixed_count: bool = False,
+    exclude=(),
 ):
     """
     Preprocess extendable lines and links with zero capital cost.
@@ -862,25 +1184,32 @@ def preprocess_zero_capital_cost_extendable_lines_links(
     - ``<nom>_extendable == True``
     - ``capital_cost == 0``
 
-    are converted to non-extendable branches with a large fixed capacity, the
-    same treatment applied to zero-capital-cost generators. A branch that can be
-    expanded at no cost and with no finite bound is otherwise unbounded: it maps
-    to a design variable with zero cost and infinite upper bound, which is
-    ill-posed (nothing keeps its capacity finite).
+    are converted to non-extendable branches, the same treatment applied to
+    zero-capital-cost generators: a capacity that costs nothing is best at its
+    largest, so the branch is fixed at ``<nom>_max`` when this is finite, and
+    at a large fixed capacity when it is not [see free_capacity()]. A branch
+    that can be expanded at no cost and with no finite bound is otherwise
+    unbounded: it maps to a design variable with zero cost and infinite upper
+    bound, which is ill-posed (nothing keeps its capacity finite).
 
     Parameters
     ----------
     n : pypsa.Network
         The PyPSA network to preprocess.
     fixed_capacity : float, default 1e9
-        Capacity assigned to matching lines/links.
+        Capacity assigned to matching lines/links with no finite
+        ``<nom>_max``.
     update_bounds : bool, default True
-        If True, also set ``<nom>_min`` and ``<nom>_max`` to fixed_capacity
+        If True, also set ``<nom>_min`` and ``<nom>_max`` to the capacity
         when present.
     logger : callable, default print
         Logging function.
     return_fixed_count : bool, default False
         If True, also return the number of branches converted to fixed.
+    exclude : iterable of str, default ()
+        Names of lines/links left untouched, e.g., the charge/discharge links
+        that ``build_store_and_merged_links`` merges into one link, which
+        carries the capital cost of both.
 
     Returns
     -------
@@ -890,6 +1219,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
         Returned only when return_fixed_count is True.
     """
     fixed_count = 0
+    exclude = set(exclude)
 
     for comp, nom in (("lines", "s_nom"), ("links", "p_nom")):
         df = getattr(n, comp)
@@ -909,6 +1239,7 @@ def preprocess_zero_capital_cost_extendable_lines_links(
         mask = (
             df[ext].fillna(False).astype(bool)
             & df[cap].fillna(np.nan).eq(0)
+            & ~df.index.isin(exclude)
         )
 
         matched = df.index[mask]
@@ -916,14 +1247,17 @@ def preprocess_zero_capital_cost_extendable_lines_links(
             continue
         fixed_count += len(matched)
 
+        dynamic = (n.links_t.p_min_pu if comp == "links" else None)
+        capacity = free_capacity(df.loc[matched], nom, fixed_capacity,
+                                 dynamic)
         df.loc[matched, ext] = False
-        df.loc[matched, nom] = fixed_capacity
+        df.loc[matched, nom] = capacity
 
         if update_bounds:
             if f"{nom}_min" in df.columns:
-                df.loc[matched, f"{nom}_min"] = fixed_capacity
+                df.loc[matched, f"{nom}_min"] = capacity
             if f"{nom}_max" in df.columns:
-                df.loc[matched, f"{nom}_max"] = fixed_capacity
+                df.loc[matched, f"{nom}_max"] = capacity
 
     return (n, fixed_count) if return_fixed_count else n
 
@@ -1591,7 +1925,102 @@ def add_sectorcoupled_parameters(
 
     
 # Sempre nella classe Transformation
-def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None):
+def _signature(f):
+    """The names of the arguments of f."""
+    return f.__code__.co_varnames[:f.__code__.co_argcount]
+
+
+def _modular_unit_power(d):
+    """Make the powers of an IntermittentUnitBlock those of a module.
+
+    Where the asset is extendable and modular its design counts modules, so
+    the maximum and minimum power of the unit, which the design multiplies,
+    are those of one module; elsewhere they are left as they are. The
+    functions in d are wrapped only if they have the signature of the default
+    ones, so that it is idempotent.
+    """
+    max_power = d.get("MaxPower")
+    if callable(max_power) and _signature(max_power) == (
+            "p_nom", "p_max_pu", "p_nom_extendable", "capital_cost",
+            "p_nom_max"):
+        d["MaxPower"] = (
+            lambda p_nom, p_max_pu, p_nom_extendable, capital_cost, p_nom_max,
+                   p_nom_mod:
+                max_power(p_nom, p_max_pu, p_nom_extendable, capital_cost,
+                          p_nom_max)
+                * module_factor(p_nom_extendable, p_nom_mod))
+
+    min_power = d.get("MinPower")
+    if callable(min_power) and _signature(min_power) == (
+            "p_nom", "p_min_pu", "p_nom_extendable"):
+        d["MinPower"] = (
+            lambda p_nom, p_min_pu, p_nom_extendable, p_nom_mod:
+                min_power(p_nom, p_min_pu, p_nom_extendable)
+                * module_factor(p_nom_extendable, p_nom_mod))
+
+
+def apply_investment_module_overrides(IntermittentUnitBlock_parameters,
+                                      IntermittentUnitBlock_inverse,
+                                      InvestmentBlock_parameters):
+    """Write the modular extendable assets in an InvestmentBlock as modules.
+
+    The InvestmentBlock form of what apply_expansion_overrides() does in the
+    UCBlock one: the design of a modular extendable IntermittentUnitBlock is
+    the number of its modules, an integer Variable of the InvestmentBlock
+    ("Integer"), the unit has the powers of one module, the cost is that of a
+    module, the bounds count modules (p_nom_max has to be finite) and the
+    capacity is read back as the design times the size of a module. The
+    InvestmentBlock finds the size of the module of each asset in p_nom_mod,
+    which is 0 where the asset is not a modular IntermittentUnitBlock [see
+    Transformation.add_InvestmentBlock()]. The functions are wrapped only if
+    they have the signature of the default ones, so that it is idempotent.
+    """
+    _modular_unit_power(IntermittentUnitBlock_parameters)
+
+    def _sizes(p_nom_mod):
+        size = np.asarray(p_nom_mod, dtype=float)
+        return np.where(size > 0, size, 1.0)
+
+    i = InvestmentBlock_parameters
+
+    cost = i.get("Cost")
+    if callable(cost) and _signature(cost) == ("capital_cost",):
+        i["Cost"] = lambda capital_cost, p_nom_mod: (
+            np.asarray(cost(capital_cost), dtype=float) * _sizes(p_nom_mod))
+
+    lower = i.get("LowerBound")
+    if callable(lower) and _signature(lower) == ("p_nom_min",):
+        i["LowerBound"] = lambda p_nom_min, p_nom_mod: np.where(
+            np.asarray(p_nom_mod, dtype=float) > 0,
+            np.ceil(np.asarray(lower(p_nom_min), dtype=float)
+                    / _sizes(p_nom_mod) - 1e-9),
+            np.asarray(lower(p_nom_min), dtype=float))
+
+    upper = i.get("UpperBound")
+    if callable(upper) and _signature(upper) == ("p_nom_max",):
+        def _upper(p_nom_max, p_nom_mod):
+            most = np.asarray(upper(p_nom_max), dtype=float)
+            modular = np.asarray(p_nom_mod, dtype=float) > 0
+            if np.any(modular & ~np.isfinite(most)):
+                raise ValueError("a modular extendable asset needs a finite "
+                                 "p_nom_max, the number of its modules being "
+                                 "bounded by it")
+            return np.where(modular,
+                            np.floor(most / _sizes(p_nom_mod) + 1e-9), most)
+        i["UpperBound"] = _upper
+
+    if "Integer" not in i:
+        i["Integer"] = lambda p_nom_mod: (
+            np.asarray(p_nom_mod, dtype=float) > 0).astype(int)
+
+    inverse = IntermittentUnitBlock_inverse.get("p_nom")
+    if callable(inverse) and _signature(inverse) == ("designvariable",):
+        IntermittentUnitBlock_inverse["p_nom"] = (
+            lambda designvariable, p_nom_mod:
+                inverse(designvariable) * module_size(p_nom_mod))
+
+
+def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnitBlock_store_parameters=None, IntermittentUnitBlock_inverse=None, BatteryUnitBlock_inverse=None, InvestmentBlock=None, BatteryUnitBlock_parameters=None, BatteryUnitBlock_StorageUnit_inverse=None):
     """
     Inject missing keys for UC expansion to be solved inside UCBlock instead of a separate InvestmentBlock.
     Keys are only added if missing, so it remains idempotent.
@@ -1603,7 +2032,12 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     # "InvestmentCost"
     if "InvestmentCost" not in d:
         # Pass-through of capital_cost (assumed already scalar or 1-length)
-        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable: capital_cost if bool(first_scalar(p_nom_extendable)) else 0.0
+        # the cost of a module when the asset is modular, the design then
+        # counting modules
+        d["InvestmentCost"] = lambda capital_cost, p_nom_extendable, p_nom_mod: capital_cost * module_size(p_nom_mod) if bool(first_scalar(p_nom_extendable)) else 0.0
+
+    # a modular asset has a design that counts modules
+    _modular_unit_power(d)
 
     # "MaxCapacityDesign"
     if "MaxCapacityDesign" not in d:
@@ -1613,19 +2047,31 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
         # factorization, while the design is already kept finite by its cost
         # (the zero-cost extendable assets are made non-extendable upstream, see
         # preprocess_zero_capital_cost_extendable_generators)
-        def _max_cap_design(p_nom, p_nom_extendable, p_nom_max):
-            return (first_scalar(p_nom_max)
-                    if bool(first_scalar(p_nom_extendable))
-                    else first_scalar(p_nom))
+        # a modular asset has an integer design, the number of modules, which
+        # the unit reads off a negative bound: at most -MaxCapacityDesign
+        # modules
+        def _max_cap_design(p_nom, p_nom_extendable, p_nom_max, p_nom_mod):
+            if not bool(first_scalar(p_nom_extendable)):
+                return first_scalar(p_nom)
+            if is_modular(p_nom_mod):
+                most = first_scalar(p_nom_max)
+                if not np.isfinite(most):
+                    raise ValueError("a modular extendable asset needs a "
+                                     "finite p_nom_max, the number of its "
+                                     "modules being bounded by it")
+                return -float(np.floor(most / module_size(p_nom_mod) + 1e-9))
+            return first_scalar(p_nom_max)
         d["MaxCapacityDesign"] = _max_cap_design
         
     # "MinCapacityDesign
     if "MinCapacityDesign" not in d:
-        def _min_cap_design(p_nom, p_nom_extendable, p_nom_min):
-            p_nom_min_safe = p_nom_min
-            return (first_scalar(p_nom_min_safe)
-                    if bool(first_scalar(p_nom_extendable))
-                    else first_scalar(p_nom))
+        def _min_cap_design(p_nom, p_nom_extendable, p_nom_min, p_nom_mod):
+            if not bool(first_scalar(p_nom_extendable)):
+                return first_scalar(p_nom)
+            if is_modular(p_nom_mod):
+                return float(np.ceil(first_scalar(p_nom_min)
+                                     / module_size(p_nom_mod) - 1e-9))
+            return first_scalar(p_nom_min)
         d["MinCapacityDesign"] = _min_cap_design
 
     # --- BatteryUnitBlock_store ---
@@ -1679,10 +2125,33 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
         b["ConverterMinCapacityDesign"] = _conv_min_cap_design
 
     
+    # --- BatteryUnitBlock of a StorageUnit ---
+    # p_nom sizes power and energy together, and so does x_battery, which
+    # multiplies the data per MW; with no design and no ConverterMaxPower of
+    # its own the converter follows it
+    su = BatteryUnitBlock_parameters
+    if su is not None:
+        if "BatteryInvestmentCost" not in su:
+            su["BatteryInvestmentCost"] = lambda capital_cost, p_nom_extendable: first_scalar(capital_cost) if bool(first_scalar(p_nom_extendable)) else 0.0
+
+        if "BatteryMaxCapacityDesign" not in su:
+            # an uncapped p_nom_max stays infinite, see _max_cap_design above
+            su["BatteryMaxCapacityDesign"] = lambda p_nom, p_nom_extendable, p_nom_max: first_scalar(p_nom_max) if bool(first_scalar(p_nom_extendable)) else first_scalar(p_nom)
+
+        if "BatteryMinCapacityDesign" not in su:
+            su["BatteryMinCapacityDesign"] = lambda p_nom, p_nom_extendable, p_nom_min: first_scalar(p_nom_min) if bool(first_scalar(p_nom_extendable)) else first_scalar(p_nom)
+
     # --- IntermittentUnitBlock_inverse ---
     IntermittentUnitBlock_inverse["p_nom"] = (
-        lambda intermittentdesign: intermittentdesign
+        lambda intermittentdesign, p_nom_mod:
+            intermittentdesign * module_size(p_nom_mod)
     )
+
+    # --- BatteryUnitBlock_StorageUnit_inverse ---
+    if BatteryUnitBlock_StorageUnit_inverse is not None:
+        BatteryUnitBlock_StorageUnit_inverse["p_nom"] = (
+            lambda batterydesign: batterydesign
+        )
 
     # --- BatteryUnitBlock_inverse ---
     BatteryUnitBlock_inverse["e_nom"] = (
@@ -1975,7 +2444,27 @@ def resolve_param_value(
         arg = dense[[component]]
     elif param in components_df.index or param in components_df.columns:
         if param in ['marginal_cost', 'marginal_cost_quadratic', 'stand_by_cost']:
-            arg = components_df.get(param) * n.snapshot_weightings['objective'].iloc[0]
+            # a datum with no time dimension, such as the cost of the flow on
+            # a line, holds one value for the whole horizon: a cost that
+            # varies over the snapshots, or snapshot weightings that do,
+            # would be written as the cost of the first snapshot
+            names = components_df.index if isinstance(
+                components_df, pd.DataFrame) else [components_df.name]
+            series = components_t.get(param) if hasattr(
+                components_t, 'get') else None
+            if series is not None and not series.empty and \
+                    series.columns.intersection(names).size:
+                raise ValueError(
+                    f"{components_type} {param} varies over the snapshots, "
+                    f"while {key} has one value for the whole horizon")
+            weighting = n.snapshot_weightings['objective'].loc[n.snapshots]
+            cost = pd.Series(components_df.get(param)).fillna(0)
+            if weighting.nunique() > 1 and (cost != 0).any():
+                raise ValueError(
+                    f"{components_type} {param} is not 0 while the snapshot "
+                    f"weightings are not uniform, and {key} has one value "
+                    "for the whole horizon")
+            arg = components_df.get(param) * weighting.iloc[0]
         else:
             arg = components_df.get(param)
     elif param in components_t.keys():
@@ -2215,6 +2704,561 @@ def nuclear_rule_variables(rules, thermal_variables, snapshot_hours):
             float(rules["down_modulation_cost"]), "float")
 
     return variables, dimensions
+
+
+def conversion_links(links):
+    """
+    The committable links among `links`, each of which becomes a
+    ConversionUnitBlock instead of a (hyper)arc of the network.
+
+    Parameters
+    ----------
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines of the
+        DCNetworkBlock (the merged links, if any merge is done).
+
+    Returns
+    -------
+    pd.Index
+        The names of the committable links.
+    """
+    if links.empty or "committable" not in links.columns:
+        return links.index[:0]
+    return links.index[links["committable"].fillna(False).astype(bool)]
+
+
+def conversion_unit_ports(n, name):
+    """
+    The output ports of the link `name`, as triples (k, bus, efficiency
+    column): each bus1, bus2, ... that is given and whose efficiency is not
+    zero at every snapshot.
+    """
+    link = n.links.loc[name]
+    ports = []
+    k = 1
+    while f"bus{k}" in n.links.columns:
+        bus = link[f"bus{k}"]
+        column = "efficiency" if k == 1 else f"efficiency{k}"
+        if isinstance(bus, str) and bus.strip():
+            efficiency = n.get_switchable_as_dense("Link", column)[name] \
+                if column in n.links.columns else pd.Series(0.0)
+            if np.any(efficiency.to_numpy(dtype=float) != 0.0):
+                ports.append((k, bus, column))
+        k += 1
+    return ports
+
+
+# the carriers of the buses of PyPSA that are the electricity, the carrier 0
+# of the UCBlock, and the names in the UCBlock of those that UnitBlock knows
+# by another one; any other carrier keeps its name
+ELECTRIC_BUS_CARRIERS = ("AC", "DC", "")
+CARRIER_NAMES = {"H2": "hydrogen"}
+
+
+def bus_carriers(n):
+    """
+    The carriers of the UCBlock that the buses of `n` give and the node of
+    each bus in its carrier.
+
+    The buses whose carrier is in ELECTRIC_BUS_CARRIERS (or not given) are
+    the nodes of the electricity, the carrier 0; each other carrier of the
+    buses is a carrier of the UCBlock, in the order of their names, named as
+    CARRIER_NAMES says. The nodes of a carrier are its buses in the order of
+    n.buses.
+
+    Returns
+    -------
+    tuple
+        The names of the carriers, starting with "electricity", and the
+        pandas.Series of the pairs (carrier, node) indexed by the buses.
+    """
+    kind = n.buses.carrier.fillna("").astype(str)
+    electric = kind.isin(ELECTRIC_BUS_CARRIERS)
+    if not electric.any():
+        raise ValueError(
+            "bus_carriers: no electric bus, while the carrier 0 of the "
+            "UCBlock is the electricity.")
+    others = sorted(set(kind[~electric]))
+    carriers = ["electricity"] + [CARRIER_NAMES.get(c, c) for c in others]
+    index = pd.Series(0, index=n.buses.index)
+    for c, name in enumerate(others, start=1):
+        index[kind == name] = c
+    node = index.groupby(index).cumcount()
+    return carriers, pd.Series(list(zip(index, node)), index=n.buses.index)
+
+
+def link_ports(n, name):
+    """
+    The ports of the link `name` as pairs (bus, efficiency), the efficiency
+    being a numpy.ndarray over the snapshots: bus0 with -1, as the link draws
+    p0 from it, and then each output of conversion_unit_ports().
+    """
+    T = len(n.snapshots)
+    ports = [(n.links.at[name, "bus0"], -np.ones(T))]
+    for _, bus, column in conversion_unit_ports(n, name):
+        ports.append((bus, n.get_switchable_as_dense("Link", column)[name]
+                      .to_numpy(dtype=float)))
+    return ports
+
+
+def carrier_unit_links(n, links, bus_node):
+    """
+    The links among `links` whose ports are on more than one carrier, each of
+    which is a unit with an output on the carrier of each port instead of a
+    (hyper)arc of the network, as a link joins the nodes of one carrier only.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network.
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines.
+    bus_node : pd.Series
+        The pair (carrier, node) of each bus [see bus_carriers()].
+
+    Returns
+    -------
+    pd.Index
+        The names of the links that are units.
+    """
+    names = []
+    for name in links.index:
+        carriers = [bus_node[bus][0] for bus, _ in link_ports(n, name)]
+        if len(set(carriers)) == 1:
+            continue
+        if len(set(carriers)) != len(carriers):
+            raise ValueError(
+                f"carrier_unit_links: {name} has two ports on the same "
+                "carrier, while a generator has one node on each carrier "
+                "(with enable_conversion_units it is a ConversionUnitBlock, "
+                "one generator per port).")
+        delays = [c for c in links.columns if c.startswith("delay")]
+        if any(float(links.at[name, c] or 0) != 0 for c in delays):
+            raise ValueError(
+                f"carrier_unit_links: {name} delays its output, which the "
+                "unit it becomes cannot do (with enable_conversion_units it "
+                "is a ConversionUnitBlock, which can).")
+        names.append(name)
+    return pd.Index(names, dtype=links.index.dtype)
+
+
+def conversion_carrier_links(n, links, bus_node):
+    """
+    The links among `links` whose ports are on more than one carrier and that
+    a unit with one generator cannot express [see carrier_unit_links()],
+    because two of their ports are on the same carrier (say, a pump that
+    draws water and electricity and delivers water, or a compressor of a gas
+    pipeline) or because they delay an output; each of them becomes a
+    ConversionUnitBlock, whose generators are its ports, each on its own
+    node of its carrier [see conversion_unit_variables()].
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network.
+    links : pd.DataFrame
+        The static data of the links that would otherwise be lines.
+    bus_node : pd.Series
+        The pair (carrier, node) of each bus [see bus_carriers()].
+
+    Returns
+    -------
+    pd.Index
+        The names of the links that are ConversionUnitBlocks.
+    """
+    names = []
+    delays = [c for c in links.columns if c.startswith("delay")]
+    for name in links.index:
+        carriers = [bus_node[bus][0] for bus, _ in link_ports(n, name)]
+        if len(set(carriers)) == 1:
+            continue
+        if len(set(carriers)) != len(carriers) or any(
+                float(links.at[name, c] or 0) != 0 for c in delays):
+            names.append(name)
+    return pd.Index(names, dtype=links.index.dtype)
+
+
+def conversion_unit_variables(n, name, scaled=False):
+    """
+    Computes the ConversionUnitBlock of a link of PyPSA, committable or not.
+
+    The link has one commitment and a power p0 drawn from bus0, and it injects
+    efficiency_k * p0 into each bus k >= 1. The unit has one generator per
+    port, the first on bus0 with power - p0 (an input, of nonpositive power if
+    p_min_pu >= 0) and then one per output bus k, coupled by the equality rows
+
+        efficiency_k * p_0 + p_k = 0 ,
+
+    so that the region of the unit when it is on is the segment of PyPSA. The
+    bounds of the input are those of - p0, those of each output follow from
+    the rows. The costs of PyPSA are on p0, hence on the input generator with
+    the opposite sign, weighted by the snapshot weighting as the energy is;
+    the costs of a start-up and of a shut-down are paid once.
+
+    A link that is not committable (one between carriers that a unit with
+    one generator cannot express, see conversion_carrier_links()) is a unit
+    on throughout the horizon, as PyPSA holds its p_min_pu at every
+    snapshot: it is on before the horizon for one instant with a minimum up
+    time of T + 1, and it has none of the costs of the commitment (start-up,
+    shut-down, stand-by), which PyPSA only charges to a committable link.
+
+    An efficiency that changes over time gives an OperatingMatrix indexed
+    over the instants. An output k with a delay (delay, delay2, ... in the
+    units of the generator weighting of the snapshots, which must be uniform
+    and divide it) delivers at t + d_k what the unit produces at t, the
+    horizon wrapping around if cyclic_delay (cyclic_delay2, ...) is True; the
+    rows are written at the instant of the operation, while PyPSA evaluates
+    the efficiency at the instant of the delivery, hence the row of t has
+    efficiency_k( t + d_k ) (modulo the horizon if the delay is cyclic). A
+    delivery that is not cyclic gives nothing before d_k, as in PyPSA, whose
+    output has no source there.
+
+    The ramps of PyPSA limit the change of p0, i.e., of the combination - p_0
+    (the row of "RampMatrix"). PyPSA writes, for a committable link,
+
+        p0_t - p0_t-1 <= ru_t u_t-1 + rsu ( u_t - u_t-1 )
+        p0_t - p0_t-1 >= - rd_t u_t - rsd ( u_t-1 - u_t )
+
+    which, besides the ramps ru_t and rd_t of a unit on at t - 1 and at t,
+    give the start-up range rsd - rd_t <= p0_t <= rsu and the shut-down range
+    rsu - ru_t <= p0_t-1 <= rsd; they are written as the start-up and
+    shut-down limits of the input generator, whose power is - p0. Each row
+    exists at the snapshots where PyPSA writes it: where the ramp or the
+    start-up (shut-down) limit is given, and at the first snapshot only if the
+    unit is off before the horizon or `p_init` is given, with no row there
+    otherwise, which is what a ramp and limits as wide as the bounds give.
+
+    A modular link (p_nom_mod > 0) is a unit of p_nom / p_nom_mod "Modules"
+    whose data are those of one module, PyPSA counting its commitment in
+    modules; on before the horizon, it has one module on, as the initial
+    status of PyPSA is 1. An extendable link of the UCBlock form has a
+    design: the number of modules built if it is modular (MaxCapacityDesign
+    = - p_nom_max / p_nom_mod), its capacity otherwise (MaxCapacityDesign =
+    p_nom_max, every datum, ramps and start-up and shut-down limits
+    included, per MW of p_nom, the rows with the commitment in the big-M
+    form of PyPSA), with InvestmentCost the capital cost of a module,
+    respectively of a MW. It may be on before the horizon: then one module
+    is on, or the capacity covers p_init (which PyPSA does not require). In
+    the InvestmentBlock form (`scaled`), an extendable link is instead the
+    unit of one MW of p_nom, or of one module if it is modular, which the
+    design of the InvestmentBlock scales (see UnitBlock::scale()), the
+    number of modules being an integer design there: its powers and ramps
+    are those of p_nom = 1 (of a module), and the costs of being on, of a
+    start-up and of a shut-down are per MW of p_nom (divided by p_nom, if it
+    is not 0; per module), as for a ThermalUnitBlock.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network.
+    name : str
+        The name of the committable link.
+    scaled : bool, default False
+        True if an extendable link is to be written as a unit scaled by its
+        design, i.e., in the InvestmentBlock form.
+
+    Returns
+    -------
+    variables : dict
+        Variable name -> {"value", "type", "size"}.
+    dimensions : dict
+        The dimensions of the unit ("NumberGenerators", "NumberOperatingRows",
+        "NumberRampRows").
+    buses : list of str
+        The bus of each generator, in the order of the generators.
+
+    Raises
+    ------
+    ValueError
+        If the link cannot be expressed by a ConversionUnitBlock: a delay
+        that is not a whole number of snapshots, modules whose number is not
+        an integer or that ramp, a continuous design with no p_nom_max, or
+        an extendable link on before the horizon at p_init in the
+        InvestmentBlock form.
+    """
+    link = n.links.loc[name]
+    sns = n.snapshots
+    T = len(sns)
+
+    def static(attr, default=np.nan):
+        value = link.get(attr, default)
+        return default if value is None or pd.isna(value) else float(value)
+
+    extendable = bool(link["p_nom_extendable"])
+    module = static("p_nom_mod", 0.0)
+    design = extendable and not scaled
+    committable = bool(link.get("committable", False))
+    if module > 0 and not committable:
+        raise ValueError(
+            f"{name} is a modular link that is not committable, whose "
+            "modules PyPSA does not commit, while a ConversionUnitBlock "
+            "commits them."
+        )
+
+    # the delays of the outputs, in instants
+    ports = conversion_unit_ports(n, name)
+    weights = n.snapshot_weightings.loc[sns, "generators"].to_numpy(dtype=float)
+    delays, cyclic = [0], [False]
+    for k, _, _ in ports:
+        suffix = "" if k == 1 else str(k)
+        delay = static(f"delay{suffix}", 0.0)
+        if delay and not np.allclose(weights, weights[0]):
+            raise ValueError(
+                f"{name} delivers with a delay and the snapshots have "
+                "different weightings, which a delay in instants cannot "
+                "express."
+            )
+        instants = delay / weights[0] if delay else 0.0
+        if abs(instants - round(instants)) > 1e-9:
+            raise ValueError(
+                f"{name} delivers with a delay of {delay}, which is not a "
+                "whole number of snapshots."
+            )
+        delays.append(int(round(instants)))
+        cyclic.append(bool(link.get(f"cyclic_delay{suffix}", True)))
+
+    G = len(ports) + 1
+    buses = [link["bus0"]] + [bus for _, bus, _ in ports]
+
+    # the efficiency of each output at the instant of its delivery, -1 for
+    # the input
+    efficiency = np.empty((T, G))
+    efficiency[:, 0] = -1.0
+    for g, (_, _, column) in enumerate(ports, start=1):
+        series = n.get_switchable_as_dense("Link", column)[name].to_numpy(
+            dtype=float)
+        arrival = np.arange(T) + delays[g]
+        arrival = arrival % T if cyclic[g] else np.minimum(arrival, T - 1)
+        efficiency[:, g] = series[arrival]
+    varying = not np.allclose(efficiency, efficiency[0])
+
+    def dense(attr, weights=False):
+        return get_param_as_dense(n, "Link", attr, weights)[name].to_numpy(
+            dtype=float)
+
+    def per_instant(values):
+        return {"value": np.asarray(values, dtype=float), "type": "float",
+                "size": ("TimeHorizon",)}
+
+    def per_generator(values):
+        return {"value": np.asarray(values, dtype=float), "type": "float",
+                "size": ("TimeHorizon", "NumberGenerators")}
+
+    def scalar(value, var_type):
+        return {"value": value, "type": var_type, "size": ()}
+
+    # the unit of the data: a module, a MW of an extendable link, or the link;
+    # in the InvestmentBlock form the design of an extendable modular link is
+    # its number of modules, which scales the unit of one module
+    if module > 0 and extendable and scaled:
+        modules = 1
+        p_nom = module
+        per_mw = 1.0
+    elif module > 0:
+        modules = float(link["p_nom_max"] if design else link["p_nom"]) / module
+        if not np.isfinite(modules) or abs(modules - round(modules)) > 1e-9 \
+                or round(modules) < 1:
+            raise ValueError(
+                f"{name} has {'p_nom_max' if design else 'p_nom'} that is "
+                "not a whole number of modules (p_nom_mod)."
+            )
+        modules = int(round(modules))
+        p_nom = module
+        per_mw = 1.0
+    else:
+        modules = 1
+        p_nom = 1.0 if extendable else float(link["p_nom"])
+        per_mw = (float(link["p_nom"]) or 1.0) if extendable and scaled \
+            else 1.0
+
+    p0_min = dense("p_min_pu") * p_nom
+    p0_max = dense("p_max_pu") * p_nom
+
+    # the power of the generator g is efficiency[ t , g ] * p0: its bounds
+    # are those of p0, swapped where the factor is < 0
+    low = p0_min[:, None] * efficiency
+    high = p0_max[:, None] * efficiency
+    min_power = np.minimum(low, high)
+    max_power = np.maximum(low, high)
+
+    variables = {
+        "MinPower": per_generator(min_power),
+        "MaxPower": per_generator(max_power),
+    }
+    dimensions = {"NumberGenerators": G}
+
+    # the operating rows efficiency_k p_0 + p_k = 0
+    if G > 1:
+        matrix = np.zeros((T, G - 1, G))
+        matrix[:, :, 0] = efficiency[:, 1:]
+        matrix[:, np.arange(G - 1), np.arange(1, G)] = 1.0
+        dimensions["NumberOperatingRows"] = G - 1
+        variables["OperatingMatrix"] = (
+            {"value": matrix, "type": "float",
+             "size": ("TimeHorizon", "NumberOperatingRows",
+                      "NumberGenerators")} if varying else
+            {"value": matrix[0], "type": "float",
+             "size": ("NumberOperatingRows", "NumberGenerators")})
+        for key in ("OperatingLHS", "OperatingRHS"):
+            variables[key] = {
+                "value": np.zeros((T, G - 1)), "type": "float",
+                "size": ("TimeHorizon", "NumberOperatingRows")}
+
+    if any(delays):
+        variables["Delay"] = {"value": np.array(delays), "type": "uint",
+                              "size": ("NumberGenerators",)}
+        variables["CyclicDelay"] = {"value": np.array(cyclic, dtype=int),
+                                    "type": "int",
+                                    "size": ("NumberGenerators",)}
+
+    # the costs, on p0 and so on - p_0
+    linear = np.zeros((T, G))
+    linear[:, 0] = - dense("marginal_cost", weights=True)
+    if np.any(linear):
+        variables["LinearTerm"] = per_generator(linear)
+    quadratic = np.zeros((T, G))
+    quadratic[:, 0] = dense("marginal_cost_quadratic", weights=True)
+    if np.any(quadratic):
+        variables["QuadTerm"] = per_generator(quadratic)
+    if committable:
+        stand_by = dense("stand_by_cost", weights=True) / per_mw
+        if np.any(stand_by):
+            variables["ConstTerm"] = per_instant(stand_by)
+        for key, attr in (("StartUpCost", "start_up_cost"),
+                          ("ShutDownCost", "shut_down_cost")):
+            if static(attr, 0.0):
+                variables[key] = scalar(static(attr) / per_mw, "float")
+
+    # the commitment before the horizon and the minimum up and down times
+    # a unit off before the horizon for down_time_before snapshots; PyPSA
+    # binds nothing if it is 0, i.e., the unit is off since long enough (a
+    # minimum down time, which the unit takes as at least 1)
+    up_before = int(static("up_time_before", 0))
+    down_before = int(static("down_time_before", 0))
+    min_down = max(int(static("min_down_time", 0)), 1)
+    init_up_down = up_before if up_before > 0 else \
+        - (down_before if down_before > 0 else min_down)
+    min_up = int(static("min_up_time", 0))
+    if not committable:
+        # on throughout: on before the horizon, and not yet allowed to stop
+        init_up_down, min_up, min_down = 1, T + 1, 0
+    variables["InitUpDownTime"] = scalar(init_up_down, "int")
+    variables["MinUpTime"] = scalar(min_up, "uint")
+    variables["MinDownTime"] = scalar(
+        int(static("min_down_time", 0)) if committable else 0, "uint")
+
+    if modules > 1 or (module > 0 and design):
+        variables["Modules"] = scalar(modules, "uint")
+        if init_up_down > 0:
+            variables["InitialCommitment"] = scalar(1, "uint")
+
+    if design:
+        if module > 0:
+            variables["InvestmentCost"] = scalar(
+                static("capital_cost", 0.0) * module, "float")
+            variables["MinCapacityDesign"] = scalar(
+                static("p_nom_min", 0.0) / module, "float")
+            variables["MaxCapacityDesign"] = scalar(-float(modules), "float")
+        else:
+            if not np.isfinite(static("p_nom_max", np.inf)):
+                raise ValueError(
+                    f"{name} is an extendable committable link with no "
+                    "p_nom_max, which the big-M rows of its design need."
+                )
+            variables["InvestmentCost"] = scalar(
+                static("capital_cost", 0.0), "float")
+            variables["MinCapacityDesign"] = scalar(
+                static("p_nom_min", 0.0), "float")
+            variables["MaxCapacityDesign"] = scalar(
+                static("p_nom_max"), "float")
+
+    # the power before the horizon, of the modules on then; that of a unit
+    # with a continuous design is in MW, and its capacity covers it
+    p_init = static("p_init")
+    if init_up_down > 0 and extendable and scaled and not np.isnan(p_init):
+        raise ValueError(
+            f"{name} is an extendable committable link on before the horizon "
+            "at p_init, which the unit of one MW of the InvestmentBlock form "
+            "cannot hold, its design being unknown; use the UCBlock form "
+            "(capacity_expansion_ucblock=True)."
+        )
+    if init_up_down > 0:
+        p0_before = p0_max[0] if np.isnan(p_init) else p_init
+        if design and module == 0:
+            p0_before = 0.0 if np.isnan(p_init) else p_init
+        variables["InitialPower"] = {
+            "value": efficiency[0] * p0_before, "type": "float",
+            "size": ("NumberGenerators",)}
+
+    # the ramps and the start-up and shut-down ranges of p0
+    ru = dense("ramp_limit_up")
+    rd = dense("ramp_limit_down")
+    rsu = static("ramp_limit_start_up")
+    rsd = static("ramp_limit_shut_down")
+    up_rows = ~(np.isnan(ru) & np.isnan(rsu))
+    down_rows = ~(np.isnan(rd) & np.isnan(rsd))
+    if init_up_down > 0 and np.isnan(p_init):
+        up_rows[0] = down_rows[0] = False
+
+    if not (up_rows.any() or down_rows.any()):
+        return variables, dimensions, buses
+
+    if module > 0:
+        raise ValueError(
+            f"{name} is a modular committable link with ramps, which PyPSA "
+            "writes on p_nom times the number of modules on, and a "
+            "ConversionUnitBlock on one module times it."
+        )
+    ru = np.nan_to_num(ru, nan=1.0) * p_nom
+    rd = np.nan_to_num(rd, nan=1.0) * p_nom
+    rsu = (1.0 if np.isnan(rsu) else rsu) * p_nom
+    rsd = (1.0 if np.isnan(rsd) else rsd) * p_nom
+
+    # a change of p0 never exceeds this, so a ramp this large binds nothing
+    free = 2.0 * float(np.max(np.abs(np.concatenate([p0_min, p0_max]))))
+
+    dimensions["NumberRampRows"] = 1
+    ramp_matrix = np.zeros((1, G))
+    ramp_matrix[0, 0] = -1.0
+    variables["RampMatrix"] = {"value": ramp_matrix, "type": "float",
+                               "size": ("NumberRampRows", "NumberGenerators")}
+    for key, ramp, rows in (("DeltaRampUp", ru, up_rows),
+                            ("DeltaRampDown", rd, down_rows)):
+        variables[key] = {"value": np.where(rows, ramp, free)[:, None],
+                          "type": "float",
+                          "size": ("TimeHorizon", "NumberRampRows")}
+
+    # the ranges of p0 at a start-up at t and before a shut-down at t, as
+    # wide as the bounds (of t, and of t - 1 for the shut-down) where PyPSA
+    # writes no row
+    p0_min_before = np.concatenate([[p0_min[0]], p0_min[:-1]])
+    p0_max_before = np.concatenate([[p0_max[0]], p0_max[:-1]])
+    su_low = np.where(down_rows, rsd - rd, p0_min)
+    su_high = np.where(up_rows, rsu, p0_max)
+    sd_low = np.where(up_rows, rsu - ru, p0_min_before)
+    sd_high = np.where(down_rows, rsd, p0_max_before)
+
+    # a range that is empty forbids the switch at t: it is moved above the
+    # bounds of p0, which leaves no power for the unit to switch with
+    for low, high, bound in ((su_low, su_high, p0_max),
+                             (sd_low, sd_high, p0_max_before)):
+        empty = low > high
+        low[empty] = high[empty] = bound[empty] + free
+
+    # the input generator has power - p0, hence the opposite limits; the
+    # outputs follow it through the operating rows, and get limits beyond
+    # their bounds, which bind nothing
+    for key, values, unbound in (("StartUpLimit", - su_low, max_power + free),
+                                 ("StartUpLowerLimit", - su_high,
+                                  min_power - free),
+                                 ("ShutDownLimit", - sd_low, max_power + free),
+                                 ("ShutDownLowerLimit", - sd_high,
+                                  min_power - free)):
+        limit = unbound.copy()
+        limit[:, 0] = values
+        variables[key] = per_generator(limit)
+
+    return variables, dimensions, buses
 
 
 def determine_size_type(
@@ -2475,11 +3519,14 @@ def rename_links_to_lines(networkblock: dict) -> None:
 
 
 
-def _has_dynamic_link_attr(n, attr: str) -> bool:
+def _has_dynamic_link_attr(n, attr: str, links=None) -> bool:
     """
-    Return True if n.links_t.<attr> exists and contains at least one non-NaN value.
+    Return True if n.links_t.<attr> exists and contains at least one non-NaN
+    value, for one of `links` if they are given.
     """
     df = getattr(n.links_t, attr, None)
+    if df is not None and links is not None:
+        df = df[df.columns.intersection(links)]
     return df is not None and not df.empty and df.notna().to_numpy().any()
 
 
@@ -2496,7 +3543,7 @@ def _dense_from_static(value, time_horizon: int):
 
 
 
-def apply_time_dependent_link_data_to_lines(n, networkblock):
+def apply_time_dependent_link_data_to_lines(n, networkblock, links=None):
     """
     Overwrite time-dependent Link data in the already merged/renamed Lines block.
 
@@ -2511,25 +3558,31 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
 
     Efficiency values are taken from networkblock["efficiencies"], which must
     have been saved during multilink explosion.
+
+    The links of the network are `links`, all those of n if not given (a
+    committable link that is a ConversionUnitBlock is not a line).
     """
     if "Lines" not in networkblock:
         return
+
+    if links is None:
+        links = n.links.index
 
     variables = networkblock["Lines"]["variables"]
     time_horizon = len(n.snapshots)
     link_offset = len(n.lines)
 
-    p_nom = n.links["p_nom"].astype(float)
-    p_nom_extendable = n.links["p_nom_extendable"].fillna(False).astype(bool)
+    p_nom = n.links.loc[links, "p_nom"].astype(float)
+    p_nom_extendable = n.links.loc[links, "p_nom_extendable"].fillna(False).astype(bool)
     
-    if _has_dynamic_link_attr(n, "efficiency"):
+    if _has_dynamic_link_attr(n, "efficiency", links):
         variables['Efficiency']['size'] = ("NumberBranches", "NumberInstants")
 
     for attr, smspp_name in (
         ("p_max_pu", "MaxPowerFlow"),
         ("p_min_pu", "MinPowerFlow"),
     ):
-        if not _has_dynamic_link_attr(n, attr):
+        if not _has_dynamic_link_attr(n, attr, links):
             continue
 
         pu = get_param_as_dense(
@@ -2537,7 +3590,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
             "Link",
             attr,
             weights=False,
-        )
+        )[links]
 
         values = pu.copy()
         fixed = ~p_nom_extendable
@@ -2554,7 +3607,7 @@ def apply_time_dependent_link_data_to_lines(n, networkblock):
             time_horizon=time_horizon,
         )
 
-        old[link_offset:link_offset + len(n.links), :] = link_values
+        old[link_offset:link_offset + len(links), :] = link_values
 
         variables[smspp_name]["value"] = old
         variables[smspp_name]["size"] = ("NumberLines", "NumberInstants")

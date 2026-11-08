@@ -80,11 +80,16 @@ def clean_p_min_pu(n):
     return n
 
 def clean_ciclicity_storage(n):
-    n.storage_units.cyclic_state_of_charge = False
-    n.storage_units.cyclic_state_of_charge_per_period = False
-    n.storage_units.state_of_charge_initial = n.storage_units.max_hours * n.storage_units.p_nom
+    # a storage unit whose capacity is fixed starts full and is not cyclic;
+    # one whose capacity is decided stays cyclic, since its full energy,
+    # max_hours * p_nom, is not known before the capacity is
+    fixed = ~n.storage_units.p_nom_extendable.astype(bool)
+    n.storage_units.loc[fixed, "cyclic_state_of_charge"] = False
+    n.storage_units.loc[fixed, "cyclic_state_of_charge_per_period"] = False
+    n.storage_units.loc[fixed, "state_of_charge_initial"] = (
+        n.storage_units.max_hours * n.storage_units.p_nom)[fixed]
     n.stores.e_cyclic = False
-    n.stores.e_cycic_per_period = False
+    n.stores.e_cyclic_per_period = False
     return n
 
 def clean_marginal_cost_intermittent(n):
@@ -1413,7 +1418,7 @@ if __name__ == '__main__':
     network = clean_e_sum(network)
     
     network = one_bus_network(network)
-    network.optimize(solver_name='gurobi')
+    network.optimize(solver_name='gurobi', include_objective_constant=True)
 
 
 
