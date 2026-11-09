@@ -177,3 +177,6 @@ docs/examples/output
 
 # VS Code
 .vscode/*
+
+# PyCharm
+.idea/
