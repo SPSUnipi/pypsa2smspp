@@ -1,0 +1,792 @@
+```
+python prep_rete.py
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pypsa/network/io.py:2079: FutureWarning: pandas infers the `str` dtype for string data since its version 3.0. PyPSA still converts it back to numpy object dtype on import, but will keep it from PyPSA 2.0 on. Set `pypsa.options.api.legacy_string_dtype` explicitly to suppress this warning.
+  new_static = _coerce_string_dtypes(new_static)
+/home/bia_medici/tesi/pypsa2smspp/prep_rete.py:9: FutureWarning: The default value of `include_objective_constant` will change from True to False in version 2.0. Set `include_objective_constant` explicitly to suppress this warning. Using False improves LP numerical conditioning by not including the objective constant as a variable.
+  d.optimize(solver_name="highs")
+Running HiGHS 1.15.1 (git hash: 04024d7): Copyright (c) 2026 under MIT licence terms
+Includes third-party software components, see THIRD_PARTY_NOTICES.md for full details
+LP linopy-problem-vti0zlmc has 16200 rows; 8100 cols; 29393 nonzeros
+Coefficient ranges:
+  Matrix  [2e-02, 5e+00]
+  Cost    [1e-02, 1e+04]
+  Bound   [3e+01, 9e+02]
+  RHS     [3e+00, 4e+05]
+Presolving model
+692 rows, 2434 cols, 3777 nonzeros 0s
+551 rows, 2074 cols, 3197 nonzeros 0s
+Dependent equations search running on 551 equations with time limit of 1000.00s
+Dependent equations search removed 0 rows and 0 nonzeros in 0.00s (limit = 1000.00s)
+551 rows, 2074 cols, 3197 nonzeros 0s
+Presolve reductions: rows 551(-15649); columns 2074(-6026); nonzeros 3197(-26196)
+Solving the presolved LP
+Using dual simplex solver
+  Iteration        Objective     Infeasibilities num(sum)
+          0     0.0000000000e+00 Ph1: 0(0) 0.1s
+        777     5.2481780459e+08 Pr: 0(0); Du: 0(1.36424e-12) 0.1s
+
+Performed postsolve
+Solving the original LP from the solution after postsolve
+
+Model name          : linopy-problem-vti0zlmc
+Model status        : Optimal
+Simplex   iterations: 777
+Objective value     :  5.2481780459e+08
+P-D objective error :  2.5553715870e-15
+HiGHS run time      :          0.12
+espansione, obiettivo 524817804.58523226
+/home/bia_medici/tesi/pypsa2smspp/prep_rete.py:43: FutureWarning: The default value of `include_objective_constant` will change from True to False in version 2.0. Set `include_objective_constant` explicitly to suppress this warning. Using False improves LP numerical conditioning by not including the objective constant as a variable.
+  d.optimize(solver_name="highs")
+Running HiGHS 1.15.1 (git hash: 04024d7): Copyright (c) 2026 under MIT licence terms
+Includes third-party software components, see THIRD_PARTY_NOTICES.md for full details
+LP linopy-problem-duzs_2c2 has 16200 rows; 8100 cols; 29393 nonzeros
+Coefficient ranges:
+  Matrix  [2e-02, 5e+00]
+  Cost    [1e-02, 1e+04]
+  Bound   [3e+01, 9e+02]
+  RHS     [3e+00, 4e+05]
+Presolving model
+692 rows, 2434 cols, 3777 nonzeros 0s
+551 rows, 2074 cols, 3197 nonzeros 0s
+Dependent equations search running on 551 equations with time limit of 1000.00s
+Dependent equations search removed 0 rows and 0 nonzeros in 0.00s (limit = 1000.00s)
+551 rows, 2074 cols, 3197 nonzeros 0s
+Presolve reductions: rows 551(-15649); columns 2074(-6026); nonzeros 3197(-26196)
+Solving the presolved LP
+Using dual simplex solver
+  Iteration        Objective     Infeasibilities num(sum)
+          0     0.0000000000e+00 Ph1: 0(0) 0.1s
+        777     5.2481780459e+08 Pr: 0(0); Du: 0(1.36424e-12) 0.1s
+
+Performed postsolve
+Solving the original LP from the solution after postsolve
+
+Model name          : linopy-problem-duzs_2c2
+Model status        : Optimal
+Simplex   iterations: 777
+Objective value     :  5.2481780459e+08
+P-D objective error :  2.5553715870e-15
+HiGHS run time      :          0.12
+operativa, scenario 1: 524817804.58523226
+              p_nom  max_hours  state_of_charge_initial
+name
+IT0 0 PHS    5553.9  64.638203            179497.057195
+IT1 0 PHS    2018.0  16.050421             16194.874324
+IT0 0 hydro  4064.8  12.000000             24388.800000
+IT1 0 hydro   130.0  12.000000               780.000000
+name
+IT0 0 hydro    83965.644654
+IT1 0 hydro     2685.380291
+dtype: float64
+```
+
+#######################################################################
+#######################################################################
+#######################################################################
+
+```
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp$ python build_stoch.py
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pypsa/network/io.py:2079: FutureWarning: pandas infers the `str` dtype for string data since its version 3.0. PyPSA still converts it back to numpy object dtype on import, but will keep it from PyPSA 2.0 on. Set `pypsa.options.api.legacy_string_dtype` explicitly to suppress this warning.
+  new_static = _coerce_string_dtypes(new_static)
+[SDDP] Generando Block_0.nc4 per stage_0 (25 snapshot)
+[SDDP] Generando Block_1.nc4 per stage_1 (25 snapshot)
+[SDDP] Generando Block_2.nc4 per stage_2 (25 snapshot)
+[SDDP] Generando Block_3.nc4 per stage_3 (25 snapshot)
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 0 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_0.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 1 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_1.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 2 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_2.nc4 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified id with value 3 treated as attribute.
+  warnings.warn(
+/home/bia_medici/miniconda3/envs/pypsa2smspp/lib/python3.12/site-packages/pysmspp/block.py:188: UserWarning: Non-specified filename with value Block_3.nc4 treated as attribute.
+  warnings.warn(
+['ACBCfg.txt', 'BCfg.txt', 'BUBCfg.txt', 'Block_0.nc4', 'Block_1.nc4', 'Block_2.nc4', 'Block_3.nc4', 'DCNBCfg.txt', 'PFBCfg.txt', 'SDDPBCfg.txt', 'SDDPBlock_inflow.nc4', 'SDDPBlock_traj.nc4', 'SDDPSCfg-100.txt', 'SDDPSCfg-greedy.txt', 'SDDPSCfg.txt', 'SUBCfg.txt', 'TUBCfg-OVC.txt', 'UCBSCfg.txt']
+```
+
+#######################################################################
+#######################################################################
+#######################################################################
+
+```
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp$ python traiettorie.py
+27 traiettorie
+```
+
+#######################################################################
+########################## SDDP_SOLVER ################################
+#######################################################################
+
+```
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp$ cd smspp
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver SDDPBlock_inflow.nc4 \
+    -S SDDPSCfg-100.txt -B SDDPBCfg.txt \
+    -p . -c . -d .
+SDDPBlock_inflow.nc4 is a block file
+Uncaught exception in executing SMS++:
+        Exception type: St16invalid_argument
+        Exception message: CPXMILPSolver not present in Solver factory
+Aborted (core dumped)
+
+--- modifica dei file di configurazione per passare da CPLEX  a HiGHS  ---
+
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver SDDPBlock_inflow.nc4     -S SDDPSCfg.txt -B SDDPBCfg.txt     -p . -c . -d .
+SDDPBlock_inflow.nc4 is a block file
+ SDDP backward  iteration 0 value 4.41274e+08 time  0.620000s wall, 8.090000s user + 1.010000s system = 9.100000s CPU (1467.7%)
+ ACCURACY 0.673535 Backward 4.41274e+08 Forward 1.35167e+09 p_iter 0 accuracy 0.673535 GlobalTimer  0.850000s wall, 11.300000s user + 1.260000s system = 12.560000s CPU (1477.6%)
+
+ SDDP backward  iteration 1 value 4.44951e+08 time  0.270000s wall, 4.050000s user + 0.230000s system = 4.280000s CPU (1585.2%)
+ ACCURACY 0.360127 Backward 4.44951e+08 Forward 6.95375e+08 p_iter 1 accuracy 0.360127 GlobalTimer  1.330000s wall, 18.550000s user + 1.660000s system = 20.210000s CPU (1519.5%)
+
+ SDDP backward  iteration 2 value 4.46633e+08 time  0.340000s wall, 5.020000s user + 0.420000s system = 5.440000s CPU (1600.0%)
+ ACCURACY 0.329382 Backward 4.46633e+08 Forward 6.66002e+08 p_iter 2 accuracy 0.329382 GlobalTimer  1.870000s wall, 26.530000s user + 2.230000s system = 28.760000s CPU (1538.0%)
+
+ SDDP backward  iteration 3 value 4.50976e+08 time  0.270000s wall, 4.000000s user + 0.340000s system = 4.340000s CPU (1607.4%)
+ ACCURACY 0.239415 Backward 4.50976e+08 Forward 5.92934e+08 p_iter 3 accuracy 0.239415 GlobalTimer  2.340000s wall, 33.530000s user + 2.820000s system = 36.350000s CPU (1553.4%)
+
+ SDDP backward  iteration 4 value 4.56059e+08 time  0.250000s wall, 3.870000s user + 0.200000s system = 4.070000s CPU (1628.0%)
+ ACCURACY 0.198367 Backward 4.56059e+08 Forward 5.68913e+08 p_iter 4 accuracy 0.198367 GlobalTimer  2.860000s wall, 41.400000s user + 3.290000s system = 44.690000s CPU (1562.6%)
+
+ SDDP backward  iteration 5 value 4.77429e+08 time  0.240000s wall, 3.650000s user + 0.190000s system = 3.840000s CPU (1600.0%)
+ ACCURACY 0.160292 Backward 4.77429e+08 Forward 5.68566e+08 p_iter 5 accuracy 0.160292 GlobalTimer  3.280000s wall, 47.700000s user + 3.690000s system = 51.390000s CPU (1566.8%)
+
+ SDDP backward  iteration 6 value 4.78819e+08 time  0.250000s wall, 3.710000s user + 0.240000s system = 3.950000s CPU (1580.0%)
+ ACCURACY 0.124673 Backward 4.78819e+08 Forward 5.47017e+08 p_iter 6 accuracy 0.124673 GlobalTimer  3.720000s wall, 54.310000s user + 4.120000s system = 58.430000s CPU (1570.7%)
+
+ SDDP backward  iteration 7 value 5.18879e+08 time  0.280000s wall, 4.100000s user + 0.280000s system = 4.380000s CPU (1564.3%)
+ ACCURACY 0.182312 Backward 5.18879e+08 Forward 6.34569e+08 p_iter 7 accuracy 0.182312 GlobalTimer  4.170000s wall, 60.910000s user + 4.580000s system = 65.490000s CPU (1570.5%)
+
+ SDDP backward  iteration 8 value 5.19076e+08 time  0.260000s wall, 3.830000s user + 0.300000s system = 4.130000s CPU (1588.5%)
+ ACCURACY 0.0710099 Backward 5.19076e+08 Forward 5.58753e+08 p_iter 8 accuracy 0.0710099 GlobalTimer  4.620000s wall, 67.660000s user + 5.120000s system = 72.780000s CPU (1575.3%)
+
+ SDDP backward  iteration 9 value 5.19869e+08 time  0.250000s wall, 3.660000s user + 0.220000s system = 3.880000s CPU (1552.0%)
+ ACCURACY 0.0686131 Backward 5.19869e+08 Forward 5.58167e+08 p_iter 9 accuracy 0.0686131 GlobalTimer  5.080000s wall, 74.450000s user + 5.590000s system = 80.040000s CPU (1575.6%)
+
+Backward value: 519869421.68903118372
+Forward value:  558166998.38392138481
+Terminated due to iter limit
+```
+
+#######################################################################
+####################### TEST CON 100 ITERAZIONI MAX ###################
+#######################################################################
+
+```
+ sed -i 's/intMaxIter            10/intMaxIter            100/' SDDPSCfg.txt
+grep "intMaxIter" SDDPSCfg.txt
+intMaxIter            100
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver SDDPBlock_inflow.nc4     -S SDDPSCfg.txt -B SDDPBCfg.txt     -p . -c . -d .
+SDDPBlock_inflow.nc4 is a block file
+ SDDP backward  iteration 0 value 4.41274e+08 time  0.600000s wall, 8.240000s user + 0.730000s system = 8.970000s CPU (1495.0%)
+ ACCURACY 0.673535 Backward 4.41274e+08 Forward 1.35167e+09 p_iter 0 accuracy 0.673535 GlobalTimer  0.820000s wall, 11.380000s user + 0.910000s system = 12.290000s CPU (1498.8%)
+
+ SDDP backward  iteration 1 value 4.44951e+08 time  0.300000s wall, 4.580000s user + 0.310000s system = 4.890000s CPU (1630.0%)
+ ACCURACY 0.353233 Backward 4.44951e+08 Forward 6.87962e+08 p_iter 1 accuracy 0.353233 GlobalTimer  1.350000s wall, 19.330000s user + 1.420000s system = 20.750000s CPU (1537.0%)
+
+ SDDP backward  iteration 2 value 4.46633e+08 time  0.270000s wall, 4.080000s user + 0.230000s system = 4.310000s CPU (1596.3%)
+ ACCURACY 0.32977 Backward 4.46633e+08 Forward 6.66387e+08 p_iter 2 accuracy 0.32977 GlobalTimer  1.820000s wall, 26.540000s user + 1.820000s system = 28.360000s CPU (1558.2%)
+
+ SDDP backward  iteration 3 value 4.50863e+08 time  0.320000s wall, 4.680000s user + 0.360000s system = 5.040000s CPU (1575.0%)
+ ACCURACY 0.239658 Backward 4.50863e+08 Forward 5.92974e+08 p_iter 3 accuracy 0.239658 GlobalTimer  2.380000s wall, 34.860000s user + 2.400000s system = 37.260000s CPU (1565.5%)
+
+ SDDP backward  iteration 4 value 4.55832e+08 time  0.270000s wall, 4.050000s user + 0.210000s system = 4.260000s CPU (1577.8%)
+ ACCURACY 0.244306 Backward 4.55832e+08 Forward 6.03196e+08 p_iter 4 accuracy 0.244306 GlobalTimer  2.830000s wall, 41.660000s user + 2.810000s system = 44.470000s CPU (1571.4%)
+
+ SDDP backward  iteration 5 value 4.7637e+08 time  0.280000s wall, 4.050000s user + 0.290000s system = 4.340000s CPU (1550.0%)
+ ACCURACY 0.164096 Backward 4.7637e+08 Forward 5.69885e+08 p_iter 5 accuracy 0.164096 GlobalTimer  3.300000s wall, 48.730000s user + 3.260000s system = 51.990000s CPU (1575.5%)
+
+ SDDP backward  iteration 6 value 4.78092e+08 time  0.330000s wall, 4.990000s user + 0.340000s system = 5.330000s CPU (1615.2%)
+ ACCURACY 0.125007 Backward 4.78092e+08 Forward 5.46395e+08 p_iter 6 accuracy 0.125007 GlobalTimer  3.830000s wall, 56.790000s user + 3.810000s system = 60.600000s CPU (1582.2%)
+
+ SDDP backward  iteration 7 value 5.18879e+08 time  0.230000s wall, 3.450000s user + 0.260000s system = 3.710000s CPU (1613.0%)
+ ACCURACY 0.182312 Backward 5.18879e+08 Forward 6.34568e+08 p_iter 7 accuracy 0.182312 GlobalTimer  4.260000s wall, 63.080000s user + 4.250000s system = 67.330000s CPU (1580.5%)
+
+ SDDP backward  iteration 8 value 5.18946e+08 time  0.280000s wall, 4.330000s user + 0.280000s system = 4.610000s CPU (1646.4%)
+ ACCURACY 0.0706196 Backward 5.18946e+08 Forward 5.58378e+08 p_iter 8 accuracy 0.0706196 GlobalTimer  4.800000s wall, 71.310000s user + 4.800000s system = 76.110000s CPU (1585.6%)
+
+ SDDP backward  iteration 9 value 5.19738e+08 time  0.260000s wall, 3.750000s user + 0.290000s system = 4.040000s CPU (1553.8%)
+ ACCURACY 0.0682907 Backward 5.19738e+08 Forward 5.57832e+08 p_iter 9 accuracy 0.0682907 GlobalTimer  5.240000s wall, 77.790000s user + 5.250000s system = 83.040000s CPU (1584.7%)
+
+ SDDP backward  iteration 10 value 5.20977e+08 time  0.240000s wall, 3.720000s user + 0.240000s system = 3.960000s CPU (1650.0%)
+ ACCURACY 0.034908 Backward 5.20977e+08 Forward 5.39821e+08 p_iter 10 accuracy 0.034908 GlobalTimer  5.690000s wall, 84.560000s user + 5.740000s system = 90.300000s CPU (1587.0%)
+
+ SDDP backward  iteration 11 value 5.21169e+08 time  0.310000s wall, 4.710000s user + 0.310000s system = 5.020000s CPU (1619.4%)
+ ACCURACY 0.0215563 Backward 5.21169e+08 Forward 5.32651e+08 p_iter 11 accuracy 0.0215563 GlobalTimer  6.210000s wall, 92.480000s user + 6.300000s system = 98.780000s CPU (1590.7%)
+
+ SDDP backward  iteration 12 value 5.21175e+08 time  0.250000s wall, 3.700000s user + 0.320000s system = 4.020000s CPU (1608.0%)
+ ACCURACY 0.016255 Backward 5.21175e+08 Forward 5.29787e+08 p_iter 12 accuracy 0.016255 GlobalTimer  6.680000s wall, 99.470000s user + 6.810000s system = 106.280000s CPU (1591.0%)
+
+ SDDP backward  iteration 13 value 5.2154e+08 time  0.330000s wall, 5.010000s user + 0.390000s system = 5.400000s CPU (1636.4%)
+ ACCURACY 0.015476 Backward 5.2154e+08 Forward 5.29738e+08 p_iter 13 accuracy 0.015476 GlobalTimer  7.220000s wall, 107.500000s user + 7.400000s system = 114.900000s CPU (1591.4%)
+
+ SDDP backward  iteration 14 value 5.21598e+08 time  0.270000s wall, 4.030000s user + 0.250000s system = 4.280000s CPU (1585.2%)
+ ACCURACY 0.0145718 Backward 5.21598e+08 Forward 5.29311e+08 p_iter 14 accuracy 0.0145718 GlobalTimer  7.710000s wall, 114.790000s user + 7.860000s system = 122.650000s CPU (1590.8%)
+
+ SDDP backward  iteration 15 value 5.21667e+08 time  0.260000s wall, 3.900000s user + 0.260000s system = 4.160000s CPU (1600.0%)
+ ACCURACY 0.0142983 Backward 5.21667e+08 Forward 5.29234e+08 p_iter 15 accuracy 0.0142983 GlobalTimer  8.250000s wall, 122.820000s user + 8.490000s system = 131.310000s CPU (1591.6%)
+
+ SDDP backward  iteration 16 value 5.21981e+08 time  0.250000s wall, 3.810000s user + 0.200000s system = 4.010000s CPU (1604.0%)
+ ACCURACY 0.0136976 Backward 5.21981e+08 Forward 5.2923e+08 p_iter 16 accuracy 0.0136976 GlobalTimer  8.690000s wall, 129.470000s user + 8.900000s system = 138.370000s CPU (1592.3%)
+
+ SDDP backward  iteration 17 value 5.22398e+08 time  0.240000s wall, 3.690000s user + 0.180000s system = 3.870000s CPU (1612.5%)
+ ACCURACY 0.0129556 Backward 5.22398e+08 Forward 5.29255e+08 p_iter 17 accuracy 0.0129556 GlobalTimer  9.120000s wall, 136.050000s user + 9.330000s system = 145.380000s CPU (1594.1%)
+
+ SDDP backward  iteration 18 value 5.22462e+08 time  0.290000s wall, 4.300000s user + 0.310000s system = 4.610000s CPU (1589.7%)
+ ACCURACY 0.0159097 Backward 5.22462e+08 Forward 5.30909e+08 p_iter 18 accuracy 0.0159097 GlobalTimer  9.640000s wall, 143.810000s user + 9.880000s system = 153.690000s CPU (1594.3%)
+
+ SDDP backward  iteration 19 value 5.22496e+08 time  0.250000s wall, 3.670000s user + 0.250000s system = 3.920000s CPU (1568.0%)
+ ACCURACY 0.012448 Backward 5.22496e+08 Forward 5.29082e+08 p_iter 19 accuracy 0.012448 GlobalTimer  10.080000s wall, 150.420000s user + 10.250000s system = 160.670000s CPU (1593.9%)
+
+ SDDP backward  iteration 20 value 5.22497e+08 time  0.260000s wall, 3.910000s user + 0.180000s system = 4.090000s CPU (1573.1%)
+ ACCURACY 0.0124453 Backward 5.22497e+08 Forward 5.29082e+08 p_iter 20 accuracy 0.0124453 GlobalTimer  10.550000s wall, 157.420000s user + 10.650000s system = 168.070000s CPU (1593.1%)
+
+ SDDP backward  iteration 21 value 5.22497e+08 time  0.290000s wall, 4.290000s user + 0.320000s system = 4.610000s CPU (1589.7%)
+ ACCURACY 0.0122575 Backward 5.22497e+08 Forward 5.28981e+08 p_iter 21 accuracy 0.0122575 GlobalTimer  11.030000s wall, 164.690000s user + 11.160000s system = 175.850000s CPU (1594.3%)
+
+ SDDP backward  iteration 22 value 5.22671e+08 time  0.250000s wall, 3.720000s user + 0.220000s system = 3.940000s CPU (1576.0%)
+ ACCURACY 0.0126258 Backward 5.22671e+08 Forward 5.29354e+08 p_iter 22 accuracy 0.0126258 GlobalTimer  11.490000s wall, 171.570000s user + 11.600000s system = 183.170000s CPU (1594.2%)
+
+ SDDP backward  iteration 23 value 5.22671e+08 time  0.290000s wall, 4.360000s user + 0.350000s system = 4.710000s CPU (1624.1%)
+ ACCURACY 0.0136627 Backward 5.22671e+08 Forward 5.29911e+08 p_iter 23 accuracy 0.0136627 GlobalTimer  12.060000s wall, 180.000000s user + 12.320000s system = 192.320000s CPU (1594.7%)
+
+ SDDP backward  iteration 24 value 5.22682e+08 time  0.260000s wall, 3.930000s user + 0.260000s system = 4.190000s CPU (1611.5%)
+ ACCURACY 0.0124173 Backward 5.22682e+08 Forward 5.29254e+08 p_iter 24 accuracy 0.0124173 GlobalTimer  12.530000s wall, 187.100000s user + 12.810000s system = 199.910000s CPU (1595.5%)
+
+ SDDP backward  iteration 25 value 5.22714e+08 time  0.290000s wall, 4.280000s user + 0.320000s system = 4.600000s CPU (1586.2%)
+ ACCURACY 0.0120134 Backward 5.22714e+08 Forward 5.2907e+08 p_iter 25 accuracy 0.0120134 GlobalTimer  13.070000s wall, 195.130000s user + 13.370000s system = 208.500000s CPU (1595.3%)
+
+ SDDP backward  iteration 26 value 5.22714e+08 time  0.260000s wall, 3.820000s user + 0.260000s system = 4.080000s CPU (1569.2%)
+ ACCURACY 0.0118186 Backward 5.22714e+08 Forward 5.28966e+08 p_iter 26 accuracy 0.0118186 GlobalTimer  13.530000s wall, 202.030000s user + 13.880000s system = 215.910000s CPU (1595.8%)
+
+ SDDP backward  iteration 27 value 5.22735e+08 time  0.260000s wall, 3.850000s user + 0.280000s system = 4.130000s CPU (1588.5%)
+ ACCURACY 0.0117714 Backward 5.22735e+08 Forward 5.28962e+08 p_iter 27 accuracy 0.0117714 GlobalTimer  14.010000s wall, 209.060000s user + 14.330000s system = 223.390000s CPU (1594.5%)
+
+ SDDP backward  iteration 28 value 5.22736e+08 time  0.290000s wall, 4.290000s user + 0.380000s system = 4.670000s CPU (1610.3%)
+ ACCURACY 0.0118502 Backward 5.22736e+08 Forward 5.29005e+08 p_iter 28 accuracy 0.0118502 GlobalTimer  14.500000s wall, 216.360000s user + 14.910000s system = 231.270000s CPU (1595.0%)
+
+ SDDP backward  iteration 29 value 5.22736e+08 time  0.250000s wall, 3.750000s user + 0.280000s system = 4.030000s CPU (1612.0%)
+ ACCURACY 0.0119245 Backward 5.22736e+08 Forward 5.29045e+08 p_iter 29 accuracy 0.0119245 GlobalTimer  14.950000s wall, 223.000000s user + 15.430000s system = 238.430000s CPU (1594.8%)
+
+ SDDP backward  iteration 30 value 5.22749e+08 time  0.240000s wall, 3.630000s user + 0.250000s system = 3.880000s CPU (1616.7%)
+ ACCURACY 0.0118242 Backward 5.22749e+08 Forward 5.29004e+08 p_iter 30 accuracy 0.0118242 GlobalTimer  15.420000s wall, 230.070000s user + 15.900000s system = 245.970000s CPU (1595.1%)
+
+ SDDP backward  iteration 31 value 5.22749e+08 time  0.290000s wall, 4.350000s user + 0.310000s system = 4.660000s CPU (1606.9%)
+ ACCURACY 0.011745 Backward 5.22749e+08 Forward 5.28962e+08 p_iter 31 accuracy 0.011745 GlobalTimer  15.910000s wall, 237.380000s user + 16.400000s system = 253.780000s CPU (1595.1%)
+
+ SDDP backward  iteration 32 value 5.22749e+08 time  0.240000s wall, 3.610000s user + 0.240000s system = 3.850000s CPU (1604.2%)
+ ACCURACY 0.0117447 Backward 5.22749e+08 Forward 5.28962e+08 p_iter 32 accuracy 0.0117447 GlobalTimer  16.380000s wall, 244.360000s user + 16.880000s system = 261.240000s CPU (1594.9%)
+
+ SDDP backward  iteration 33 value 5.22754e+08 time  0.310000s wall, 4.690000s user + 0.330000s system = 5.020000s CPU (1619.4%)
+ ACCURACY 0.0117357 Backward 5.22754e+08 Forward 5.28962e+08 p_iter 33 accuracy 0.0117357 GlobalTimer  16.920000s wall, 252.460000s user + 17.420000s system = 269.880000s CPU (1595.0%)
+
+ SDDP backward  iteration 34 value 5.22754e+08 time  0.270000s wall, 3.950000s user + 0.260000s system = 4.210000s CPU (1559.3%)
+Uncaught exception in executing SMS++:
+        Exception type: St11logic_error
+        Exception message: SDDPSolver::solve: the subproblem at stage 2 has no solution.
+Aborted (core dumped)
+```
+
+#######################################################################
+######################## 2° RUN 10 ITERAZIONI MAX #####################
+#######################################################################
+
+```
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ sed -i 's/intMaxIter            100/intMaxIter
+      10/' SDDPSCfg.txt
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver SDDPBlock_inflow.nc4     -S SDDPSCfg.txt -B SDDPBCfg.txt     -p . -c . -d .
+SDDPBlock_inflow.nc4 is a block file
+ SDDP backward  iteration 0 value 4.41274e+08 time  0.610000s wall, 8.000000s user + 0.750000s system = 8.750000s CPU (1434.4%)
+ ACCURACY 0.673535 Backward 4.41274e+08 Forward 1.35167e+09 p_iter 0 accuracy 0.673535 GlobalTimer  0.910000s wall, 12.280000s user + 1.040000s system = 13.320000s CPU (1463.7%)
+
+ SDDP backward  iteration 1 value 4.44951e+08 time  0.270000s wall, 4.120000s user + 0.220000s system = 4.340000s CPU (1607.4%)
+ ACCURACY 0.352763 Backward 4.44951e+08 Forward 6.87463e+08 p_iter 1 accuracy 0.352763 GlobalTimer  1.430000s wall, 20.140000s user + 1.510000s system = 21.650000s CPU (1514.0%)
+
+ SDDP backward  iteration 2 value 4.46633e+08 time  0.260000s wall, 3.900000s user + 0.300000s system = 4.200000s CPU (1615.4%)
+ ACCURACY 0.329501 Backward 4.46633e+08 Forward 6.6612e+08 p_iter 2 accuracy 0.329501 GlobalTimer  1.930000s wall, 27.550000s user + 2.110000s system = 29.660000s CPU (1536.8%)
+
+ SDDP backward  iteration 3 value 4.48887e+08 time  0.310000s wall, 4.520000s user + 0.370000s system = 4.890000s CPU (1577.4%)
+ ACCURACY 0.271391 Backward 4.48887e+08 Forward 6.16088e+08 p_iter 3 accuracy 0.271391 GlobalTimer  2.450000s wall, 35.250000s user + 2.720000s system = 37.970000s CPU (1549.8%)
+
+ SDDP backward  iteration 4 value 4.53488e+08 time  0.280000s wall, 4.190000s user + 0.350000s system = 4.540000s CPU (1621.4%)
+ ACCURACY 0.228903 Backward 4.53488e+08 Forward 5.88108e+08 p_iter 4 accuracy 0.228903 GlobalTimer  2.930000s wall, 42.470000s user + 3.300000s system = 45.770000s CPU (1562.1%)
+
+ SDDP backward  iteration 5 value 4.72309e+08 time  0.330000s wall, 4.760000s user + 0.470000s system = 5.230000s CPU (1584.8%)
+ ACCURACY 0.180521 Backward 4.72309e+08 Forward 5.76352e+08 p_iter 5 accuracy 0.180521 GlobalTimer  3.450000s wall, 50.050000s user + 3.970000s system = 54.020000s CPU (1565.8%)
+
+ SDDP backward  iteration 6 value 4.77366e+08 time  0.260000s wall, 3.850000s user + 0.300000s system = 4.150000s CPU (1596.2%)
+ ACCURACY 0.163446 Backward 4.77366e+08 Forward 5.70634e+08 p_iter 6 accuracy 0.163446 GlobalTimer  3.900000s wall, 56.690000s user + 4.490000s system = 61.180000s CPU (1568.7%)
+
+ SDDP backward  iteration 7 value 4.81263e+08 time  0.270000s wall, 3.970000s user + 0.300000s system = 4.270000s CPU (1581.5%)
+ ACCURACY 0.11839 Backward 4.81263e+08 Forward 5.45891e+08 p_iter 7 accuracy 0.11839 GlobalTimer  4.400000s wall, 64.150000s user + 5.040000s system = 69.190000s CPU (1572.5%)
+
+ SDDP backward  iteration 8 value 5.21333e+08 time  0.250000s wall, 3.720000s user + 0.270000s system = 3.990000s CPU (1596.0%)
+ ACCURACY 0.120407 Backward 5.21333e+08 Forward 5.92698e+08 p_iter 8 accuracy 0.120407 GlobalTimer  4.860000s wall, 70.900000s user + 5.550000s system = 76.450000s CPU (1573.0%)
+
+ SDDP backward  iteration 9 value 5.2134e+08 time  0.230000s wall, 3.480000s user + 0.260000s system = 3.740000s CPU (1626.1%)
+ ACCURACY 0.126414 Backward 5.2134e+08 Forward 5.96781e+08 p_iter 9 accuracy 0.126414 GlobalTimer  5.270000s wall, 77.020000s user + 6.050000s system = 83.070000s CPU (1576.3%)
+
+Backward value: 521340088.59125733376
+Forward value:  596781446.33073890209
+Terminated due to iter limit
+```
+
+#######################################################################
+####################### TEST CON 15 ITERAZIONI MAX ###################
+#######################################################################
+
+
+```
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ sed -i 's/intMaxIter            30/intMaxIter
+     15/' SDDPSCfg.txt
+(pypsa2smspp) bia_medici@Laptop-di-Bianca:~/tesi/pypsa2smspp/smspp$ /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver SDDPBlock_inflow.nc4     -S SDDPSCfg.txt -B SDDPBCfg.txt     -p . -c . -d .
+SDDPBlock_inflow.nc4 is a block file
+ SDDP backward  iteration 0 value 4.41274e+08 time  0.690000s wall, 8.670000s user + 1.040000s system = 9.710000s CPU (1407.2%)
+ ACCURACY 0.673535 Backward 4.41274e+08 Forward 1.35167e+09 p_iter 0 accuracy 0.673535 GlobalTimer  0.910000s wall, 11.810000s user + 1.180000s system = 12.990000s CPU (1427.5%)
+
+ SDDP backward  iteration 1 value 4.44951e+08 time  0.270000s wall, 4.020000s user + 0.260000s system = 4.280000s CPU (1585.2%)
+ ACCURACY 0.355832 Backward 4.44951e+08 Forward 6.90738e+08 p_iter 1 accuracy 0.355832 GlobalTimer  1.420000s wall, 19.330000s user + 1.730000s system = 21.060000s CPU (1483.1%)
+
+ SDDP backward  iteration 2 value 4.46633e+08 time  0.290000s wall, 4.410000s user + 0.280000s system = 4.690000s CPU (1617.2%)
+ ACCURACY 0.329515 Backward 4.46633e+08 Forward 6.66134e+08 p_iter 2 accuracy 0.329515 GlobalTimer  1.900000s wall, 26.590000s user + 2.180000s system = 28.770000s CPU (1514.2%)
+
+ SDDP backward  iteration 3 value 4.51018e+08 time  0.260000s wall, 3.860000s user + 0.280000s system = 4.140000s CPU (1592.3%)
+ ACCURACY 0.23932 Backward 4.51018e+08 Forward 5.92913e+08 p_iter 3 accuracy 0.23932 GlobalTimer  2.370000s wall, 33.550000s user + 2.710000s system = 36.260000s CPU (1530.0%)
+
+ SDDP backward  iteration 4 value 4.56092e+08 time  0.300000s wall, 4.540000s user + 0.290000s system = 4.830000s CPU (1610.0%)
+ ACCURACY 0.236094 Backward 4.56092e+08 Forward 5.97052e+08 p_iter 4 accuracy 0.236094 GlobalTimer  2.910000s wall, 41.660000s user + 3.240000s system = 44.900000s CPU (1543.0%)
+
+ SDDP backward  iteration 5 value 4.76662e+08 time  0.270000s wall, 4.000000s user + 0.210000s system = 4.210000s CPU (1559.3%)
+ ACCURACY 0.162021 Backward 4.76662e+08 Forward 5.68824e+08 p_iter 5 accuracy 0.162021 GlobalTimer  3.390000s wall, 48.770000s user + 3.710000s system = 52.480000s CPU (1548.1%)
+
+ SDDP backward  iteration 6 value 4.78319e+08 time  0.250000s wall, 3.830000s user + 0.250000s system = 4.080000s CPU (1632.0%)
+ ACCURACY 0.124684 Backward 4.78319e+08 Forward 5.46453e+08 p_iter 6 accuracy 0.124684 GlobalTimer  3.860000s wall, 55.860000s user + 4.150000s system = 60.010000s CPU (1554.7%)
+
+ SDDP backward  iteration 7 value 5.18879e+08 time  0.270000s wall, 3.940000s user + 0.250000s system = 4.190000s CPU (1551.9%)
+ ACCURACY 0.182312 Backward 5.18879e+08 Forward 6.34569e+08 p_iter 7 accuracy 0.182312 GlobalTimer  4.310000s wall, 62.560000s user + 4.580000s system = 67.140000s CPU (1557.8%)
+
+ SDDP backward  iteration 8 value 5.18947e+08 time  0.280000s wall, 3.970000s user + 0.340000s system = 4.310000s CPU (1539.3%)
+ ACCURACY 0.070641 Backward 5.18947e+08 Forward 5.58392e+08 p_iter 8 accuracy 0.070641 GlobalTimer  4.780000s wall, 69.380000s user + 5.090000s system = 74.470000s CPU (1557.9%)
+
+ SDDP backward  iteration 9 value 5.19739e+08 time  0.280000s wall, 4.170000s user + 0.310000s system = 4.480000s CPU (1600.0%)
+ ACCURACY 0.0683117 Backward 5.19739e+08 Forward 5.57846e+08 p_iter 9 accuracy 0.0683117 GlobalTimer  5.310000s wall, 77.250000s user + 5.650000s system = 82.900000s CPU (1561.2%)
+
+ SDDP backward  iteration 10 value 5.20974e+08 time  0.250000s wall, 3.640000s user + 0.240000s system = 3.880000s CPU (1552.0%)
+ ACCURACY 0.034708 Backward 5.20974e+08 Forward 5.39706e+08 p_iter 10 accuracy 0.034708 GlobalTimer  5.750000s wall, 83.820000s user + 6.070000s system = 89.890000s CPU (1563.3%)
+
+ SDDP backward  iteration 11 value 5.21173e+08 time  0.250000s wall, 3.660000s user + 0.280000s system = 3.940000s CPU (1576.0%)
+ ACCURACY 0.0214313 Backward 5.21173e+08 Forward 5.32587e+08 p_iter 11 accuracy 0.0214313 GlobalTimer  6.200000s wall, 90.390000s user + 6.610000s system = 97.000000s CPU (1564.5%)
+
+ SDDP backward  iteration 12 value 5.21179e+08 time  0.280000s wall, 4.300000s user + 0.250000s system = 4.550000s CPU (1625.0%)
+ ACCURACY 0.016081 Backward 5.21179e+08 Forward 5.29697e+08 p_iter 12 accuracy 0.016081 GlobalTimer  6.680000s wall, 97.680000s user + 7.070000s system = 104.750000s CPU (1568.1%)
+
+ SDDP backward  iteration 13 value 5.21542e+08 time  0.260000s wall, 3.870000s user + 0.270000s system = 4.140000s CPU (1592.3%)
+ ACCURACY 0.0153565 Backward 5.21542e+08 Forward 5.29676e+08 p_iter 13 accuracy 0.0153565 GlobalTimer  7.180000s wall, 105.130000s user + 7.580000s system = 112.710000s CPU (1569.8%)
+
+ SDDP backward  iteration 14 value 5.21601e+08 time  0.270000s wall, 4.050000s user + 0.260000s system = 4.310000s CPU (1596.3%)
+ ACCURACY 0.0143985 Backward 5.21601e+08 Forward 5.29221e+08 p_iter 14 accuracy 0.0143985 GlobalTimer  7.680000s wall, 112.590000s user + 8.160000s system = 120.750000s CPU (1572.3%)
+
+Backward value: 521600582.98842978477
+Forward value:  529220549.91789913177
+Terminated due to iter limit
+```
+
+#######################################################################
+########################## GREEDY SOLVER ##############################
+#######################################################################
+
+
+```
+ for i in $(seq 0 26); do
+    echo "========== Trajectory $i (press ENTER for next, q to quit) =========="
+    /home/bia_medici/miniconda3/envs/pypsa2smspp/bin/smspp_sddp_solver -s SDDPBlock_traj.nc4 \
+        -S SDDPSCfg-greedy.txt -B SDDPBCfg.txt \
+        -p . -c . -d traj_results \
+        -l BellmanValuesAllOUT.nc4 -i $i
+    read -r answer
+    [ "$answer" = "q" ] && break
+done
+========== Trajectory 0 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          0   8.2033319e+07   4.3956726e+08   5.9510291e-02   5.9809891e-02
+     1          0   1.0464642e+08   3.3542616e+08   4.8368610e-02   1.1198548e-01
+     2          0   1.3166061e+08   2.0556924e+08   5.0628154e-02   1.6592589e-01
+     3          0   2.0703851e+08   0.0000000e+00   4.8526928e-02   2.1717642e-01
+Objective value: 5.2537887e+08
+Total time (s):  2.2036939e-01
+Lower bound: -inf
+Upper bound: 5.25378867559010446072e+08
+
+========== Trajectory 1 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          1   8.2033319e+07   4.3956726e+08   5.7038410e-02   5.7183061e-02
+     1          1   1.0464642e+08   3.3542616e+08   4.7548388e-02   1.0805359e-01
+     2          1   1.3166061e+08   2.0556924e+08   4.6822403e-02   1.5796393e-01
+     3          1   2.1722780e+08   0.0000000e+00   5.3909624e-02   2.1439376e-01
+Objective value: 5.3556815e+08
+Total time (s):  2.1758842e-01
+Lower bound: -inf
+Upper bound: 5.35568153689004898071e+08
+
+========== Trajectory 2 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          2   8.2033319e+07   4.3956726e+08   5.1742508e-02   5.1894933e-02
+     1          2   1.0464642e+08   3.3542616e+08   5.3580238e-02   1.0899916e-01
+     2          2   1.3166061e+08   2.0556924e+08   5.0659816e-02   1.6275740e-01
+     3          2   1.9838828e+08   0.0000000e+00   4.2964445e-02   2.0852114e-01
+Objective value: 5.1672863e+08
+Total time (s):  2.1083872e-01
+Lower bound: -inf
+Upper bound: 5.16728628138702869415e+08
+
+========== Trajectory 3 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          3   8.2033319e+07   4.3956726e+08   4.8830136e-02   4.8977410e-02
+     1          3   1.0464642e+08   3.3542616e+08   5.2400170e-02   1.0527325e-01
+     2          3   1.3681051e+08   2.0561345e+08   4.9196166e-02   1.5811752e-01
+     3          3   2.0683437e+08   0.0000000e+00   4.6148124e-02   2.0757458e-01
+Objective value: 5.3032462e+08
+Total time (s):  2.1018129e-01
+Lower bound: -inf
+Upper bound: 5.30324618931425571442e+08
+
+========== Trajectory 4 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          4   8.2033319e+07   4.3956726e+08   6.1409262e-02   6.1549901e-02
+     1          4   1.0464642e+08   3.3542616e+08   5.1344669e-02   1.1648759e-01
+     2          4   1.3681051e+08   2.0561345e+08   5.1545463e-02   1.7151306e-01
+     3          4   2.1527717e+08   0.0000000e+00   4.7841302e-02   2.2228529e-01
+Objective value: 5.3876742e+08
+Total time (s):  2.2522598e-01
+Lower bound: -inf
+Upper bound: 5.38767422293244600296e+08
+
+========== Trajectory 5 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          5   8.2033319e+07   4.3956726e+08   5.7947203e-02   5.8088183e-02
+     1          5   1.0464642e+08   3.3542616e+08   4.7239703e-02   1.0843017e-01
+     2          5   1.3681051e+08   2.0561345e+08   4.7131797e-02   1.5838194e-01
+     3          5   1.9818413e+08   0.0000000e+00   4.9371897e-02   2.1163104e-01
+Objective value: 5.2167438e+08
+Total time (s):  2.1437554e-01
+Lower bound: -inf
+Upper bound: 5.21674379511118054390e+08
+
+========== Trajectory 6 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          6   8.2033319e+07   4.3956726e+08   5.3571369e-02   5.3777001e-02
+     1          6   1.0464642e+08   3.3542616e+08   5.0557387e-02   1.0766473e-01
+     2          6   1.2224235e+08   2.0539337e+08   5.0842397e-02   1.6165537e-01
+     3          6   2.0693739e+08   0.0000000e+00   4.2845735e-02   2.0716694e-01
+Objective value: 5.1585948e+08
+Total time (s):  2.0950525e-01
+Lower bound: -inf
+Upper bound: 5.15859477071146070957e+08
+
+========== Trajectory 7 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          7   8.2033319e+07   4.3956726e+08   5.2420421e-02   5.2569341e-02
+     1          7   1.0464642e+08   3.3542616e+08   5.0040807e-02   1.0659776e-01
+     2          7   1.2224235e+08   2.0539337e+08   4.9826646e-02   1.5961292e-01
+     3          7   2.1100876e+08   0.0000000e+00   4.8178231e-02   2.1135607e-01
+Objective value: 5.1993085e+08
+Total time (s):  2.1382299e-01
+Lower bound: -inf
+Upper bound: 5.19930851534796476364e+08
+
+========== Trajectory 8 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          8   8.2033319e+07   4.3956726e+08   5.8888760e-02   5.9026330e-02
+     1          8   1.0464642e+08   3.3542616e+08   5.2603114e-02   1.1518290e-01
+     2          8   1.2224235e+08   2.0539337e+08   5.0409862e-02   1.6888678e-01
+     3          8   1.9830583e+08   0.0000000e+00   5.4810496e-02   2.2715397e-01
+Objective value: 5.0722792e+08
+Total time (s):  2.3059319e-01
+Lower bound: -inf
+Upper bound: 5.07227917527234911919e+08
+
+========== Trajectory 9 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0          9   8.2033319e+07   4.3956726e+08   5.8776887e-02   5.8950018e-02
+     1          9   1.0590724e+08   3.4078455e+08   5.0367560e-02   1.1232487e-01
+     2          9   1.3538340e+08   2.0556924e+08   5.5068230e-02   1.7052059e-01
+     3          9   2.0703851e+08   0.0000000e+00   4.9723852e-02   2.2330249e-01
+Objective value: 5.3036247e+08
+Total time (s):  2.2589195e-01
+Lower bound: -inf
+Upper bound: 5.30362471190017163754e+08
+
+========== Trajectory 10 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         10   8.2033319e+07   4.3956726e+08   6.2566853e-02   6.4022911e-02
+     1         10   1.0590724e+08   3.4078455e+08   5.5729698e-02   1.2407448e-01
+     2         10   1.3538340e+08   2.0556924e+08   5.1787799e-02   1.8001369e-01
+     3         10   2.1722780e+08   0.0000000e+00   4.7806746e-02   2.3041760e-01
+Objective value: 5.4055176e+08
+Total time (s):  2.3306455e-01
+Lower bound: -inf
+Upper bound: 5.40551757320011615753e+08
+
+========== Trajectory 11 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         11   8.2033319e+07   4.3956726e+08   5.5074522e-02   5.5218597e-02
+     1         11   1.0590724e+08   3.4078455e+08   5.5277484e-02   1.1453021e-01
+     2         11   1.3538340e+08   2.0556924e+08   5.6023394e-02   1.7430134e-01
+     3         11   1.9838828e+08   0.0000000e+00   5.3180140e-02   2.3116896e-01
+Objective value: 5.2171223e+08
+Total time (s):  2.3399151e-01
+Lower bound: -inf
+Upper bound: 5.21712231769709587097e+08
+
+========== Trajectory 12 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         12   8.2033319e+07   4.3956726e+08   5.7120711e-02   5.7311316e-02
+     1         12   1.0590724e+08   3.4078455e+08   5.3100775e-02   1.1398392e-01
+     2         12   1.4008027e+08   2.1256897e+08   5.0586841e-02   1.6806500e-01
+     3         12   2.0717252e+08   0.0000000e+00   4.8005036e-02   2.1936393e-01
+Objective value: 5.3519335e+08
+Total time (s):  2.2197606e-01
+Lower bound: -inf
+Upper bound: 5.35193345125563740730e+08
+
+========== Trajectory 13 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         13   8.2033319e+07   4.3956726e+08   5.8425650e-02   5.8578198e-02
+     1         13   1.0590724e+08   3.4078455e+08   5.4171999e-02   1.1674686e-01
+     2         13   1.4008027e+08   2.1256897e+08   5.4188920e-02   1.7442208e-01
+     3         13   2.4324464e+08   0.0000000e+00   5.3158671e-02   2.3137315e-01
+Objective value: 5.7126547e+08
+Total time (s):  2.3436221e-01
+Lower bound: -inf
+Upper bound: 5.71265471858349442482e+08
+
+========== Trajectory 14 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         14   8.2033319e+07   4.3956726e+08   5.9828810e-02   5.9972245e-02
+     1         14   1.0590724e+08   3.4078455e+08   5.3333809e-02   1.1754516e-01
+     2         14   1.4008027e+08   2.1256897e+08   5.0662719e-02   1.7164545e-01
+     3         14   1.9852228e+08   0.0000000e+00   5.0717680e-02   2.2602395e-01
+Objective value: 5.2654311e+08
+Total time (s):  2.2866957e-01
+Lower bound: -inf
+Upper bound: 5.26543105705256283283e+08
+
+========== Trajectory 15 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         15   8.2033319e+07   4.3956726e+08   5.8573600e-02   5.8712454e-02
+     1         15   1.0590724e+08   3.4078455e+08   4.8767674e-02   1.1059966e-01
+     2         15   1.2575872e+08   2.0531382e+08   4.5134301e-02   1.5833086e-01
+     3         15   2.0688194e+08   0.0000000e+00   5.1552208e-02   2.1366051e-01
+Objective value: 5.2058121e+08
+Total time (s):  2.1679527e-01
+Lower bound: -inf
+Upper bound: 5.20581211162508428097e+08
+
+========== Trajectory 16 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         16   8.2033319e+07   4.3956726e+08   5.7527497e-02   5.7664658e-02
+     1         16   1.0590724e+08   3.4078455e+08   5.1261218e-02   1.1283508e-01
+     2         16   1.2575872e+08   2.0531382e+08   5.0324857e-02   1.6639484e-01
+     3         16   2.1098839e+08   0.0000000e+00   5.0227822e-02   2.1910912e-01
+Objective value: 5.2468767e+08
+Total time (s):  2.2198155e-01
+Lower bound: -inf
+Upper bound: 5.24687668489844441414e+08
+
+========== Trajectory 17 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         17   8.2033319e+07   4.3956726e+08   7.2210221e-02   7.2480879e-02
+     1         17   1.0590724e+08   3.4078455e+08   5.6422929e-02   1.3278446e-01
+     2         17   1.2575872e+08   2.0531382e+08   5.4674447e-02   1.9117743e-01
+     3         17   1.9825038e+08   0.0000000e+00   4.4158756e-02   2.3836026e-01
+Objective value: 5.1194965e+08
+Total time (s):  2.4083511e-01
+Lower bound: -inf
+Upper bound: 5.11949651618597269058e+08
+
+========== Trajectory 18 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         18   8.2033319e+07   4.3956726e+08   5.1977246e-02   5.2120698e-02
+     1         18   9.9555960e+07   3.3147584e+08   5.1081622e-02   1.0681697e-01
+     2         18   1.2818434e+08   2.0458174e+08   5.0220270e-02   1.6059116e-01
+     3         18   2.0634616e+08   0.0000000e+00   4.9523836e-02   2.1338581e-01
+Objective value: 5.1611978e+08
+Total time (s):  2.1644515e-01
+Lower bound: -inf
+Upper bound: 5.16119780957132339478e+08
+
+========== Trajectory 19 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         19   8.2033319e+07   4.3956726e+08   5.6120560e-02   5.6284830e-02
+     1         19   9.9555960e+07   3.3147584e+08   4.8416543e-02   1.0856428e-01
+     2         19   1.2818434e+08   2.0458174e+08   4.8479183e-02   1.6082941e-01
+     3         19   2.2811975e+08   0.0000000e+00   4.9335424e-02   2.1369202e-01
+Objective value: 5.3789337e+08
+Total time (s):  2.1620366e-01
+Lower bound: -inf
+Upper bound: 5.37893370730078935623e+08
+
+========== Trajectory 20 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         20   8.2033319e+07   4.3956726e+08   5.5433421e-02   5.5570377e-02
+     1         20   9.9555960e+07   3.3147584e+08   5.0932066e-02   1.1032750e-01
+     2         20   1.2818434e+08   2.0458174e+08   4.8425795e-02   1.6197347e-01
+     3         20   1.9769592e+08   0.0000000e+00   4.9953872e-02   2.1497784e-01
+Objective value: 5.0746954e+08
+Total time (s):  2.1740802e-01
+Lower bound: -inf
+Upper bound: 5.07469541536824822426e+08
+
+========== Trajectory 21 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         21   8.2033319e+07   4.3956726e+08   7.0671995e-02   7.0808274e-02
+     1         21   9.9555960e+07   3.3147584e+08   4.9701388e-02   1.2406708e-01
+     2         21   1.3214776e+08   2.0583406e+08   4.7560285e-02   1.7417308e-01
+     3         21   2.0673157e+08   0.0000000e+00   4.8306593e-02   2.2508645e-01
+Objective value: 5.2046861e+08
+Total time (s):  2.2757717e-01
+Lower bound: -inf
+Upper bound: 5.20468605649646699429e+08
+
+========== Trajectory 22 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         22   8.2033319e+07   4.3956726e+08   5.9817013e-02   6.0172633e-02
+     1         22   9.9555960e+07   3.3147584e+08   4.8448057e-02   1.1218290e-01
+     2         22   1.3214776e+08   2.0583406e+08   5.1372764e-02   1.6716774e-01
+     3         22   2.1177888e+08   0.0000000e+00   4.9981094e-02   2.1990865e-01
+Objective value: 5.2551592e+08
+Total time (s):  2.2219016e-01
+Lower bound: -inf
+Upper bound: 5.25515916240889787674e+08
+
+========== Trajectory 23 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         23   8.2033319e+07   4.3956726e+08   6.0333641e-02   6.0612025e-02
+     1         23   9.9555960e+07   3.3147584e+08   4.9537863e-02   1.1385838e-01
+     2         23   1.3214776e+08   2.0583406e+08   4.8865440e-02   1.6559753e-01
+     3         23   1.9808133e+08   0.0000000e+00   4.9759932e-02   2.1836409e-01
+Objective value: 5.1181837e+08
+Total time (s):  2.2108400e-01
+Lower bound: -inf
+Upper bound: 5.11818366229339241982e+08
+
+========== Trajectory 24 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         24   8.2033319e+07   4.3956726e+08   5.8039375e-02   5.8177611e-02
+     1         24   9.9555960e+07   3.3147584e+08   5.2500142e-02   1.1453442e-01
+     2         24   1.2132839e+08   2.0264746e+08   5.1935654e-02   1.6977009e-01
+     3         24   2.0441457e+08   0.0000000e+00   4.9871767e-02   2.2371126e-01
+Objective value: 5.0733223e+08
+Total time (s):  2.2663870e-01
+Lower bound: -inf
+Upper bound: 5.07332234598014354706e+08
+
+========== Trajectory 25 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         25   8.2033319e+07   4.3956726e+08   5.8626064e-02   5.8802878e-02
+     1         25   9.9555960e+07   3.3147584e+08   5.3674882e-02   1.1765965e-01
+     2         25   1.2132839e+08   2.0264746e+08   5.4098634e-02   1.7556719e-01
+     3         25   2.2475365e+08   0.0000000e+00   4.8819243e-02   2.2782063e-01
+Objective value: 5.2767132e+08
+Total time (s):  2.3064980e-01
+Lower bound: -inf
+Upper bound: 5.27671315095754206181e+08
+
+========== Trajectory 26 (press ENTER for next, q to quit) ==========
+SDDPBlock_traj.nc4 is a block file
+       |          |        Objective value        |               |    Total
+ Stage | Scenario |    Present    |    Future     |   Time (s)    |   time (s)
+---------------------------------------------------------------------------------
+     0         26   8.2033319e+07   4.3956726e+08   6.1495936e-02   6.1649470e-02
+     1         26   9.9555960e+07   3.3147584e+08   5.0390094e-02   1.1577817e-01
+     2         26   1.2132839e+08   2.0264746e+08   4.9639511e-02   1.6846725e-01
+     3         26   1.9578301e+08   0.0000000e+00   5.1541598e-02   2.2340535e-01
+Objective value: 4.9870068e+08
+Total time (s):  2.2611134e-01
+Lower bound: -inf
+Upper bound: 4.98700675054103195667e+08
+```
