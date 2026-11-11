@@ -19,6 +19,7 @@ import pypsa
 
 from configs.test_config import TestConfig
 from pypsa2smspp.transformation import Transformation
+from pypsa2smspp.stochastic_utils import total_load_timeseries
 from pypsa2smspp.network_correction import (
     clean_marginal_cost,
     clean_marginal_cost_intermittent,
@@ -213,30 +214,6 @@ def infer_stochastic_parameters(n: pypsa.Network) -> list[str]:
 
     return params
 
-
-def total_load_timeseries(n: pypsa.Network) -> pd.Series | pd.DataFrame:
-    """
-    Return total load over all load assets.
-
-    Deterministic output:
-        Series indexed by snapshots.
-
-    Stochastic output:
-        DataFrame indexed by snapshots, columns=scenarios.
-    """
-    if not hasattr(n, "loads_t") or "p_set" not in n.loads_t:
-        return pd.Series(0.0, index=n.snapshots)
-
-    p_set = n.loads_t.p_set
-
-    if p_set.empty:
-        return pd.Series(0.0, index=n.snapshots)
-
-    if isinstance(p_set.columns, pd.MultiIndex):
-        scenario_level = 0
-        return p_set.groupby(level=scenario_level, axis=1).sum()
-
-    return p_set.sum(axis=1)
 
 def clean_global_constraints(n, inplace=True):
     """
