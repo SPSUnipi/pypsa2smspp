@@ -13,6 +13,7 @@ class TransformationConfig:
         Lines_parameters (dict): Parameters for lines in the network.
         Links_parameters (dict): Parameters for links in the network.
         HydroUnitBlock_parameters (dict): Parameters for hydro units.
+        HydroSystemUnitBlock_parameters (dict): Future cost of the water of the hydro units.
         max_hours_stores_parameters (double): Maximum hours of storage capacity.
     """
     def __init__(self, *args, **kwargs):
@@ -75,12 +76,18 @@ class TransformationConfig:
             "StoringBatteryRho": lambda efficiency_store, snapshots_weighting: snapshots_weighting.iloc[0] * efficiency_store.iloc[0],
             "Demand": 0.0,
             "MinStorage": 0.0,
-            "MaxStorage": lambda p_nom, p_max_pu, max_hours: p_nom * p_max_pu * max_hours,
+            # per MW of p_nom when extendable, as MaxPower and MinPower, the
+            # design (or the scale) giving power and energy together
+            "MaxStorage": lambda p_nom, p_max_pu, max_hours, p_nom_extendable: (p_nom * p_max_pu * max_hours).where(~p_nom_extendable, p_max_pu * max_hours),
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda p: p[0][0],
             "InitialStorage": lambda cyclic_state_of_charge, state_of_charge_initial: -1 if cyclic_state_of_charge.values else state_of_charge_initial,
-            "Cost": lambda marginal_cost: abs(marginal_cost),
+            # "Cost" is a price on the net injection p^ac, paid for the energy
+            # drawn and earned for the energy delivered (- Cost p^ac in the
+            # objective), PyPSA's marginal cost is on the dispatch only: they
+            # agree when the unit never draws [see Transformation]
+            "Cost": lambda marginal_cost: -marginal_cost,
             # "BatteryInvestmentCost": lambda capital_cost: capital_cost,
             # "ConverterInvestmentCost": 0.0,
             # "BatteryMaxCapacityDesign": lambda p_nom, p_nom_extendable, p_nom_max: p_nom_max.replace(np.inf, 1e7).item() if p_nom_extendable.item() else p_nom.item(),
@@ -104,7 +111,9 @@ class TransformationConfig:
             "MaxSecondaryPower": 0.0,
             # "InitialPower": lambda e_initial, max_hours: (e_initial / max_hours).iloc[0],
             "InitialStorage": lambda e_initial, e_cyclic: -1 if e_cyclic.values else e_initial,
-            "Cost": lambda marginal_cost: abs(marginal_cost),
+            # PyPSA's marginal_cost * p on the net power of the Store is
+            # - Cost p^ac, "Cost" being a price on the net injection
+            "Cost": lambda marginal_cost: -marginal_cost,
             }
 
         self.Lines_parameters = {
@@ -112,7 +121,14 @@ class TransformationConfig:
             "EndLine": lambda end_line_idx: end_line_idx.values,
             "MinPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: - (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
             "MaxPowerFlow": lambda s_nom, s_max_pu, s_nom_extendable: (s_nom * s_max_pu).where(~s_nom_extendable, s_max_pu),
-            "LineSusceptance": lambda s_nom: np.zeros_like(s_nom),
+            # the AC lines obey Kirchhoff's voltage law as in PyPSA, whose
+            # flows are f = ( theta_0 - theta_1 ) / x_pu_eff; a line with no
+            # reactance is a transport one
+            "LineSusceptance": lambda x_pu_eff: np.where(
+                np.asarray(x_pu_eff, dtype=float) > 0,
+                1.0 / np.where(np.asarray(x_pu_eff, dtype=float) > 0,
+                               np.asarray(x_pu_eff, dtype=float), 1.0),
+                0.0),
             "Efficiency": lambda s_nom: np.ones_like(s_nom),
             "NetworkCost": lambda s_nom: np.zeros_like(s_nom),
             }
@@ -132,7 +148,7 @@ class TransformationConfig:
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "StartArc": lambda p_nom: np.array([0, 0, 0]),
             "EndArc": lambda p_nom: np.array([1, 1, 1]),
-            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
+            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours).values.transpose(),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow, snapshots_weighting: (inflow.values * snapshots_weighting.values).transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
@@ -166,6 +182,14 @@ class TransformationConfig:
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
         
+        # the future cost of the water of the HydroSystemUnitBlock [see
+        # hydro_system in Transformation], a PolyhedralFunction with no row:
+        # the scalars written in its group, by default the bound 0, so that
+        # it adds nothing to the cost (with no bound it would be -inf)
+        self.HydroSystemUnitBlock_parameters = {
+            "PolyFunction_lb": 0.0,
+        }
+
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
@@ -191,6 +215,14 @@ class TransformationConfig:
         
         self.NuclearUnitBlock_inverse = self.ThermalUnitBlock_inverse
 
+        # the first generator of a ConversionUnitBlock is the input of the
+        # link, whose power is - p0, per MW of the design if the
+        # InvestmentBlock scales the unit
+        self.ConversionUnitBlock_inverse = {
+            "p_nom": lambda designvariable, modulesize, scaled: designvariable * (modulesize if scaled else 1.0),
+            "p": lambda activepower, designvariable, scaled: -np.atleast_2d(activepower)[0] * (designvariable if scaled else 1.0),
+            }
+
         self.HydroUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,
             "p_dispatch": lambda activepower: activepower[0],
@@ -199,6 +231,12 @@ class TransformationConfig:
             }
         
         # TODO manage them as stores (or distinguish, but probably storage units wil always be treated as hydrounitblocks)
+        # a StorageUnit has its own names for what a Store calls e_nom and e
+        self.BatteryUnitBlock_StorageUnit_inverse = {
+            "p": lambda activepower: activepower,
+            "state_of_charge": lambda storagelevel: storagelevel,
+            }
+
         self.BatteryUnitBlock_inverse = {
             "e_nom": lambda designvariable: designvariable,
             # "p_dispatch": lambda activepower: np.maximum(activepower, 0),
