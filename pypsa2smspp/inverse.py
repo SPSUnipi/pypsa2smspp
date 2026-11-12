@@ -56,7 +56,7 @@ def component_definition(n, unit_block: dict) -> str:
 
 
 def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_name=None,
-                      row=None):
+                      row=None, n=None):
     """
     Evaluates a callable inverse function by extracting arguments from unit block
     or network static dataframe.
@@ -129,7 +129,14 @@ def evaluate_function(func, normalized_keys, unit_block, df, key=None, scenario_
                     f"while reconstructing '{key}'."
                 )
 
-            args.append(row[eff_col])
+            dynamic = n.links_t.get(eff_col) if n is not None else None
+            column = ((scenario_name, unit_name)
+                      if isinstance(df.index, pd.MultiIndex) else unit_name)
+            if dynamic is not None and column in dynamic.columns:
+                args.append(dynamic[column].reindex(n.snapshots)
+                            .fillna(row[eff_col]).to_numpy(dtype=float))
+            else:
+                args.append(row[eff_col])
             continue
 
         # Standard dataframe lookup
@@ -156,6 +163,13 @@ def dataarray_components(n, value, component, unit_block, key):
 
     value = np.asarray(value)
     unit_name = unit_block["name"]
+
+    # Nominal capacities are static even when a solver repeats them in time.
+    if key in {"p_nom", "e_nom", "s_nom"} and value.size:
+        flat = value.ravel()
+        if not np.allclose(flat, flat[0], equal_nan=True):
+            raise ValueError(f"Nominal capacity {key} varies in time for {unit_name}")
+        value = np.asarray(flat[0])
 
     if value.ndim == 0:
         # scalar -> one value for this unit: ('name',)
@@ -231,6 +245,7 @@ def block_to_dataarrays(n, unit_name, unit_block, component, config, scenario_na
                 df,
                 key=key,
                 scenario_name=scenario_name,
+                n=n,
             )
             if isinstance(value, np.ndarray) and value.ndim == 2 and all(dim > 1 for dim in value.shape):
                 value = value.sum(axis=0)
@@ -389,7 +404,7 @@ def stacked_block_to_dataarrays(n, unit_block, component, config, scenario_names
         for key, func in funcs.items():
             value = evaluate_function(func, normalized_keys, temp_block, df,
                                       key=key, scenario_name=scenario_name,
-                                      row=rows[scenario_name])
+                                      row=rows[scenario_name], n=n)
             if (isinstance(value, np.ndarray) and value.ndim == 2
                     and all(dim > 1 for dim in value.shape)):
                 value = value.sum(axis=0)

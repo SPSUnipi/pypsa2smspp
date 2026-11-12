@@ -1642,7 +1642,12 @@ class Transformation:
                         design_value = design_matrix
                 i_ext += 1
             else:
-                design_value = self.networkblock["Lines"]["variables"]["MaxPowerFlow"]["value"][i]
+                # A fixed asset's capacity is not its (possibly time-varying)
+                # available flow limit. Use the preprocessed nominal capacity.
+                reference = getattr(self, "n_preprocessed", n)
+                table = reference.links if block_type == "link" else reference.lines
+                nominal = "p_nom" if block_type == "link" else "s_nom"
+                design_value = float(table.loc[names[i], nominal])
     
             flow_value = flow_matrix[:, i]
     
