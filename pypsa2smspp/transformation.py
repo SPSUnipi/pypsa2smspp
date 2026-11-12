@@ -960,6 +960,9 @@ class Transformation:
             dense_cache=getattr(self, "_dense_cache", None)
         )
         
+        if attr_name == "IntermittentUnitBlock_parameters":
+            self._convert_generation_energy_bounds(converted_dict, n)
+
         dimensions = None
         if attr_name == "BatteryUnitBlock_parameters":
             # the Cost of a BatteryUnitBlock is a price on the net injection,
@@ -1064,6 +1067,31 @@ class Transformation:
                 "their durations being given in hours."
             )
         return float(weights[0])
+
+    @staticmethod
+    def _convert_generation_energy_bounds(variables, n):
+        """Convert PyPSA's weighted energy limits to sums of snapshot powers.
+
+        IntermittentUnitBlock uses unit coefficients in its horizon constraint,
+        whereas PyPSA uses snapshot_weightings.generators (not objective).
+        A scalar bound can represent this exactly only for uniform weights.
+        """
+        bounds = [variables[key] for key in ("MinGeneration", "MaxGeneration")
+                  if key in variables]
+        if not any(np.isfinite(np.asarray(b["value"], dtype=float)).any()
+                   for b in bounds):
+            return
+        weights = n.snapshot_weightings.loc[n.snapshots, "generators"].to_numpy(dtype=float)
+        if (weights.size == 0 or not np.isfinite(weights).all()
+                or np.any(weights <= 0)
+                or not np.allclose(weights, weights[0], rtol=1e-12, atol=0)):
+            raise ValueError(
+                "Generator e_sum_min/e_sum_max require uniform, positive "
+                "snapshot_weightings.generators for IntermittentUnitBlock; "
+                "nonuniform weights need a weighted energy constraint."
+            )
+        for bound in bounds:
+            bound["value"] = np.asarray(bound["value"], dtype=float) / weights[0]
 
     ### 6 ###
     def add_demand(self, n):
