@@ -56,11 +56,11 @@ jobs:
 
     - name: Install smspp-project from conda-forge
       run: |
-        conda install -c conda-forge "smspp-project>=0.7.1" "netcdf-cxx4<=4.3.2" -y
+        conda install -c conda-forge "smspp-project>=0.7.1" "pandas=${{ matrix.pandas-version }}.*" "netcdf4>=1.7.5" "netcdf-cxx4<=4.3.2" -y
 
     - name: Install package and dependencies
       run: |
-        pip install .[dev] "pySMSpp @ git+https://github.com/SPSUnipi/pySMSpp.git@main" "pandas==${{ matrix.pandas-version }}.*"
+        pip install .[dev] "pySMSpp @ git+https://github.com/SPSUnipi/pySMSpp.git@main"
 
     - name: List environment
       run: |
