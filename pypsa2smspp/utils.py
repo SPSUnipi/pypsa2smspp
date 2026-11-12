@@ -1890,7 +1890,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
 
     # "ConverterInvestmentCost"
     if "ConverterInvestmentCost" not in b:
-        b["ConverterInvestmentCost"] = lambda e_nom_extendable: 1e-12 if bool(first_scalar(e_nom_extendable)) else 0.0
+        b["ConverterInvestmentCost"] = lambda e_nom_extendable: 0.0  # no converter: a Store of PyPSA has none
 
     # "BatteryMaxCapacityDesign"
     if "BatteryMaxCapacityDesign" not in b:

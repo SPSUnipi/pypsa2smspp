@@ -95,8 +95,9 @@ class TransformationConfig:
 
         self.BatteryUnitBlock_store_parameters = {
             # "Kappa": 1.0,
-            "MaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable, capital_cost, e_nom_max: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu.where(capital_cost != 0, (e_nom_max * e_max_pu / max_hours).where(~((e_max_pu == 0) & np.isinf(e_nom_max)), 0.0))),
-            "MinPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: - (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
+            # a Store of PyPSA has no power limit: only its levels and the lines bound it
+            "MaxPower": lambda e_max_pu: np.inf,
+            "MinPower": lambda e_max_pu: -np.inf,
             # "ConverterMaxPower": lambda e_nom, e_max_pu, max_hours, e_nom_extendable: (e_nom * e_max_pu / max_hours).where(~e_nom_extendable, e_max_pu),
             # "DeltaRampUp": np.nan,
             # "DeltaRampDown": np.nan,
