@@ -289,7 +289,7 @@ def test_network_cost_not_one_value_is_refused() -> None:
                                    "Link", None)
 
     n = network()
-    n.snapshot_weightings.loc[:, "objective"] = [1.0, 2.0, 3.0]
+    n.snapshot_weightings["objective"] = [1.0, 2.0, 3.0]
     with pytest.raises(ValueError):
         cost(n)
 

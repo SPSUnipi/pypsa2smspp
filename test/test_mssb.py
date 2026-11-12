@@ -628,7 +628,13 @@ def test_investment_outside_with_a_conversion_unit(stochastic_type,
         fp_solution="smspp_{name}_solution.nc",
         pysmspp_options={"B": "InnerBCfg.txt"},
     )
-    transformation.run(n, verbose=False)
+    try:
+        transformation.run(n, verbose=False)
+    except ValueError as e:
+        if "not present in Solver factory" in str(e):
+            pytest.skip("this SMS++ has not the Solver of "
+                        + INVESTMENT_OUTSIDE_CONFIGFILE)
+        raise
     obtained = float(transformation.result.objective_value)
 
     solar = n.generators.loc[
