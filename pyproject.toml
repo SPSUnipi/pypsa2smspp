@@ -75,7 +75,7 @@ filterwarnings = [
     # Report dependency deprecations without failing tests; keep our code strict.
     # 'default::DeprecationWarning:^(pypsa|pandas|linopy|xarray|pysmspp)(\.|$)',
     'default::FutureWarning:^(pypsa|pandas|linopy|xarray|pysmspp)(\.|$)',
-    'default::pandas.errors.Pandas4Warning:^(pypsa|pandas|linopy|xarray|pysmspp)(\.|$)',
+    # Pandas4Warning is registered conditionally in test/conftest.py (pandas 3 only).
     # raised by linopy inside PyPSA, about its semantics to come (v1)
     'ignore::linopy.config.LinopySemanticsWarning',
 ]
