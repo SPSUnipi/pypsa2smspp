@@ -1,0 +1,37 @@
+temp_test_sddp.nc is a block file
+ SDDP backward  iteration 0 value 1.25059e+10 time  0.840000s wall, 10.470000s user + 0.650000s system = 11.120000s CPU (1323.8%)
+ ACCURACY 0.0530564 Backward 1.25059e+10 Forward 1.32066e+10 p_iter 0 accuracy 0.0530564 GlobalTimer  1.300000s wall, 17.080000s user + 1.140000s system = 18.220000s CPU (1401.5%)
+
+ SDDP backward  iteration 1 value 1.25059e+10 time  0.380000s wall, 5.650000s user + 0.370000s system = 6.020000s CPU (1584.2%)
+ ACCURACY 0.0265702 Backward 1.25059e+10 Forward 1.28472e+10 p_iter 1 accuracy 0.0265702 GlobalTimer  2.010000s wall, 27.660000s user + 1.880000s system = 29.540000s CPU (1469.7%)
+
+ SDDP backward  iteration 2 value 1.25059e+10 time  0.490000s wall, 6.980000s user + 0.440000s system = 7.420000s CPU (1514.3%)
+ ACCURACY 0.0349999 Backward 1.25059e+10 Forward 1.29595e+10 p_iter 2 accuracy 0.0349999 GlobalTimer  2.810000s wall, 39.280000s user + 2.580000s system = 41.860000s CPU (1489.7%)
+
+ SDDP backward  iteration 3 value 1.25059e+10 time  0.400000s wall, 5.960000s user + 0.360000s system = 6.320000s CPU (1580.0%)
+ ACCURACY 0.0220188 Backward 1.25059e+10 Forward 1.27875e+10 p_iter 3 accuracy 0.0220188 GlobalTimer  3.450000s wall, 48.940000s user + 3.130000s system = 52.070000s CPU (1509.3%)
+
+ SDDP backward  iteration 4 value 1.25059e+10 time  0.480000s wall, 6.860000s user + 0.510000s system = 7.370000s CPU (1535.4%)
+ ACCURACY 0.0222224 Backward 1.25059e+10 Forward 1.27901e+10 p_iter 4 accuracy 0.0222224 GlobalTimer  4.200000s wall, 59.710000s user + 3.950000s system = 63.660000s CPU (1515.7%)
+
+ SDDP backward  iteration 5 value 1.25059e+10 time  0.400000s wall, 6.060000s user + 0.360000s system = 6.420000s CPU (1605.0%)
+ ACCURACY 0.0219539 Backward 1.25059e+10 Forward 1.27866e+10 p_iter 5 accuracy 0.0219539 GlobalTimer  4.910000s wall, 70.270000s user + 4.650000s system = 74.920000s CPU (1525.9%)
+
+ SDDP backward  iteration 6 value 1.25308e+10 time  0.450000s wall, 6.380000s user + 0.490000s system = 6.870000s CPU (1526.7%)
+ ACCURACY 0.0106624 Backward 1.25308e+10 Forward 1.26658e+10 p_iter 6 accuracy 0.0106624 GlobalTimer  5.680000s wall, 81.360000s user + 5.510000s system = 86.870000s CPU (1529.4%)
+
+ SDDP backward  iteration 7 value 1.25517e+10 time  0.490000s wall, 6.670000s user + 0.460000s system = 7.130000s CPU (1455.1%)
+ ACCURACY 0.0277673 Backward 1.25517e+10 Forward 1.29102e+10 p_iter 7 accuracy 0.0277673 GlobalTimer  6.470000s wall, 92.540000s user + 6.280000s system = 98.820000s CPU (1527.4%)
+
+ SDDP backward  iteration 8 value 1.25517e+10 time  0.410000s wall, 5.960000s user + 0.410000s system = 6.370000s CPU (1553.7%)
+ ACCURACY 0.0219926 Backward 1.25517e+10 Forward 1.28339e+10 p_iter 8 accuracy 0.0219926 GlobalTimer  7.180000s wall, 103.020000s user + 6.990000s system = 110.010000s CPU (1532.2%)
+
+ SDDP backward  iteration 9 value 1.25517e+10 time  0.480000s wall, 7.040000s user + 0.550000s system = 7.590000s CPU (1581.2%)
+ ACCURACY 0.00850464 Backward 1.25517e+10 Forward 1.26593e+10 p_iter 9 accuracy 0.00850464 GlobalTimer  8.000000s wall, 114.810000s user + 8.070000s system = 122.880000s CPU (1536.0%)
+
+Backward value: 12551676192.926277161
+Forward value:  12659339330.338262558
+Terminated due to iter limit
+Peak CPU Usage: 1631.50 %
+Peak Memory Usage: 228.63 MB
+Total Time: 10.11 seconds
