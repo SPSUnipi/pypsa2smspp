@@ -449,7 +449,7 @@ class Transformation:
         self.configfile = configfile
         self.pysmspp_options = dict(pysmspp_options or {})
 
-        # internal state
+        # internal stat
         self.unitblocks = {}
         self.networkblock = {}
         self.investmentblock = {"Blocks": []}
@@ -529,6 +529,8 @@ class Transformation:
 
     def retrieve_solution(self, n, verbose: bool = True):
         if self.result is None:
+
+            
             raise ValueError("Optimization must be run before retrieving solution. Call optimize() first.")
 
         # PyPSA non ha un modello dati nativo per SDDP: skip del mapping,
@@ -3816,7 +3818,6 @@ class Transformation:
                 # Normalizza e valida i parametri SDDP:
                 # - snapshots_per_stage
                 # - top_path
-                # - benders_path
                 # normalize_sddp_parameters solleva ValueError con messaggi chiari
                 # se uno dei campi manca o è malformato.
                 sddp_parameters = mu.normalize_sddp_parameters(self.stochastic_parameters)
@@ -4456,7 +4457,7 @@ class Transformation:
     ) -> List[Path]:
         """
         Itera su tutti gli stage e per ciascuno:
-            1. Slide dellar ete agli snapshot dello stage;
+            1. Slice della rete agli snapshot dello stage;
             2. Generazione del Block_{stage_idx}.nc4;
         Restituisce la lista dei path generati, nello stesso ordine degli stage.
 
@@ -4740,10 +4741,10 @@ class Transformation:
 
     def convert_to_sddp_block(self, master, index_id, name_id):
         """
-        Aggiunge un SDDPBlock alla rete SMS++ (versione minimale).
+        Aggiunge un SDDPBlock alla rete SMS++.
 
         SDDPBlock
-        ├── AbstractPath (top-level, "OBBB" con second/third_group_index dal parser)
+        ├── AbstractPath (top-level)
         ├── ScenarioGenerator (DiscreteScenarioSet con la matrice scenari completa)
         ├── StochasticBlock_0
         │   ├── AbstractPath (path per ogni data mapping)
@@ -4981,7 +4982,7 @@ class Transformation:
             # -------------------------------------------------------------
             # 7b. BendersBFunction
             # -------------------------------------------------------------
-            # Nel notebook ha dimensioni NumNonzero, NumVar, NumRow (per ora 0)
+            # Nel notebook ha dimensioni NumNonzero, NumVar, NumRow
             # e contiene un AbstractPath interno + il blocco segnaposto.
             benders_b_func = Block().from_kwargs()
 

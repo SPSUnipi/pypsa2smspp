@@ -40,7 +40,7 @@ def normalize_sddp_parameters(
     L'utente fornisce solo il numero di snapshot per stadio
     (`snapshots_per_stage`). La lista dei periodi (uno per stadio, ciascuno
     con i suoi snapshot) viene derivata internamente da `make_sddp_periods`
-    a partire da `n.snapshots`.
+
 
     Returns
     -------
@@ -113,8 +113,7 @@ def normalize_sddp_parameters(
     if top_path is None:
         raise ValueError(
             "SDDP richiede 'top_path' in stochastic_parameters: "
-            "un dizionario con le chiavi 'K', 'second_group_index', "
-            "'third_group_index'."
+            "un dizionario con la chiave 'K'."
         )
 
     if not isinstance(top_path, dict):
@@ -2118,7 +2117,7 @@ def build_sddp_intermittent_mappings(
     di scenario dello stage nel campo MaxPower del proprio
     IntermittentUnitBlock, secondo la struttura:
 
-        mapping j (intermittente j):
+        mapping j (intermittente  j):
             SetFrom = Range [dss_start + j*T, dss_start + (j+1)*T)
             SetTo   = Range [0, T)
         dove T = time_horizon.
@@ -2255,7 +2254,7 @@ def build_sddp_benders_mapping(
 
 def build_sddp_stochastic_block_data(data_mappings):
     """
-    Assembla una lsita di data mapping nel payload dello StochasticBlock
+    Assembla una lista di data mapping nel payload dello StochasticBlock
     di uno stage SDDP.
     """
 
