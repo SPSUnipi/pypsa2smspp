@@ -156,9 +156,10 @@ class TransformationConfig:
             # "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
             # "MaxFlow": lambda p_nom, p_max_pu, max_hours: (np.array([(p_nom*p_max_pu*max_hours), (0.*p_max_pu)])).squeeze().transpose(),
             # the third arc is the spillway: it carries at most what flows in
-            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow, snapshots_weighting: np.column_stack(
+            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow, snapshots_weighting, efficiency_dispatch: np.column_stack(
                 np.broadcast_arrays(
-                    np.ravel(np.asarray((p_nom * max_hours * p_max_pu).clip(lower=inflow.sum().sum()), dtype=float)),
+                    # the turbine: the water of one instant at full power
+                    np.ravel(np.asarray(p_nom * p_max_pu, dtype=float)) * float(np.ravel(np.asarray(snapshots_weighting, dtype=float))[0]) / float(np.ravel(np.asarray(efficiency_dispatch, dtype=float))[0]),
                     0.0,
                     np.ravel(np.asarray(inflow, dtype=float)) * float(np.ravel(np.asarray(snapshots_weighting, dtype=float))[0]),
                     )
@@ -170,6 +171,10 @@ class TransformationConfig:
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*3, 1),
+            # the turbine produces exactly the power of the water it passes,
+            # as in PyPSA, where the water released without producing is the
+            # spillage; the pump and the spillway are not turbines
+            "ExactFlowToPower": lambda p_nom: np.array([1, 0, 0]),
             "ConstantTerm": lambda p_nom: np.full(len(p_nom)*3, 0),
             # the spillway carries no power, which is what tells the block
             # that the unit has one [see hydroblock_dimensions()]
