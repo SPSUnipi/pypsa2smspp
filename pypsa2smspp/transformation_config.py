@@ -13,6 +13,7 @@ class TransformationConfig:
         Lines_parameters (dict): Parameters for lines in the network.
         Links_parameters (dict): Parameters for links in the network.
         HydroUnitBlock_parameters (dict): Parameters for hydro units.
+        HydroSystemUnitBlock_parameters (dict): Future cost of the water of the hydro units.
         max_hours_stores_parameters (double): Maximum hours of storage capacity.
     """
     def __init__(self, *args, **kwargs):
@@ -148,16 +149,17 @@ class TransformationConfig:
             # "EndArc": lambda p_nom: np.full(len(p_nom)*2, 1),
             "StartArc": lambda p_nom: np.array([0, 0, 0]),
             "EndArc": lambda p_nom: np.array([1, 1, 1]),
-            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours),
+            "MaxVolumetric": lambda p_nom, max_hours: (p_nom * max_hours).values.transpose(),
             "MinVolumetric": 0.0,
             "Inflows": lambda inflow, snapshots_weighting: (inflow.values * snapshots_weighting.values).transpose(),
             # "MaxFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([max(100 * inflow.values.max(), (p_nom / efficiency_dispatch).values.max()), 0.])).squeeze().transpose(),
             # "MinFlow": lambda inflow, p_nom, efficiency_dispatch: (np.array([0., min(-100 * inflow.values.max(), -(p_nom / efficiency_dispatch).values.max())])).squeeze().transpose(),
             # "MaxFlow": lambda p_nom, p_max_pu, max_hours: (np.array([(p_nom*p_max_pu*max_hours), (0.*p_max_pu)])).squeeze().transpose(),
             # the third arc is the spillway: it carries at most what flows in
-            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow, snapshots_weighting: np.column_stack(
+            "MaxFlow": lambda p_nom, p_max_pu, max_hours, inflow, snapshots_weighting, efficiency_dispatch: np.column_stack(
                 np.broadcast_arrays(
-                    np.ravel(np.asarray((p_nom * max_hours * p_max_pu).clip(lower=inflow.sum().sum()), dtype=float)),
+                    # the turbine: the water of one instant at full power
+                    np.ravel(np.asarray(p_nom * p_max_pu, dtype=float)) * float(np.ravel(np.asarray(snapshots_weighting, dtype=float))[0]) / float(np.ravel(np.asarray(efficiency_dispatch, dtype=float))[0]),
                     0.0,
                     np.ravel(np.asarray(inflow, dtype=float)) * float(np.ravel(np.asarray(snapshots_weighting, dtype=float))[0]),
                     )
@@ -169,6 +171,10 @@ class TransformationConfig:
             # "PrimaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             # "SecondaryRho": lambda p_nom: np.full(len(p_nom)*3, 0.),
             "NumberPieces": lambda p_nom: np.full(len(p_nom)*3, 1),
+            # the turbine produces exactly the power of the water it passes,
+            # as in PyPSA, where the water released without producing is the
+            # spillage; the pump and the spillway are not turbines
+            "ExactFlowToPower": lambda p_nom: np.array([1, 0, 0]),
             "ConstantTerm": lambda p_nom: np.full(len(p_nom)*3, 0),
             # the spillway carries no power, which is what tells the block
             # that the unit has one [see hydroblock_dimensions()]
@@ -182,6 +188,14 @@ class TransformationConfig:
             "InitialVolumetric": lambda state_of_charge_initial, cyclic_state_of_charge: -1 if cyclic_state_of_charge.values else state_of_charge_initial.values
         }
         
+        # the future cost of the water of the HydroSystemUnitBlock [see
+        # hydro_system in Transformation], a PolyhedralFunction with no row:
+        # the scalars written in its group, by default the bound 0, so that
+        # it adds nothing to the cost (with no bound it would be -inf)
+        self.HydroSystemUnitBlock_parameters = {
+            "PolyFunction_lb": 0.0,
+        }
+
         self.InvestmentBlock_parameters = {
             "Cost": lambda capital_cost: capital_cost.values,
             "LowerBound": lambda p_nom_min: p_nom_min,
@@ -206,6 +220,14 @@ class TransformationConfig:
             }
         
         self.NuclearUnitBlock_inverse = self.ThermalUnitBlock_inverse
+
+        # the first generator of a ConversionUnitBlock is the input of the
+        # link, whose power is - p0, per MW of the design if the
+        # InvestmentBlock scales the unit
+        self.ConversionUnitBlock_inverse = {
+            "p_nom": lambda designvariable, modulesize, scaled: designvariable * (modulesize if scaled else 1.0),
+            "p": lambda activepower, designvariable, scaled: -np.atleast_2d(activepower)[0] * (designvariable if scaled else 1.0),
+            }
 
         self.HydroUnitBlock_inverse = {
             "p_nom": lambda designvariable: designvariable,

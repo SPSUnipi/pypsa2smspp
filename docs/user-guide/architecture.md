@@ -121,7 +121,7 @@ It needs the investment to go through an `InvestmentBlock`, i.e.
 
 Inside the `UCBlock`, pypsa2smspp adds:
 
-- unit blocks for PyPSA components, such as `IntermittentUnitBlock`, `ThermalUnitBlock` (or `NuclearUnitBlock` for the carriers listed in `nuclear_units`), `BatteryUnitBlock`, `HydroUnitBlock`, and `SlackUnitBlock`;
+- unit blocks for PyPSA components, such as `IntermittentUnitBlock`, `ThermalUnitBlock` (or `NuclearUnitBlock` for the carriers listed in `nuclear_units`), `BatteryUnitBlock`, `HydroUnitBlock` (all of them in a single `HydroSystemUnitBlock`, with the future cost of their water, when `hydro_system` is set), and `SlackUnitBlock`;
 - a network representation for lines and links, using SMS++ line variables and, when needed, a `DesignNetworkBlock`;
 - active-power demand and other UC-level variables derived from the PyPSA network.
 
