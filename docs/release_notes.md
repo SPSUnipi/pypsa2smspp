@@ -14,6 +14,7 @@
 
 ### Minor Changes and Bug Fixes
 
+* Write a Store with no power limit and no converter, its power being bounded by its levels and by the Links around it, and the turbine of a StorageUnit with `ExactFlowToPower`, so that SMS++ solves the linear program of PyPSA [PR #70](https://github.com/SPSUnipi/pypsa2smspp/pull/70)
 * Write `MaxVolumetric` and `MinVolumetric` of a hydro unit as `[NumberReservoirs][TimeHorizon]`, the order of `HydroUnitBlock`; they were transposed, which SMS++ corrected only with a single reservoir [PR #71](https://github.com/SPSUnipi/pypsa2smspp/pull/71)
 * Pay the marginal cost of a Store on the energy it delivers, as PyPSA does: it was earned, the `Cost` of a `BatteryUnitBlock` being a price on the net injection; a StorageUnit that can store and has a marginal cost is refused, since PyPSA charges that cost on the dispatch only [PR #72](https://github.com/SPSUnipi/pypsa2smspp/pull/72)
 * Enable future warnings as errors [PR #67](https://github.com/SPSUnipi/pypsa2smspp/pull/67)
