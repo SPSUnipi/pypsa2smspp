@@ -49,7 +49,7 @@ PROB = {
 DEFAULT_STOCHASTIC_PARAMETERS = (
     "demand",
     "renewable_maxpower",
-    "renewable_marginal_cost",
+    # "renewable_marginal_cost",
 )
 
 TSSB_APPLICATION_INI = "application_tssb_test.ini"
