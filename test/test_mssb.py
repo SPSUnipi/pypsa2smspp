@@ -12,6 +12,8 @@ leaf, which is what makes the optimum of the two directly comparable.
 """
 from __future__ import annotations
 
+import copy
+import re
 import shutil
 from pathlib import Path
 
@@ -566,6 +568,21 @@ def _leaves_objective(n: pypsa.Network, solar=None) -> float:
     return objective
 
 
+def _highs_instead_of_gurobi(workdir: Path) -> str:
+    """
+    A copy of the TSSBlock configurations of pySMSpp that names HiGHS where
+    they name Gurobi, for an SMS++ built without Gurobi (the one of
+    conda-forge): the path of the copy of INVESTMENT_OUTSIDE_CONFIGFILE.
+    """
+    source = Path(pysmspp.__file__).parent / "data" / "configs" / "TSSBlock"
+    target = workdir / "TSSBlock-highs"
+    shutil.copytree(source, target, dirs_exist_ok=True)
+    for config in target.glob("*.txt"):
+        config.write_text(re.sub(r"^GRBMILPSolver", "HiGHSMILPSolver",
+                                 config.read_text(), flags=re.MULTILINE))
+    return str(target / Path(INVESTMENT_OUTSIDE_CONFIGFILE).name)
+
+
 @pytest.mark.skipif(
     not solver_reads_conversion_unit(),
     reason="the SMS++ solver does not know the ConversionUnitBlock",
@@ -628,13 +645,18 @@ def test_investment_outside_with_a_conversion_unit(stochastic_type,
         fp_solution="smspp_{name}_solution.nc",
         pysmspp_options={"B": "InnerBCfg.txt"},
     )
+    spare, pristine = copy.deepcopy(transformation), n.copy()
     try:
         transformation.run(n, verbose=False)
     except ValueError as e:
-        if "not present in Solver factory" in str(e):
-            pytest.skip("this SMS++ has not the Solver of "
-                        + INVESTMENT_OUTSIDE_CONFIGFILE)
-        raise
+        # the configuration names Gurobi, which this build of SMS++ has not
+        # (the one of conda-forge leaves it out): HiGHS takes its place, in
+        # a Transformation and a network that the failed run has not touched
+        if "not present in Solver factory" not in str(e):
+            raise
+        transformation, n = spare, pristine
+        transformation.configfile = _highs_instead_of_gurobi(workdir)
+        transformation.run(n, verbose=False)
     obtained = float(transformation.result.objective_value)
 
     solar = n.generators.loc[
