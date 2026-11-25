@@ -49,7 +49,7 @@ PROB = {
 DEFAULT_STOCHASTIC_PARAMETERS = (
     "demand",
     "renewable_maxpower",
-    # "renewable_marginal_cost",
+    "renewable_marginal_cost",
 )
 
 TSSB_APPLICATION_INI = "application_tssb_test.ini"
@@ -170,6 +170,7 @@ def apply_tssb_stochastic_data(
     load = n.loads_t.p_set.copy()
     pmaxpu = n.generators_t.p_max_pu.copy()
     marginal = n.generators.marginal_cost.copy()
+    is_slack = n.generators.carrier.isin(["slack"]).to_numpy()
     inflow = n.storage_units_t.inflow.copy()
 
     n.set_scenarios(PROB)
@@ -196,14 +197,17 @@ def apply_tssb_stochastic_data(
                 n.generators_t.p_max_pu[scenario] = pmaxpu_value[scenario]
 
         elif st_p == "renewable_marginal_cost":
+            # the slack cost is a penalty, the same in every scenario
             marginal_value = {
                 "low": marginal,
-                "med": marginal * 2,
-                "high": marginal * 4,
+                "med": marginal.where(is_slack, marginal * 2),
+                "high": marginal.where(is_slack, marginal * 4),
             }
 
             for scenario in SCENARIOS:
-                n.generators.marginal_cost[scenario] = marginal_value[scenario]
+                n.generators.loc[scenario, "marginal_cost"] = (
+                    marginal_value[scenario].to_numpy()
+                )
 
         elif st_p == "hydro_inflow":
             inflow_value = {
