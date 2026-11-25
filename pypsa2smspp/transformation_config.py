@@ -81,6 +81,10 @@ class TransformationConfig:
             "MaxStorage": lambda p_nom, p_max_pu, max_hours, p_nom_extendable: (p_nom * p_max_pu * max_hours).where(~p_nom_extendable, p_max_pu * max_hours),
             "MaxPrimaryPower": 0.0,
             "MaxSecondaryPower": 0.0,
+            # no converter limit: PyPSA bounds the store and the dispatch of a
+            # StorageUnit each on its own, and a nonpositive ConverterMaxPower
+            # is no limit
+            "ConverterMaxPower": lambda p_max_pu: 0.0 * p_max_pu,
             # "InitialPower": lambda p: p[0][0],
             "InitialStorage": lambda cyclic_state_of_charge, state_of_charge_initial: -1 if cyclic_state_of_charge.values else state_of_charge_initial,
             # "Cost" is a price on the net injection p^ac, paid for the energy
