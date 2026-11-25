@@ -91,7 +91,7 @@ STOCHASTIC_PARAMETER_REGISTRY = {
         "mapping_kind": "unitblock_timeseries",
         "pypsa_component": "Generator",
         "field": "marginal_cost",
-        "asset_filter": "intermittent_generators",
+        "asset_filter": "unitblock_intermittent_generators",
         "unitblock_type": "IntermittentUnitBlock",
         "smspp_parameter": "ActivePowerCost",
         "function_name": "IntermittentUnitBlock::set_active_power_cost",

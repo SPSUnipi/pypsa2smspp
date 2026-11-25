@@ -687,6 +687,15 @@ def get_stochastic_parameter_asset_names(
     """
     asset_filter = spec.get("asset_filter", None)
 
+    if asset_filter == "unitblock_intermittent_generators":
+        # with thermal units off, every generator but the slack ones
+        if not enable_thermal_units:
+            return get_physical_generators_excluding_carriers(
+                n=n,
+                carriers=["slack", "load_shedding", "load shedding", "load"],
+            )
+        asset_filter = "intermittent_generators"
+
     if asset_filter == "intermittent_generators":
         intermittent = get_effective_intermittent_carriers(
             intermittent_carriers=intermittent_carriers,

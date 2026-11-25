@@ -528,15 +528,18 @@ def test_investment_outside_matches_the_flat_optimum(stochastic_type):
         fp_solution="smspp_{name}_solution.nc",
         pysmspp_options={"B": "InnerBCfg.txt"},
     )
+    spare, pristine = copy.deepcopy(transformation), n.copy()
     try:
         transformation.run(n, verbose=False)
     except ValueError as e:
-        # the configuration names a Solver that this build of SMS++ has not
-        # (it asks for GUROBI, which the build of conda-forge leaves out)
-        if "not present in Solver factory" in str(e):
-            pytest.skip("this SMS++ has not the Solver of "
-                        + INVESTMENT_OUTSIDE_CONFIGFILE)
-        raise
+        # the configuration names Gurobi, which this build of SMS++ has not
+        # (the one of conda-forge leaves it out): HiGHS takes its place, in
+        # a Transformation and a network that the failed run has not touched
+        if "not present in Solver factory" not in str(e):
+            raise
+        transformation, n = spare, pristine
+        transformation.configfile = _highs_instead_of_gurobi(workdir)
+        transformation.run(n, verbose=False)
     obtained = float(transformation.result.objective_value)
 
     # the configuration asks the bundle for a relative accuracy of 1e-6

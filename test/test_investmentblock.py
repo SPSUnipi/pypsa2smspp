@@ -193,21 +193,39 @@ def run_investment_block(xlsx_path: Path, multi_carrier: bool = False) -> None:
         pass
 
 
+# the networks that the test cannot run, with the reason
+INVESTMENT_UNSUPPORTED = {
+    "chpx_3n_3g_1clmod.xlsx": (
+        "PyPSA does not build the reference of a modular committable link "
+        "with linearized_unit_commitment"),
+}
+
+# the networks whose master the HiGHS of some builds does not solve: they
+# fail there and pass where it does
+INVESTMENT_HIGHS_MASTER = {
+    "1n_1c_1guc.xlsx", "uc_1n_2c_3g.xlsx", "nuc_1n_3c_6g.xlsx",
+    "sector_1n_1cn_1gnext.xlsx", "2n_1c_1gext_1bext_2lext.xlsx",
+}
+
+
 @pytest.mark.parametrize("multi_carrier", BUS_FORMS, ids=BUS_FORM_IDS)
 @pytest.mark.parametrize("test_case_xlsx", test_cases["xlsx_paths"], ids=test_cases["ids"])
-def test_investment(test_case_xlsx, multi_carrier):
+def test_investment(test_case_xlsx, multi_carrier, request):
     name_l = test_case_xlsx.name.lower()
-    # a modular asset is extendable, and the InvestmentBlock writes it with
-    # an integer design, the number of its modules
-    if ("ml" in name_l or "sector" in name_l
-            or ("ext" not in name_l and not name_l.startswith("mod_"))):
-        pytest.skip("Skipping case for investment block")
     # an extendable committable link with ramps is a unit of one MW scaled by
     # the design, whose relaxation is not the big-M one of PyPSA, and one on
     # before the horizon at p_init has a power per MW of a design not known:
     # both are checked in the UCBlock form [see test_ucblock]
     if name_l.endswith(("_ramp.xlsx", "_ramp_on.xlsx")):
         pytest.skip("Skipping case for investment block")
+    if name_l in INVESTMENT_UNSUPPORTED:
+        pytest.skip(INVESTMENT_UNSUPPORTED[name_l])
+    if name_l in INVESTMENT_HIGHS_MASTER:
+        request.applymarker(pytest.mark.xfail(
+            reason="the active set QP solver of HiGHS does not solve the "
+                   "master of the bundle, or the build of SMS++ asks for "
+                   "intHomogeneousDirection",
+            strict=False))
 
     run_investment_block(test_case_xlsx, multi_carrier)
 
