@@ -2128,8 +2128,7 @@ def apply_expansion_overrides(IntermittentUnitBlock_parameters=None, BatteryUnit
     
     # --- BatteryUnitBlock of a StorageUnit ---
     # p_nom sizes power and energy together, and so does x_battery, which
-    # multiplies the data per MW; with no design and no ConverterMaxPower of
-    # its own the converter follows it
+    # multiplies the data per MW
     su = BatteryUnitBlock_parameters
     if su is not None:
         if "BatteryInvestmentCost" not in su:
