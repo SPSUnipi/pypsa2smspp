@@ -425,7 +425,7 @@ def reduce_snapshots_and_scale_costs(
             net.snapshot_weightings = _slice_rows_by_snapshots(sw, new_snapshots)
 
             if adjust_snapshot_weightings and "objective" in net.snapshot_weightings.columns:
-                net.snapshot_weightings.loc[:, "objective"] = (
+                net.snapshot_weightings["objective"] = (
                     net.snapshot_weightings["objective"] * (old_len / new_len)
                 )
 
@@ -483,7 +483,7 @@ def reduce_snapshots_and_scale_costs(
             df = getattr(net, tab)
 
             if isinstance(df, pd.DataFrame) and "capital_cost" in df.columns:
-                df.loc[:, "capital_cost"] = df["capital_cost"] * scale_capex
+                df["capital_cost"] = df["capital_cost"] * scale_capex
 
     return net
 

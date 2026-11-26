@@ -130,20 +130,11 @@ class NetworkDefinition:
             # Weightings
             default_weight = self.parser.weight
     
-            if "objective" in df.columns:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "objective"] = df["objective"].to_numpy()
-            else:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "objective"] = default_weight
-    
-            if "generators" in df.columns:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "generators"] = df["generators"].to_numpy()
-            else:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "generators"] = default_weight
-    
-            if "stores" in df.columns:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "stores"] = df["stores"].to_numpy()
-            else:
-                self.n.snapshot_weightings.loc[self.n.snapshots, "stores"] = default_weight
+            for column in ("objective", "generators", "stores"):
+                self.n.snapshot_weightings[column] = (
+                    df[column].to_numpy(dtype=float)
+                    if column in df.columns else float(default_weight)
+                )
     
             LOGGER.info(
                 "Defined %d snapshots from Excel sheet 'snapshots'.",

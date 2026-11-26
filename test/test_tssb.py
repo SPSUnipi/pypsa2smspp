@@ -225,6 +225,22 @@ def apply_tssb_stochastic_data(
     return n
 
 
+def test_stochastic_marginal_cost_updates_each_scenario():
+    n = pypsa.Network()
+    n.set_snapshots(range(2))
+    n.add("Bus", "bus")
+    n.add("Generator", ["z", "a"], bus="bus", p_nom=10.0,
+          marginal_cost=[2.0, 7.0])
+    original = n.generators.marginal_cost.copy(deep=True)
+
+    apply_tssb_stochastic_data(n, ["renewable_marginal_cost"])
+
+    for scenario, factor in (("low", 1.0), ("med", 2.0), ("high", 4.0)):
+        np.testing.assert_allclose(
+            n.generators.loc[scenario, "marginal_cost"], original * factor,
+        )
+
+
 def run_tssb_block(
     xlsx_path: Path,
     stochastic_parameters: Sequence[str],

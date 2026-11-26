@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test_with_conda_smspp:
     # Test package with SMS++ installed from conda-forge
-    name: Test package with SMSpp from conda-forge (Linux)
+    name: Test package with SMSpp from conda-forge (Linux, pandas ${{ matrix.pandas-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,6 +26,9 @@ jobs:
       matrix:
         python-version:
         - "3.11"
+        pandas-version:
+        - "2"
+        - "3"
     defaults:
       run:
         shell: bash -el {0}
@@ -51,27 +54,39 @@ jobs:
         activate-environment: test-env
         python-version: ${{ matrix.python-version }}
 
-    - name: Install smspp-project from conda-forge
+    - name: Install native and Python dependencies from conda-forge
       run: |
-        conda install -c conda-forge "smspp-project>=0.5.1" -y
+        conda install --override-channels -c conda-forge --strict-channel-priority -y \
+          --file .github/conda-test-requirements.txt \
+          "python=${{ matrix.python-version }}" "pandas=${{ matrix.pandas-version }}.*" \
+          "smspp-project>=0.7.1"
 
-    - name: Install package and dependencies
+    - name: Install pySMSpp main and pypsa2smspp without resolving dependencies
       run: |
-        pip install .[dev]
+        git clone --depth 1 --branch main https://github.com/SPSUnipi/pySMSpp.git "$RUNNER_TEMP/pysmspp-main"
+        git -C "$RUNNER_TEMP/pysmspp-main" rev-parse HEAD
+        python -m pip install --no-deps --no-build-isolation "$RUNNER_TEMP/pysmspp-main"
+        python -m pip install --no-deps --no-build-isolation .
+        python -m pip check
 
     - name: List environment
       run: |
         conda list
 
+    - name: Check native solvers
+      run: |
+        ucblock_solver --help
+        investmentblock_solver --help
+
     - name: Test package with SMSpp
       run: |
-        pytest
+        python -X faulthandler -m pytest -x -ra --tb=short --junitxml=test/output/test/pytest-results.xml
     
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: test-data-${{ matrix.python-version }}
+        name: test-data-${{ matrix.python-version }}-pandas-${{ matrix.pandas-version }}
         path: |
           test/output/test
         retention-days: 14

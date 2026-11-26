@@ -11,6 +11,18 @@ import pypsa
 import pysmspp
 import pytest
 
+if hasattr(pypsa.options.api, "legacy_string_dtype"):
+    pypsa.options.api.legacy_string_dtype = False
+
+
+def pytest_configure(config):
+    if hasattr(pd.errors, "Pandas4Warning"):
+        config.addinivalue_line(
+            "filterwarnings",
+            r"default::pandas.errors.Pandas4Warning:^(pypsa|pandas|linopy|xarray|pysmspp)(\.|$)",
+        )
+
+
 REL_TOL = 1e-3   # relative tolerance for objective comparison. TODO: tighten tolerance
 ABS_TOL = 1e-4   # absolute tolerance for objective comparison
 

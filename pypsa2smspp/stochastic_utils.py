@@ -86,6 +86,23 @@ def has_extendable_assets(n) -> bool:
 
 
 # =============================================================================
+# Load aggregation
+# =============================================================================
+
+def total_load_timeseries(n) -> pd.Series | pd.DataFrame:
+    """Sum loads per snapshot, keeping a column per stochastic scenario."""
+    loads_t = getattr(n, "loads_t", {})
+    p_set = loads_t.get("p_set")
+    if p_set is None or p_set.empty:
+        return pd.Series(0.0, index=n.snapshots)
+
+    if isinstance(p_set.columns, pd.MultiIndex):
+        return p_set.T.groupby(level=0).sum().T
+
+    return p_set.sum(axis=1)
+
+
+# =============================================================================
 # Scenario probabilities
 # =============================================================================
 
