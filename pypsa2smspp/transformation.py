@@ -1420,7 +1420,8 @@ class Transformation:
         apply_time_dependent_link_data_to_lines(
             n=n,
             networkblock=self.networkblock,
-            links=n.links.index.drop(self._conversion_links),
+            links=n.links.index.drop(
+                self._conversion_links.union(self._carrier_links)),
         )
 
 

@@ -103,6 +103,37 @@ def test_carrier_design_line(ucblock):
         reference.links.at["pipeline", "p_nom_opt"], rel=1e-4, abs=1e-3)
 
 
+def test_carrier_link_with_time_dependent_limit():
+    """The p_max_pu of a link that is a unit of a carrier is not that of a row
+    of the network of the lines: only the pipeline is."""
+    n = build_network()
+    skip_carrier_form(n, True)
+    n.links_t.p_max_pu["electrolyser"] = pd.Series(
+        [1.0, 0.5, 1.0, 0.25], n.snapshots)
+
+    reference = n.copy()
+    reference.optimize(solver_name="highs", include_objective_constant=True)
+    expected = float(reference.objective
+                     + getattr(reference, "objective_constant", 0.0))
+
+    transformation = Transformation(
+        capacity_expansion_ucblock=True,
+        multi_carrier=True,
+        workdir=OUT_TEST,
+        name="carrier_time_dependent_limit",
+        overwrite=True,
+        fp_temp="smspp_{name}_temp.nc",
+        fp_log="smspp_{name}_log.txt",
+        fp_solution="smspp_{name}_solution.nc",
+        configfile="auto",
+        pysmspp_options={},
+    )
+    transformation.run(n, verbose=False)
+    obtained = float(transformation.result.objective_value)
+
+    assert obtained == pytest.approx(expected, rel=REL_TOL, abs=ABS_TOL)
+
+
 def build_pump_network(p_min_pu: float) -> pypsa.Network:
     """The water of the source A pumped to the users at B by a pump that
     draws 0.3 MWh of electricity per unit of water, the electricity from a
